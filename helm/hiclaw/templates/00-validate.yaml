@@ -62,11 +62,14 @@ Validate public values at render time. Supported combinations:
 {{- fail (printf "gateway.higress.enabled=%t is inconsistent with gateway.provider=%q and gateway.mode=%q; expected %t" $actualHigressEnabled $gatewayProvider $gatewayMode $expectedHigressEnabled) -}}
 {{- end -}}
 
-{{- /* credential-provider sidecar: required for any cloud provider */ -}}
-{{- $needsSidecar := or (eq $gatewayProvider "ai-gateway") (eq $storageProvider "oss") -}}
+{{- /* credential-provider sidecar: required for cloud providers, EXCEPT external
+     OSS with static credentials (storage.oss.accessKey/secretKey), which uses
+     long-lived keys instead of STS. */ -}}
+{{- $ossStaticCreds := and (eq $storageProvider "oss") (.Values.storage.oss.accessKey | default "") (.Values.storage.oss.secretKey | default "") -}}
+{{- $needsSidecar := or (eq $gatewayProvider "ai-gateway") (and (eq $storageProvider "oss") (not $ossStaticCreds)) -}}
 {{- if $needsSidecar -}}
   {{- if not .Values.credentialProvider.enabled -}}
-  {{- fail (printf "credentialProvider.enabled must be true when gateway.provider=%q or storage.provider=%q" $gatewayProvider $storageProvider) -}}
+  {{- fail (printf "credentialProvider.enabled must be true when gateway.provider=%q or storage.provider=%q (or set storage.oss.accessKey/secretKey for static OSS creds)" $gatewayProvider $storageProvider) -}}
   {{- end -}}
   {{- if not (.Values.credentialProvider.image.repository | default "") -}}
   {{- fail "credentialProvider.image.repository is required when the sidecar is enabled" -}}
