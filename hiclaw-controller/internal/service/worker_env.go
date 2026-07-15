@@ -19,12 +19,18 @@ func NewWorkerEnvBuilder(defaults config.WorkerEnvDefaults) *WorkerEnvBuilder {
 // Build returns the env map for a worker container, merging per-worker
 // credentials with cluster-wide defaults.
 func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult) map[string]string {
+	// External-OSS static-credential mode: all workers share one appkey/secret.
+	// Embedded/per-worker mode: each worker gets its own MinIO user (workerName + MinIOPassword).
+	fsAccessKey, fsSecretKey := workerName, prov.MinIOPassword
+	if b.defaults.FSAccessKey != "" {
+		fsAccessKey, fsSecretKey = b.defaults.FSAccessKey, b.defaults.FSSecretKey
+	}
 	env := map[string]string{
 		"HICLAW_WORKER_NAME":         workerName,
 		"HICLAW_WORKER_GATEWAY_KEY":  prov.GatewayKey,
 		"HICLAW_WORKER_MATRIX_TOKEN": prov.MatrixToken,
-		"HICLAW_FS_ACCESS_KEY":       workerName,
-		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
+		"HICLAW_FS_ACCESS_KEY":       fsAccessKey,
+		"HICLAW_FS_SECRET_KEY":       fsSecretKey,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
 		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-w-" + workerName,
 		"HICLAW_CONSOLE_PORT":       "8088",
@@ -42,12 +48,18 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 		runtime = "k8s"
 	}
 
+	// External-OSS static-credential mode: manager shares the cluster appkey/secret.
+	fsAccessKey, fsSecretKey := managerName, prov.MinIOPassword
+	if b.defaults.FSAccessKey != "" {
+		fsAccessKey, fsSecretKey = b.defaults.FSAccessKey, b.defaults.FSSecretKey
+	}
+
 	env := map[string]string{
 		"HICLAW_MANAGER_NAME":        managerName,
 		"HICLAW_MANAGER_GATEWAY_KEY": prov.GatewayKey,
 		"HICLAW_MANAGER_PASSWORD":    prov.MatrixPassword,
-		"HICLAW_FS_ACCESS_KEY":       managerName,
-		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
+		"HICLAW_FS_ACCESS_KEY":       fsAccessKey,
+		"HICLAW_FS_SECRET_KEY":       fsSecretKey,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
 		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-manager",
 		"HOME":                       "/root/manager-workspace",

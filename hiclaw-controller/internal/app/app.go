@@ -262,23 +262,34 @@ func (a *App) initInfraClients(_ context.Context) error {
 	// API is unavailable (buckets/users/policies are provisioned externally).
 	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
 	if cfg.UsesExternalOSS() {
-		if a.credProvider == nil {
-			return fmt.Errorf("oss provider requires HICLAW_CREDENTIAL_PROVIDER_URL to be set")
+		oc := cfg.OSSConfig()
+		if oc.Endpoint == "" {
+			return fmt.Errorf("oss provider requires HICLAW_FS_ENDPOINT to be set")
 		}
-		if cfg.OSSConfig().Endpoint == "" {
-			return fmt.Errorf("oss provider requires HICLAW_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
+		switch {
+		case a.credProvider != nil:
+			// Dynamic STS path (original): per-invocation credentials sourced from
+			// the credential-provider sidecar via a CredentialSource.
+			gatewayID := ""
+			if cfg.UsesAIGateway() {
+				gatewayID = cfg.GWGatewayID
+			}
+			tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
+				SessionName: "hiclaw-controller",
+				Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
+			})
+			mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			a.oss = mcClient
+			logger.Info("storage provider: oss (external, dynamic STS credentials)", "bucket", cfg.OSSBucket)
+		case oc.AccessKey != "" && oc.SecretKey != "":
+			// Static credential path: external S3 with a long-lived appkey/secret
+			// (e.g. a company's own S3-compatible service). mc uses the AccessKey/
+			// SecretKey from OSSConfig via a persistent `mc alias set` — no sidecar.
+			a.oss = mcClient
+			logger.Info("storage provider: oss (external, static credentials)", "bucket", cfg.OSSBucket)
+		default:
+			return fmt.Errorf("oss provider requires either HICLAW_CREDENTIAL_PROVIDER_URL (dynamic STS) or static HICLAW_FS_ACCESS_KEY/HICLAW_FS_SECRET_KEY")
 		}
-		gatewayID := ""
-		if cfg.UsesAIGateway() {
-			gatewayID = cfg.GWGatewayID
-		}
-		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
-			SessionName: "hiclaw-controller",
-			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
-		})
-		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
-		a.oss = mcClient
-		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
 	} else {
 		a.oss = mcClient
 		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)

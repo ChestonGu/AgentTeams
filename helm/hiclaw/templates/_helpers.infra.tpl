@@ -92,6 +92,10 @@ materialized condition flag.
 {{- if and (eq .Values.storage.provider "minio") (eq .Values.storage.mode "managed") -}}MINIO_ROOT_PASSWORD{{- end -}}
 {{- end }}
 
+{{- define "hiclaw.storage.ossCredsSecretName" -}}
+{{- printf "%s-oss-creds" (include "hiclaw.fullname" .) -}}
+{{- end }}
+
 {{- define "hiclaw.manager.spec" -}}
 {{- $spec := dict
   "model" (.Values.manager.model | default .Values.credentials.defaultModel)

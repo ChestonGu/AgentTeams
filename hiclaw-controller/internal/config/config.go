@@ -174,6 +174,8 @@ type WorkerEnvDefaults struct {
 	FSEndpoint    string
 	FSBucket      string
 	StoragePrefix string
+	FSAccessKey   string // shared static S3 access key (external-OSS static-credential mode); empty in embedded/per-worker mode
+	FSSecretKey   string // shared static S3 secret key (external-OSS static-credential mode); empty in embedded/per-worker mode
 	ControllerURL string
 	AIGatewayURL  string
 	MatrixURL     string
@@ -339,6 +341,8 @@ func LoadConfig() *Config {
 			FSEndpoint:    os.Getenv("HICLAW_FS_ENDPOINT"),
 			FSBucket:      envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
 			StoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
+			FSAccessKey:   firstNonEmpty(os.Getenv("HICLAW_FS_ACCESS_KEY"), os.Getenv("HICLAW_MINIO_USER")),
+			FSSecretKey:   firstNonEmpty(os.Getenv("HICLAW_FS_SECRET_KEY"), os.Getenv("HICLAW_MINIO_PASSWORD")),
 			ControllerURL: os.Getenv("HICLAW_CONTROLLER_URL"),
 			AIGatewayURL:  envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
 			MatrixURL:     envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),

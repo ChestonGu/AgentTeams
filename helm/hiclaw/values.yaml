@@ -86,6 +86,11 @@ storage:
     # Explicit endpoint override. Usually unset — the credential-provider
     # sidecar returns the correct endpoint as part of each STS response.
     endpoint: ""
+    # Static credentials (no credential-provider sidecar). Set BOTH when the
+    # external S3 provides a long-lived appkey/secret (e.g. a company's own
+    # S3-compatible service). Leave empty to use the STS sidecar instead.
+    accessKey: ""
+    secretKey: ""
   minio:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio

@@ -96,6 +96,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "hiclaw.storage.adminSecretName" . }}
                   key: {{ include "hiclaw.storage.adminSecretKeyKey" . }}
+            {{- else if eq .Values.storage.provider "oss" }}
+            - name: HICLAW_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hiclaw.storage.ossCredsSecretName" . }}
+                  key: accessKey
+            - name: HICLAW_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hiclaw.storage.ossCredsSecretName" . }}
+                  key: secretKey
             {{- end }}
             - name: HICLAW_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}
