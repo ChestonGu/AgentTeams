@@ -29,7 +29,8 @@ data:
         user: synapse
         password: {{ .Values.matrix.synapse.postgres.password | default "synapse-change-me" | quote }}
         database: synapse
-        host: {{ include "hiclaw.synapse.postgres.fullname" . }}:5432
+        host: {{ include "hiclaw.synapse.postgres.fullname" . }}.{{ include "hiclaw.namespace" . }}.svc.cluster.local
+        port: 5432
         cp_min: 5
         cp_max: 10
 
