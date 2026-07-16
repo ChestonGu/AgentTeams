@@ -31,6 +31,7 @@ data:
         database: synapse
         host: {{ include "hiclaw.synapse.postgres.fullname" . }}.{{ include "hiclaw.namespace" . }}.svc.cluster.local
         port: 5432
+        allow_unsafe_locale: true   # postgres 默认 locale 非 C,跳过 Synapse 的 collation 校验
         cp_min: 5
         cp_max: 10
 
