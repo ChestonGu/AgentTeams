@@ -107,7 +107,7 @@ if [ "${HICLAW_RUNTIME}" != "aliyun" ] && [ "${HICLAW_RUNTIME}" != "k8s" ]; then
     waitForService "Higress Gateway" "127.0.0.1" 8080 180
     waitForService "Higress Console" "127.0.0.1" 8001 180
     waitForService "Tuwunel" "127.0.0.1" 6167 120
-    waitForHTTP "Tuwunel Matrix API" "${HICLAW_MATRIX_URL}/_tuwunel/server_version" 120
+    waitForHTTP "Matrix API" "${HICLAW_MATRIX_URL}/_matrix/client/versions" 120
     waitForService "MinIO" "127.0.0.1" 9000 120
 else
     # Cloud/K8s mode: wait for external Tuwunel

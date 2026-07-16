@@ -9,8 +9,8 @@ Validate public values at render time. Supported combinations:
 */ -}}
 
 {{- $matrixProvider := .Values.matrix.provider | default "" -}}
-{{- if ne $matrixProvider "tuwunel" -}}
-{{- fail (printf "unsupported matrix.provider %q: only \"tuwunel\" is supported" $matrixProvider) -}}
+{{- if and (ne $matrixProvider "tuwunel") (ne $matrixProvider "synapse") -}}
+{{- fail (printf "unsupported matrix.provider %q: expected \"tuwunel\" or \"synapse\"" $matrixProvider) -}}
 {{- end -}}
 {{- if ne (.Values.matrix.mode | default "") "managed" -}}
 {{- fail (printf "unsupported matrix.mode %q: only \"managed\" is supported" (.Values.matrix.mode | default "")) -}}

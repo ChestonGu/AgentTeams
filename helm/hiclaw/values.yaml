@@ -51,7 +51,33 @@ matrix:
       storageClassName: ""    # empty = default StorageClass
       mountPath: /data/conduwuit
     extraEnv: {}
-  synapse: {}
+  synapse:
+    image:
+      repository: ghcr.io/element-hq/synapse   # 拉取走加速
+      tag: "v1.127.0"
+      pullPolicy: IfNotPresent
+    serverName: ""               # Matrix server_name;空 = synapse service FQDN
+    adminUser: "admin"           # bootstrap 建;应与 credentials.adminUser 一致
+    registrationSharedSecret: "" # 驱动 register_new_matrix_user(建 admin);空则生成
+    service:
+      type: ClusterIP
+      port: 8008
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""       # 空 = 默认 StorageClass
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 1, memory: 1Gi }
+    postgres:
+      image:
+        repository: postgres
+        tag: "16-alpine"
+        pullPolicy: IfNotPresent
+      password: ""               # synapse db 用户密码;空则生成
+      persistence:
+        size: 10Gi
+        storageClassName: ""
 
 # ── Gateway ───────────────────────────────────────────────────────────────
 # provider=higress + mode=managed → Higress deployed as a subchart here

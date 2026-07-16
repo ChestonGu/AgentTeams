@@ -10,6 +10,8 @@ materialized condition flag.
 {{- define "hiclaw.matrix.internalURL" -}}
 {{- if and (eq .Values.matrix.provider "tuwunel") (eq .Values.matrix.mode "managed") -}}
 {{- include "hiclaw.tuwunel.internalURL" . -}}
+{{- else if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") -}}
+{{- include "hiclaw.synapse.internalURL" . -}}
 {{- else -}}
 {{- .Values.matrix.internalURL | default "" -}}
 {{- end -}}
@@ -18,6 +20,8 @@ materialized condition flag.
 {{- define "hiclaw.matrix.serverName" -}}
 {{- if and (eq .Values.matrix.provider "tuwunel") (eq .Values.matrix.mode "managed") -}}
 {{- include "hiclaw.tuwunel.serverName" . -}}
+{{- else if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") -}}
+{{- include "hiclaw.synapse.serverName" . -}}
 {{- else -}}
 {{- .Values.matrix.serverName | default "" -}}
 {{- end -}}

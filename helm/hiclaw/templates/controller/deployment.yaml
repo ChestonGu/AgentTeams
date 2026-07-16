@@ -136,6 +136,8 @@ spec:
               value: {{ include "hiclaw.matrix.internalURL" . | quote }}
             - name: HICLAW_MATRIX_DOMAIN
               value: {{ include "hiclaw.matrix.serverName" . | quote }}
+            - name: HICLAW_MATRIX_PROVIDER
+              value: {{ .Values.matrix.provider | quote }}
             {{- /* OSS storage prefix */}}
             - name: HICLAW_STORAGE_PREFIX
               value: {{ include "hiclaw.storage.remoteRoot" . | quote }}

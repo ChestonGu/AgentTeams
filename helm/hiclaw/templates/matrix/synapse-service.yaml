@@ -1,0 +1,15 @@
+{{- if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hiclaw.synapse.fullname" . }}
+  namespace: {{ include "hiclaw.namespace" . }}
+  labels:
+    {{- include "hiclaw.component.labels" (dict "root" . "component" "synapse") | nindent 4 }}
+spec:
+  type: {{ .Values.matrix.synapse.service.type }}
+  selector:
+    {{- include "hiclaw.component.selectorLabels" (dict "root" . "component" "synapse") | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.matrix.synapse.service.port }}, targetPort: http }
+{{- end }}

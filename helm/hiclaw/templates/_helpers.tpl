@@ -133,6 +133,26 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end }}
 
+{{- define "hiclaw.synapse.fullname" -}}
+{{- printf "%s-synapse" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "hiclaw.synapse.clusterFQDN" -}}
+{{- printf "%s.%s.svc.cluster.local" (include "hiclaw.synapse.fullname" .) (include "hiclaw.namespace" .) -}}
+{{- end }}
+
+{{- define "hiclaw.synapse.internalURL" -}}
+{{- printf "http://%s:%d" (include "hiclaw.synapse.clusterFQDN" .) (.Values.matrix.synapse.service.port | int) -}}
+{{- end }}
+
+{{- define "hiclaw.synapse.serverName" -}}
+{{- if .Values.matrix.serverName -}}{{- .Values.matrix.serverName -}}{{- else -}}{{- include "hiclaw.synapse.clusterFQDN" . -}}{{- end -}}
+{{- end }}
+
+{{- define "hiclaw.synapse.postgres.fullname" -}}
+{{- printf "%s-synapse-pg" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "hiclaw.minio.internalURL" -}}
 {{- printf "http://%s.%s.svc.cluster.local:%d" (include "hiclaw.minio.fullname" .) (include "hiclaw.namespace" .) (.Values.storage.minio.service.apiPort | int) }}
 {{- end }}

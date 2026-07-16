@@ -125,6 +125,7 @@ type Config struct {
 	MatrixAdminUser         string
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
+	MatrixProvider          string // "tuwunel" (default) or "synapse" — selects the matrix.Client implementation
 
 	// Object storage (embedded MinIO)
 	OSSStoragePrefix string
@@ -310,6 +311,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("HICLAW_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
+		MatrixProvider:          envOrDefault("HICLAW_MATRIX_PROVIDER", "tuwunel"),
 
 		OSSStoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
 
@@ -608,6 +610,12 @@ func (c *Config) MatrixConfig() matrix.Config {
 		AdminPassword:     c.MatrixAdminPassword,
 		E2EEEnabled:       c.MatrixE2EE,
 	}
+}
+
+// UsesSynapse reports whether the Matrix homeserver is Synapse (vs the
+// default Tuwunel). Drives the matrix.Client factory selection in app.go.
+func (c *Config) UsesSynapse() bool {
+	return c.MatrixProvider == "synapse"
 }
 
 func (c *Config) GatewayConfig() gateway.Config {

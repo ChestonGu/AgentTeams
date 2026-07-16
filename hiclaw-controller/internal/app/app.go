@@ -216,7 +216,13 @@ func (a *App) initInfraClients(_ context.Context) error {
 	cfg := a.cfg
 	logger := ctrl.Log.WithName("app")
 
-	a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+	if cfg.UsesSynapse() {
+		a.matrix = matrix.NewSynapseClient(cfg.MatrixConfig(), nil)
+		logger.Info("matrix provider: synapse")
+	} else {
+		a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+		logger.Info("matrix provider: tuwunel")
+	}
 	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
 	a.shell = executor.NewShell(cfg.SkillsDir)
 	a.packages = executor.NewPackageResolver("/tmp/import")
