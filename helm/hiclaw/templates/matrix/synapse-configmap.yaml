@@ -43,4 +43,17 @@ data:
     bcrypt_rounds: 12
     max_upload_size: 50M
     federation_domain_whitelist: []
+    # Raise rate limits — HiClaw controller provisions multiple users in bursts
+    # (admin login + per-user create/login), which trips Synapse's low defaults
+    # (rc_login burst 3) into M_LIMIT_EXCEEDED storms.
+    rc_login:
+      address: {per_second: 50, burst_count: 200}
+      account: {per_second: 50, burst_count: 200}
+      failed_attempts: {per_second: 50, burst_count: 200}
+    rc_admin:
+      per_second: 50
+      burst_count: 200
+    rc_message:
+      per_second: 50
+      burst_count: 200
 {{- end }}
