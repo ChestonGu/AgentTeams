@@ -36,7 +36,8 @@ data:
       allow_unsafe_locale: true   # Synapse 级选项(与 args 同级,非 psycopg2 连接参数);postgres 默认 locale 非 C
 
     media_store_path: /data/media
-    enable_registration: false
+    enable_registration: true
+    enable_registration_without_verification: true   # 私有集群:controller 是唯一注册方;否则 Synapse 拒启动("开注册无验证")
     trusted_key_servers:
       - server_name: matrix.org
     bcrypt_rounds: 12
