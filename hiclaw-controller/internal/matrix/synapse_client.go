@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // SynapseClient implements Client for Synapse homeservers.
@@ -100,9 +99,14 @@ func (s *SynapseClient) synDeleteRoom(ctx context.Context, roomID string) error 
 	return s.synAdminCall(ctx, http.MethodDelete, path, nil)
 }
 
-// EnsureUser is a verbatim copy of TuwunelClient.EnsureUser, redefined on
-// SynapseClient so the orphan-recovery AdminCommand call dispatches to the
-// Synapse translation above. Keep in sync with TuwunelClient.EnsureUser.
+// EnsureUser creates (or re-creates) the Matrix user via the Synapse admin
+// API, then logs in to obtain an access token. This is Synapse-specific:
+// Tuwunel's client /register with m.login.registration_token is single-step,
+// but Synapse's registration_token UI auth requires a session (two-step) and
+// rejects the single-step submission with M_INVALID_PARAM "Invalid login
+// submission". The admin API (PUT /_synapse/admin/v2/users/{id}) creates the
+// user directly with a password — no registration_token / session needed.
+// Idempotent: PUT sets the password whether the user is new or already exists.
 func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
@@ -112,86 +116,27 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 			return nil, fmt.Errorf("generate password: %w", err)
 		}
 	}
-
-	// Try registration first
-	regBody := map[string]interface{}{
-		"username": req.Username,
-		"password": password,
-		"auth": map[string]string{
-			"type":  "m.login.registration_token",
-			"token": s.config.RegistrationToken,
-		},
-	}
-	var regResp struct {
-		UserID      string `json:"user_id"`
-		AccessToken string `json:"access_token"`
-		ErrCode     string `json:"errcode"`
-		Error       string `json:"error"`
-	}
-
-	statusCode, _, err := s.doJSON(ctx, http.MethodPost,
-		"/_matrix/client/v3/register", "", regBody, &regResp)
-	if err != nil {
-		return nil, fmt.Errorf("register user %s: %w", req.Username, err)
-	}
-
-	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
-		return &UserCredentials{
-			UserID:      regResp.UserID,
-			AccessToken: regResp.AccessToken,
-			Password:    password,
-			Created:     true,
-		}, nil
-	}
-
-	// Only fall back to login if the user already exists
-	if regResp.ErrCode != "" && regResp.ErrCode != "M_USER_IN_USE" {
-		return nil, fmt.Errorf("register user %s: %s (%s)", req.Username, regResp.ErrCode, regResp.Error)
-	}
-
-	// Registration failed with M_USER_IN_USE — try login
-	token, err := s.Login(ctx, req.Username, password)
-	if err == nil {
-		return &UserCredentials{
-			UserID:      s.UserID(req.Username),
-			AccessToken: token,
-			Password:    password,
-			Created:     false,
-		}, nil
-	}
-
-	// Orphan recovery: login fails because the account exists with a different
-	// password. Reset it via Synapse admin REST (translated AdminCommand) and
-	// retry login.
 	userID := s.UserID(req.Username)
-	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
-	if adminErr := s.AdminCommand(ctx, cmd); adminErr != nil {
-		return nil, fmt.Errorf("user %s exists but login failed (%v) and orphan recovery failed: %w",
-			req.Username, err, adminErr)
+
+	// Create or update the user via the Synapse admin API.
+	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
+	body := map[string]interface{}{
+		"password":    password,
+		"displayname": req.Username,
+	}
+	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
+		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)
 	}
 
-	const maxAttempts = 5
-	baseDelay := s.orphanRetryBaseDelay
-	if baseDelay <= 0 {
-		baseDelay = 500 * time.Millisecond
+	// Login to obtain an access token for the (now guaranteed) account.
+	token, err := s.Login(ctx, req.Username, password)
+	if err != nil {
+		return nil, fmt.Errorf("synapse login %s after create: %w", req.Username, err)
 	}
-	var lastErr = err
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(baseDelay * time.Duration(attempt)):
-		}
-		token, lastErr = s.Login(ctx, req.Username, password)
-		if lastErr == nil {
-			return &UserCredentials{
-				UserID:      userID,
-				AccessToken: token,
-				Password:    password,
-				Created:     false,
-			}, nil
-		}
-	}
-	return nil, fmt.Errorf("user %s exists, orphan recovery issued but login still failing: %w",
-		req.Username, lastErr)
+	return &UserCredentials{
+		UserID:      userID,
+		AccessToken: token,
+		Password:    password,
+		Created:     true,
+	}, nil
 }
