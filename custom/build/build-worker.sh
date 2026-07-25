@@ -14,6 +14,24 @@
 #   ./build.sh --skip-openclaw-base     # 只改了 worker, 复用 base, 秒出 worker (最快)
 #   ./build.sh --build-controller       # controller 也要重建
 #   ./build.sh --help                   # 看全部选项 + 完整分类示例
+#
+#   # 全量全新构建 (三镜像都不走缓存, 拉 custom 分支最新代码 — 最全):
+#   ./build.sh --no-cache --build-controller \
+#       --controller-image hiclaw/hiclaw-controller-patch --controller-tag v1.0 \
+#       --openclaw-base-image  hiclaw/hiclaw-openclaw-patch  --openclaw-base-tag v1.0 \
+#       --worker-image         hiclaw/hiclaw-worker-patch     --worker-tag v1.0
+# ──────────────────────────────────────────────────────────────
+#
+# ── ⚠ 重要提示：关于 --no-cache ───────────────────────────────
+#   1. --no-cache 只对"实际构建"的镜像生效；跳过构建的（默认 controller、或 --skip-openclaw-base）
+#      走 docker image inspect 复用，不触发 build，自然不受影响。
+#   2. 普通构建（不带 --no-cache）时，openclaw-base 的 `git clone` 层会命中 Docker 缓存——
+#      即便 fork 的 custom 分支有新提交也不会重新拉。要拿 fork 最新代码，必须加 --no-cache，
+#      或用 --docker-build-args "--build-arg OPENCLAW_COMMIT=<sha>" 钉到具体 commit。
+#   3. --no-cache 会让 openclaw-base 重跑完整 pnpm build 链（apt+node → clone → install → build
+#      → ui:build，约 5~10 分钟），这是"全新构建"的预期代价，不是卡住。
+#   4. 跑全量前先确认 custom 分支存在，否则 git clone -b 会直接失败：
+#      git ls-remote --heads https://github.com/shepherd-aaa/hiclaw-openclaw.git | grep hiclaw-2026.4.14-custom
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -38,6 +56,9 @@ WORKER_TAG="${WORKER_TAG:-latest}"                                      # 版本
 # 透传给 docker build 的额外参数（代理 / npm 镜像等）
 EXTRA_BUILD_ARGS="${EXTRA_BUILD_ARGS:-}"
 
+# --no-cache：对所有"实际构建"的镜像加 --no-cache（跳过构建的镜像走复用，不受影响）
+NO_CACHE="${NO_CACHE:-0}"
+
 # ─── 帮助 ─────────────────────────────────────────────────────
 usage() {
   cat <<EOF
@@ -55,7 +76,13 @@ usage() {
   --worker-image NAME           worker 镜像名          (默认: $WORKER_IMAGE)
   --worker-tag TAG              worker tag             (默认: $WORKER_TAG)
   --docker-build-args ARGS      透传给 docker build 的额外参数 (代理 / 镜像等)
+  --no-cache                    对所有"实际构建"的镜像加 --no-cache (跳过构建的不受影响；想拉 fork 最新代码时用)
   -h, --help                    显示此帮助
+
+⚠ 关于 --no-cache (重要, 完整说明见脚本头注释):
+  · 不带 --no-cache 时, openclaw-base 的 git clone 层会命中 Docker 缓存, fork 有新提交也不重拉。
+  · 要拿 fork 最新代码必须加 --no-cache (或 --docker-build-args "--build-arg OPENCLAW_COMMIT=<sha>" 钉 commit)。
+  · --no-cache 会让 base 重跑完整 pnpm build 链 (~5-10 分钟)。
 
 环境变量（同名大写，命令行参数优先）:
   CONTROLLER_IMAGE / CONTROLLER_TAG / BUILD_CONTROLLER
@@ -68,6 +95,12 @@ usage() {
   $0                                                 # 默认: 跳过 controller, build openclaw base + worker
   $0 --build-controller                              # 全量: controller + base + worker 都 build
   $0 --skip-openclaw-base                            # 只 build worker (复用 base + controller, 最快)
+
+  # —— 全量全新构建 (最全: 三镜像都不走缓存, 拉 fork 最新代码) ——
+  $0 --no-cache --build-controller \
+     --controller-image hiclaw/hiclaw-controller-patch --controller-tag v1.0 \
+     --openclaw-base-image  hiclaw/hiclaw-openclaw-patch  --openclaw-base-tag v1.0 \
+     --worker-image         hiclaw/hiclaw-worker-patch     --worker-tag v1.0
 
   # —— 改 tag (版本号) ——
   $0 --worker-tag v1.0                               # 只给 worker 打 v1.0
@@ -113,10 +146,17 @@ while [[ $# -gt 0 ]]; do
     --worker-image)          WORKER_IMAGE="${2:?--worker-image 需要值}"; shift 2;;
     --worker-tag)            WORKER_TAG="${2:?--worker-tag 需要值}"; shift 2;;
     --docker-build-args)     EXTRA_BUILD_ARGS="${2:?--docker-build-args 需要值}"; shift 2;;
+    --no-cache)              NO_CACHE=1; shift;;
     -h|--help)               usage; exit 0;;
     *) echo "✗ 未知参数: $1" >&2; usage; exit 1;;
   esac
 done
+
+# --no-cache 折进 EXTRA_BUILD_ARGS：自动作用于所有"实际构建"的镜像
+# （跳过的 controller/base 走 docker image inspect 复用，不触发 build，自然不受影响）
+if [[ "$NO_CACHE" = 1 ]]; then
+  EXTRA_BUILD_ARGS="${EXTRA_BUILD_ARGS:+$EXTRA_BUILD_ARGS }--no-cache"
+fi
 
 # ─── 辅助函数 ─────────────────────────────────────────────────
 log()  { printf '\033[1;34m▶\033[0m %s\n' "$*"; }
