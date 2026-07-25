@@ -171,6 +171,10 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #       agent edits and spin forever on no-op pushes.
 #
 # ────────────────────────────────────────────────────────────────────────────
+# Baseline the outputs-notify marker AFTER the initial pull so pre-existing
+# (pulled) outputs are not re-notified on every startup. The change-triggered
+# loop below notifies only on outputs created after this point.
+touch "${WORKSPACE}/.outputs-notify-marker" 2>/dev/null || true
 (
     while true; do
         # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
@@ -184,6 +188,7 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
                 --exclude ".cache/**" --exclude ".npm/**" \
                 --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
                 --exclude ".last-pull" \
+                --exclude ".outputs-notify-marker" \
                 --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
                 --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
                 log "WARNING: Local->Remote sync failed"
@@ -195,6 +200,34 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
                     mc cp "${WORKSPACE}/${_mf}" "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
                 fi
             done
+
+            # Notify on new output files: if files appeared under outputs/ since
+            # the last notification, invoke the callback script. Opt-in and
+            # fire-and-forget (10s timeout) so a slow/dead endpoint never blocks
+            # the sync loop. The platform pulls artifacts from MinIO itself.
+            # Script resolution: prefer a workspace copy (editable via MinIO,
+            # no rebuild); fall back to the image-bundled default.
+            if [ -d "${WORKSPACE}/outputs" ]; then
+                NOTIFY_MARKER="${WORKSPACE}/.outputs-notify-marker"
+                NEW_OUTPUTS="$(find "${WORKSPACE}/outputs/" -type f -newer "${NOTIFY_MARKER}" 2>/dev/null)"
+                if [ -n "${NEW_OUTPUTS}" ]; then
+                    NOTIFY_SCRIPT="${WORKSPACE}/scripts/notify-platform.sh"
+                    if [ ! -f "${NOTIFY_SCRIPT}" ]; then
+                        NOTIFY_SCRIPT="/opt/hiclaw/scripts/notify-platform.sh"
+                    fi
+                    if [ -f "${NOTIFY_SCRIPT}" ]; then
+                        REL_OUTPUTS="$(printf '%s\n' "${NEW_OUTPUTS}" | sed "s|^${WORKSPACE}/||")"
+                        export HICLAW_NOTIFY_WORKER="${WORKER_NAME}"
+                        export HICLAW_NOTIFY_MINIO_PREFIX="${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}"
+                        export HICLAW_NOTIFY_ROOM="$(jq -r '.channels.matrix.homeRoomId // .channels.matrix.userId // empty' "${WORKSPACE}/openclaw.json" 2>/dev/null)"
+                        export HICLAW_NOTIFY_OUTPUTS="${REL_OUTPUTS}"
+                        log "outputs: new artifacts detected, invoking notify-platform.sh"
+                        timeout 10 /bin/sh "${NOTIFY_SCRIPT}" >>/tmp/notify-platform.log 2>&1 \
+                            || log "WARNING: notify-platform.sh exited non-zero (see /tmp/notify-platform.log)"
+                    fi
+                    touch "${NOTIFY_MARKER}"
+                fi
+            fi
         fi
         sleep 5
     done
