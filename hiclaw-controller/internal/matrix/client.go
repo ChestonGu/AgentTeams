@@ -421,16 +421,29 @@ func (c *TuwunelClient) DeleteRoomAlias(ctx context.Context, alias string) error
 
 func (c *TuwunelClient) JoinRoom(ctx context.Context, roomID, userToken string) error {
 	encodedRoom := encodeRoomID(roomID)
+
+	var resp struct {
+		ErrCode string `json:"errcode"`
+		Error   string `json:"error"`
+	}
+
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodPost,
 		fmt.Sprintf("/_matrix/client/v3/rooms/%s/join", encodedRoom),
-		userToken, map[string]interface{}{}, nil)
+		userToken, map[string]interface{}{}, &resp)
 	if err != nil {
 		return fmt.Errorf("join room %s: %w", roomID, err)
 	}
-	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
-		return fmt.Errorf("join room %s: HTTP %d: %s", roomID, statusCode, truncate(respBody, 500))
+	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
+		return nil
 	}
-	return nil
+	// Idempotent: user already in the room.
+	if statusCode == http.StatusForbidden && resp.ErrCode == "M_FORBIDDEN" {
+		if strings.Contains(strings.ToLower(resp.Error), "already") {
+			return nil
+		}
+	}
+	return fmt.Errorf("join room %s: HTTP %d %s %s: %s",
+		roomID, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 }
 
 func (c *TuwunelClient) LeaveRoom(ctx context.Context, roomID, userToken string) error {
