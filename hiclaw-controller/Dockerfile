@@ -51,6 +51,7 @@ COPY --from=builder /hiclaw /usr/local/bin/hiclaw
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/hiclaw/config/crd/
 COPY agent/ /opt/hiclaw/agent/
+COPY shared-lib/ /opt/hiclaw/scripts/lib/
 
 # Default endpoint + token-file for the bundled `hiclaw` CLI when invoked via
 # `docker exec hiclaw-controller hiclaw …`. The controller process mints a
