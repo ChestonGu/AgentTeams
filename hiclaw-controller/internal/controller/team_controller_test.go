@@ -739,3 +739,67 @@ func stringSliceContains(values []string, target string) bool {
 	}
 	return false
 }
+
+func TestTeamWorkerSpecToWorkerSpec_EdgeWorkerContainerManaged(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "managed-w", Model: "gpt-4o"},
+		{Name: "edge-w", Model: "gpt-4o", ContainerManaged: boolPtr(false)},
+	}
+
+	t.Run("managed_worker_defaults_to_nil", func(t *testing.T) {
+		got := teamWorkerSpecToWorkerSpec(team, team.Spec.Workers[0])
+		if got.ContainerManaged != nil {
+			t.Fatalf("managed worker ContainerManaged: got %v, want nil", *got.ContainerManaged)
+		}
+	})
+
+	t.Run("edge_worker_passes_through_false", func(t *testing.T) {
+		got := teamWorkerSpecToWorkerSpec(team, team.Spec.Workers[1])
+		if got.ContainerManaged == nil || *got.ContainerManaged {
+			t.Fatalf("edge worker ContainerManaged: got %v, want false", got.ContainerManaged)
+		}
+	})
+}
+
+func TestBuildDesiredMembers_EdgeWorkerIncluded(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "managed-w", Model: "gpt-4o"},
+		{Name: "edge-w", Model: "gpt-4o", ContainerManaged: boolPtr(false)},
+	}
+
+	members := buildDesiredMembers(team, "")
+	byName := map[string]MemberContext{}
+	for _, m := range members {
+		byName[m.Name] = m
+	}
+
+	edge, ok := byName["edge-w"]
+	if !ok {
+		t.Fatal("edge worker not found in desired members")
+	}
+	if edge.Spec.ContainerManaged == nil || *edge.Spec.ContainerManaged {
+		t.Fatalf("edge worker ContainerManaged: got %v, want false", edge.Spec.ContainerManaged)
+	}
+	if edge.Role != RoleTeamWorker {
+		t.Fatalf("edge worker role: got %q, want %q", edge.Role, RoleTeamWorker)
+	}
+
+	// Leader's groupAllowExtra must include the edge worker name
+	leader := byName["alpha-lead"]
+	if !stringSliceContains(leader.Spec.ChannelPolicy.GroupAllowExtra, "edge-w") {
+		t.Fatalf("leader GroupAllowExtra missing edge worker: %v", leader.Spec.ChannelPolicy.GroupAllowExtra)
+	}
+
+	// Edge worker's groupAllowExtra must include the leader name
+	if !stringSliceContains(edge.Spec.ChannelPolicy.GroupAllowExtra, "alpha-lead") {
+		t.Fatalf("edge worker GroupAllowExtra missing leader: %v", edge.Spec.ChannelPolicy.GroupAllowExtra)
+	}
+}

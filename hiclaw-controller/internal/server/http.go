@@ -11,6 +11,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/proxy"
+	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -27,6 +28,11 @@ type ServerDeps struct {
 	Namespace      string
 	ControllerName string // HICLAW_CONTROLLER_NAME; empty in embedded mode
 	SocketPath     string // Docker proxy (embedded only)
+
+	// Provisioner and Deployer are used by edge worker registration/removal
+	// endpoints. Nil when not available (e.g. in tests).
+	Provisioner service.WorkerProvisioner
+	Deployer    service.WorkerDeployer
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -75,6 +81,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.UpdateTeam)))
 	mux.Handle("DELETE /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionDelete, "team", nameFn)(http.HandlerFunc(rh.DeleteTeam)))
 
+	// Edge workers (team member registration/removal)
+	ewh := NewEdgeWorkerHandler(deps.Client, deps.Provisioner, deps.Deployer, deps.Backend, deps.Namespace)
+	mux.Handle("POST /api/v1/teams/{team}/edge-workers", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ewh.Register)))
+	mux.Handle("DELETE /api/v1/teams/{team}/edge-workers/{member}", mw.RequireAuthz(authpkg.ActionDelete, "worker", nil)(http.HandlerFunc(ewh.RemoveEdgeWorker)))
+
 	// Humans
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
 	mux.Handle("GET /api/v1/humans", mw.RequireAuthz(authpkg.ActionList, "human", nil)(http.HandlerFunc(rh.ListHumans)))
@@ -99,6 +110,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
+
+	// --- Team member lifecycle (edge worker heartbeat) ---
+	mux.Handle("POST /api/v1/teams/{team}/members/{member}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nil)(http.HandlerFunc(lh.TeamMemberReady)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

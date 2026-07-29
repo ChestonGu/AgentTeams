@@ -574,6 +574,8 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		Namespace:      a.namespace,
 		ControllerName: a.cfg.ControllerName,
 		SocketPath:     a.cfg.SocketPath,
+		Provisioner:    a.provisioner,
+		Deployer:       a.deployer,
 	})
 	return nil
 }

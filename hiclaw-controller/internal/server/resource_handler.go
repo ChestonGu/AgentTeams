@@ -393,20 +393,21 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 
 	for _, tw := range req.Workers {
 		team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-			Name:          tw.Name,
-			WorkerName:    tw.WorkerName,
-			Model:         tw.Model,
-			Runtime:       tw.Runtime,
-			Image:         tw.Image,
-			Identity:      tw.Identity,
-			Soul:          tw.Soul,
-			Agents:        tw.Agents,
-			Skills:        tw.Skills,
-			McpServers:    tw.McpServers,
-			Package:       tw.Package,
-			Expose:        tw.Expose,
-			ChannelPolicy: tw.ChannelPolicy,
-			State:         tw.State,
+			Name:             tw.Name,
+			WorkerName:       tw.WorkerName,
+			Model:            tw.Model,
+			Runtime:          tw.Runtime,
+			Image:            tw.Image,
+			Identity:         tw.Identity,
+			Soul:             tw.Soul,
+			Agents:           tw.Agents,
+			Skills:           tw.Skills,
+			McpServers:       tw.McpServers,
+			Package:          tw.Package,
+			Expose:           tw.Expose,
+			ChannelPolicy:    tw.ChannelPolicy,
+			State:            tw.State,
+			ContainerManaged: tw.ContainerManaged,
 		})
 	}
 
@@ -526,19 +527,21 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			team.Spec.Workers = nil
 			for _, tw := range req.Workers {
 				team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-					Name:          tw.Name,
-					WorkerName:    tw.WorkerName,
-					Model:         tw.Model,
-					Runtime:       tw.Runtime,
-					Image:         tw.Image,
-					Identity:      tw.Identity,
-					Soul:          tw.Soul,
-					Agents:        tw.Agents,
-					Skills:        tw.Skills,
-					McpServers:    tw.McpServers,
-					Package:       tw.Package,
-					Expose:        tw.Expose,
-					ChannelPolicy: tw.ChannelPolicy,
+					Name:             tw.Name,
+					WorkerName:       tw.WorkerName,
+					Model:            tw.Model,
+					Runtime:          tw.Runtime,
+					Image:            tw.Image,
+					Identity:         tw.Identity,
+					Soul:             tw.Soul,
+					Agents:           tw.Agents,
+					Skills:           tw.Skills,
+					McpServers:       tw.McpServers,
+					Package:          tw.Package,
+					Expose:           tw.Expose,
+					ChannelPolicy:    tw.ChannelPolicy,
+					State:            tw.State,
+					ContainerManaged: tw.ContainerManaged,
 				})
 			}
 		}

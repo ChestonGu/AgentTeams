@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -269,6 +270,47 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 	pruneMembers(&t.Status, desiredNames)
 
+	// --- Step 3b: Auto-remove expired edge workers ---
+	// Gated by edgeWorkerCleanupTTL > 0 so operators can disable by setting
+	// HICLAW_EDGE_CLEANUP_TTL=0.
+	if edgeWorkerCleanupTTL > 0 {
+		for i := len(t.Spec.Workers) - 1; i >= 0; i-- {
+			w := t.Spec.Workers[i]
+			if w.DesiredContainerMan() {
+				continue
+			}
+			ms := t.Status.MemberByName(w.Name)
+			if ms == nil || !ms.Observed {
+				continue
+			}
+			if !isTeamMemberHeartbeatExpired(ms.LastReadyAt) {
+				continue
+			}
+			logger.Info("edge worker heartbeat expired, evicting from team",
+				"worker", w.Name, "lastReadyAt", ms.LastReadyAt)
+			runtimeName := ms.RuntimeName
+			if runtimeName == "" {
+				runtimeName = w.EffectiveWorkerName()
+			}
+			expiredCtx := MemberContext{
+				Name:                w.Name,
+				RuntimeName:         runtimeName,
+				Namespace:           t.Namespace,
+				Role:                RoleTeamWorker,
+				TeamName:            teamRuntimeName,
+				TeamLeaderName:      leaderRuntimeName,
+				ExistingRoomID:      ms.RoomID,
+				CurrentExposedPorts: ms.ExposedPorts,
+				Spec:                teamWorkerSpecToWorkerSpec(t, w),
+			}
+			if err := ReconcileMemberDelete(ctx, deps, expiredCtx); err != nil {
+				logger.Error(err, "failed to evict expired edge worker (non-fatal)", "worker", w.Name)
+			}
+			r.removeLegacyMember(ctx, runtimeName)
+			t.Spec.Workers = append(t.Spec.Workers[:i], t.Spec.Workers[i+1:]...)
+		}
+	}
+
 	// --- Step 3.5: Leader coordination context + SOUL.md template ---
 	// Must run before member reconciliation so renderAndPushSoulTemplate
 	// pushes the final SOUL.md to MinIO before the leader container starts
@@ -356,15 +398,54 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	t.Status.LeaderReady = leaderReady
 	t.Status.ReadyWorkers = readyWorkers
 
+	// Phase: original logic by default. Only adjust when edge workers are
+	// present so that teams without edge workers see zero behavioral change.
+	hasEdgeWorker := false
+	for _, w := range t.Spec.Workers {
+		if !w.DesiredContainerMan() {
+			hasEdgeWorker = true
+			break
+		}
+	}
+	phaseReadyWorkers := readyWorkers
+	if hasEdgeWorker {
+		// Exclude edge workers from the ready count used for Phase so their
+		// failure cannot drag the whole team to Degraded/Pending.
+		for _, m := range desiredMembers {
+			if m.Role == RoleTeamWorker && !m.Spec.DesiredContainerMan() {
+				ms := t.Status.MemberByName(m.Name)
+				if ms != nil && ms.Ready {
+					phaseReadyWorkers--
+				}
+			}
+		}
+	}
+
 	switch {
 	case len(perMemberErrors) > 0:
 		t.Status.Phase = "Degraded"
 		t.Status.Message = strings.Join(perMemberErrors, "; ")
-	case leaderReady && readyWorkers == t.Status.TotalWorkers:
-		t.Status.Phase = "Active"
+	case hasEdgeWorker:
+		// With edge workers: compare managed-only count.
+		managedTotal := t.Status.TotalWorkers
+		for _, w := range t.Spec.Workers {
+			if !w.DesiredContainerMan() {
+				managedTotal--
+			}
+		}
+		if leaderReady && phaseReadyWorkers == managedTotal {
+			t.Status.Phase = "Active"
+		} else {
+			t.Status.Phase = "Pending"
+		}
 		t.Status.Message = ""
 	default:
-		t.Status.Phase = "Pending"
+		// Original logic: no edge workers, exact same behavior as before.
+		if leaderReady && readyWorkers == t.Status.TotalWorkers {
+			t.Status.Phase = "Active"
+		} else {
+			t.Status.Phase = "Pending"
+		}
 		t.Status.Message = ""
 	}
 
@@ -449,6 +530,21 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		return false, 0
 	}
 	for _, m := range members {
+		// Edge workers (containerManaged=false) have no managed container.
+		// Readiness is determined by LastReadyAt heartbeat in CR status.
+		if !m.Spec.DesiredContainerMan() {
+			ms := t.Status.MemberByName(m.Name)
+			ready := ms != nil && isTeamMemberHeartbeatFresh(ms.LastReadyAt)
+			if ms != nil {
+				ms.Ready = ready
+			}
+			if m.Role == RoleTeamLeader {
+				leaderReady = ready
+			} else if ready {
+				readyWorkers++
+			}
+			continue
+		}
 		result, err := wb.Status(ctx, m.Name)
 		if err != nil {
 			continue
@@ -466,6 +562,56 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		}
 	}
 	return leaderReady, readyWorkers
+}
+
+// edgeWorkerReadyTTL is the maximum age of a LastReadyAt heartbeat before an
+// edge worker is considered not ready. Configurable via HICLAW_EDGE_READY_TTL.
+var edgeWorkerReadyTTL = func() time.Duration {
+	if v := os.Getenv("HICLAW_EDGE_READY_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 120 * time.Second
+}()
+
+// edgeWorkerCleanupTTL is the duration after which a not-ready edge worker is
+// automatically removed from the team. Configurable via HICLAW_EDGE_CLEANUP_TTL.
+// Set to 0 to disable auto-cleanup.
+var edgeWorkerCleanupTTL = func() time.Duration {
+	if v := os.Getenv("HICLAW_EDGE_CLEANUP_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 10 * time.Minute
+}()
+
+// isTeamMemberHeartbeatFresh reports whether the given RFC3339 timestamp is
+// within the edge worker readiness TTL. Empty or unparseable values return false.
+func isTeamMemberHeartbeatFresh(lastReadyAt string) bool {
+	if lastReadyAt == "" {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, lastReadyAt)
+	if err != nil {
+		return false
+	}
+	return time.Since(ts) < edgeWorkerReadyTTL
+}
+
+// isTeamMemberHeartbeatExpired reports whether the given RFC3339 timestamp is
+// older than the edge worker cleanup TTL. Used to decide when to auto-remove
+// a non-responsive edge worker from the team.
+func isTeamMemberHeartbeatExpired(lastReadyAt string) bool {
+	if lastReadyAt == "" {
+		return true
+	}
+	ts, err := time.Parse(time.RFC3339, lastReadyAt)
+	if err != nil {
+		return true
+	}
+	return time.Since(ts) > edgeWorkerCleanupTTL
 }
 
 // writeInlineConfigs persists leader + worker inline identity/soul/agents
@@ -983,21 +1129,22 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 		}
 	}
 	return v1beta1.WorkerSpec{
-		Model:         w.Model,
-		Runtime:       w.Runtime,
-		WorkerName:    w.WorkerName,
-		Image:         w.Image,
-		Identity:      w.Identity,
-		Soul:          w.Soul,
-		Agents:        w.Agents,
-		Skills:        w.Skills,
-		RemoteSkills:  w.RemoteSkills,
-		McpServers:    w.McpServers,
-		Package:       w.Package,
-		Expose:        w.Expose,
-		ChannelPolicy: policy,
-		State:         w.State,
-		Env:           w.Env,
+		Model:            w.Model,
+		Runtime:          w.Runtime,
+		WorkerName:       w.WorkerName,
+		Image:            w.Image,
+		Identity:         w.Identity,
+		Soul:             w.Soul,
+		Agents:           w.Agents,
+		Skills:           w.Skills,
+		RemoteSkills:     w.RemoteSkills,
+		McpServers:       w.McpServers,
+		Package:          w.Package,
+		Expose:           w.Expose,
+		ChannelPolicy:    policy,
+		State:            w.State,
+		Env:              w.Env,
+		ContainerManaged: w.ContainerManaged,
 	}
 }
 

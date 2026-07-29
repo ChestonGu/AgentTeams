@@ -130,6 +130,13 @@ type TeamWorkerRequest struct {
 	Expose        []v1beta1.ExposePort       `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 	State         *string                    `json:"state,omitempty"` // desired lifecycle state for worker
+
+	// ContainerManaged indicates whether the controller should manage
+	// container lifecycle for this team worker. When false (edge worker),
+	// the controller provisions Matrix identity, Gateway consumer, and
+	// config but skips container creation/deletion.
+	// Default is true.
+	ContainerManaged *bool `json:"containerManaged,omitempty"`
 }
 
 type UpdateTeamRequest struct {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
@@ -231,4 +232,44 @@ func writeBackendError(w http.ResponseWriter, err error) {
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
+}
+
+// --- team member readiness (edge worker heartbeat) ---
+
+// TeamMemberReady handles POST /api/v1/teams/{team}/members/{name}/ready.
+// Edge workers call this periodically to report they are alive. The handler
+// writes LastReadyAt directly into Team.Status.Members[].ReadyAt so the
+// state is durable and observable via kubectl.
+func (h *LifecycleHandler) TeamMemberReady(w http.ResponseWriter, r *http.Request) {
+	teamName := r.PathValue("team")
+	memberName := r.PathValue("member")
+	if teamName == "" || memberName == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "team and member name are required")
+		return
+	}
+
+	ctx := r.Context()
+	var team v1beta1.Team
+	if err := h.k8s.Get(ctx, client.ObjectKey{Name: teamName, Namespace: h.namespace}, &team); err != nil {
+		writeK8sError(w, "get team", err)
+		return
+	}
+
+	ms := team.Status.MemberByName(memberName)
+	if ms == nil {
+		httputil.WriteError(w, http.StatusNotFound, "member not found in team status")
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	ms.Ready = true
+	ms.LastReadyAt = now
+
+	if err := h.k8s.Status().Update(ctx, &team); err != nil {
+		writeK8sError(w, "update team member readiness", err)
+		return
+	}
+
+	log.Printf("[READY] Team member %s/%s reported ready at %s", teamName, memberName, now)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -314,6 +314,22 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// ContainerManaged indicates whether the controller should manage
+	// container lifecycle for this team worker. When false, the controller
+	// still provisions Matrix identity, Gateway consumer, MinIO config,
+	// and room membership, but skips container creation/deletion.
+	// Useful for edge workers whose pods are managed outside HiClaw.
+	// Default is true (controller manages container).
+	ContainerManaged *bool `json:"containerManaged,omitempty"`
+}
+
+// DesiredContainerMan returns the effective desired containerManaged for a team worker, defaulting to true.
+func (s TeamWorkerSpec) DesiredContainerMan() bool {
+	if s.ContainerManaged != nil {
+		return *s.ContainerManaged
+	}
+	return true
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -411,6 +427,11 @@ type TeamMemberStatus struct {
 	// summarizeBackendReadiness on each reconcile pass. Aggregates into
 	// Team.Status.LeaderReady and Team.Status.ReadyWorkers.
 	Ready bool `json:"ready,omitempty"`
+	// LastReadyAt records the timestamp of the last self-reported readiness
+	// heartbeat from this member. Used for edge workers (containerManaged=false)
+	// whose readiness is not backed by a container status query. The
+	// reconciler treats a member as ready when time.Since(LastReadyAt) < TTL.
+	LastReadyAt string `json:"lastReadyAt,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
 	// member. Leader members never expose ports (this field stays nil).
 	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
