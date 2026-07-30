@@ -18,6 +18,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -159,15 +160,36 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 //  5. Summarise backend readiness and patch Team.Status
 func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Team) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+	passStart := time.Now()
 
 	patchBase := client.MergeFrom(t.DeepCopy())
 	if t.Status.Phase == "" {
 		t.Status.Phase = "Pending"
+		now := metav1.Now()
+		t.Status.PhaseTransitionTime = &now
+		t.Status.ReconcileAttempt = 1
 		if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 			return reconcile.Result{}, err
 		}
 		patchBase = client.MergeFrom(t.DeepCopy())
+		logger.Info("phase transition: created -> Pending",
+			"team", t.Name, "uid", t.UID,
+			"attempt", t.Status.ReconcileAttempt)
 	}
+
+	t.Status.ReconcileAttempt++
+	attempt := t.Status.ReconcileAttempt
+	phaseElapsed := ""
+	if t.Status.PhaseTransitionTime != nil {
+		phaseElapsed = time.Since(t.Status.PhaseTransitionTime.Time).Truncate(time.Second).String()
+	}
+	logger.Info("reconciling team",
+		"team", t.Name, "uid", t.UID,
+		"attempt", attempt,
+		"phase", t.Status.Phase,
+		"phaseElapsed", phaseElapsed,
+		"leaderReady", t.Status.LeaderReady,
+		"readyWorkers", t.Status.ReadyWorkers)
 
 	workerNames := make([]string, 0, len(t.Spec.Workers))
 	workerRuntimeNames := make([]string, 0, len(t.Spec.Workers))
@@ -356,6 +378,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	t.Status.LeaderReady = leaderReady
 	t.Status.ReadyWorkers = readyWorkers
 
+	prevPhase := t.Status.Phase
 	switch {
 	case len(perMemberErrors) > 0:
 		t.Status.Phase = "Degraded"
@@ -367,6 +390,20 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		t.Status.Phase = "Pending"
 		t.Status.Message = ""
 	}
+	if t.Status.Phase != prevPhase {
+		now := metav1.Now()
+		t.Status.PhaseTransitionTime = &now
+		logger.Info("phase transition",
+			"team", t.Name, "uid", t.UID,
+			"from", prevPhase,
+			"to", t.Status.Phase,
+			"attempt", attempt,
+			"phaseElapsed", phaseElapsed,
+			"leaderReady", leaderReady,
+			"readyWorkers", readyWorkers,
+			"totalWorkers", t.Status.TotalWorkers,
+			"message", t.Status.Message)
+	}
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		logger.Error(err, "failed to patch team status (non-fatal)")
@@ -376,12 +413,15 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	if len(perMemberErrors) > 0 {
 		requeue = reconcileRetryDelay
 	}
-	logger.Info("team reconciled",
-		"name", t.Name,
+	logger.Info("team reconcile pass complete",
+		"team", t.Name, "uid", t.UID,
+		"attempt", attempt,
 		"phase", t.Status.Phase,
+		"phaseElapsed", phaseElapsed,
+		"passDuration", time.Since(passStart).Truncate(time.Millisecond).String(),
 		"leaderReady", leaderReady,
 		"readyWorkers", readyWorkers,
-		"members", observedMemberNames(&t.Status))
+		"requeueAfter", requeue)
 	return reconcile.Result{RequeueAfter: requeue}, nil
 }
 
@@ -394,6 +434,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 // see the Step 4 comment in reconcileTeamNormal for why post-infra failures
 // must not revoke observed status (token-rotation hazard).
 func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m MemberContext, ms *v1beta1.TeamMemberStatus) error {
+	logger := log.FromContext(ctx)
 	state := &MemberState{}
 
 	// Pre-populate ExistingMatrixUserID when we've already provisioned the
@@ -402,9 +443,14 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 		m.ExistingMatrixUserID = r.Provisioner.MatrixUserID(m.RuntimeName)
 	}
 
+	phaseStart := time.Now()
 	if _, err := ReconcileMemberInfra(ctx, deps, m, state); err != nil {
 		return err
 	}
+	logger.Info("member reconcile: infra",
+		"member", m.Name, "runtimeName", m.RuntimeName, "role", m.Role.String(),
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String(),
+		"isUpdate", m.IsUpdate)
 	ms.Observed = true
 	if state.RoomID != "" {
 		ms.RoomID = state.RoomID
@@ -413,16 +459,37 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 		ms.MatrixUserID = state.MatrixUserID
 	}
 	ms.RuntimeName = m.RuntimeName
+
+	phaseStart = time.Now()
 	if err := EnsureMemberServiceAccount(ctx, deps, m); err != nil {
 		return err
 	}
+	logger.Info("member reconcile: service-account",
+		"member", m.Name, "runtimeName", m.RuntimeName,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
+
+	phaseStart = time.Now()
 	if err := ReconcileMemberConfig(ctx, deps, m, state); err != nil {
 		return err
 	}
+	logger.Info("member reconcile: config",
+		"member", m.Name, "runtimeName", m.RuntimeName,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
+
+	phaseStart = time.Now()
 	if _, err := ReconcileMemberContainer(ctx, deps, m, state); err != nil {
 		return err
 	}
+	logger.Info("member reconcile: container",
+		"member", m.Name, "runtimeName", m.RuntimeName,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String(),
+		"containerState", state.ContainerState)
+
+	phaseStart = time.Now()
 	_ = ReconcileMemberExpose(ctx, deps, m, state)
+	logger.Info("member reconcile: expose",
+		"member", m.Name, "runtimeName", m.RuntimeName,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	if m.Role == RoleTeamWorker {
 		ms.ExposedPorts = state.ExposedPorts
@@ -495,7 +562,7 @@ func (r *TeamReconciler) writeInlineConfigs(t *v1beta1.Team) error {
 
 func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) error {
 	logger := log.FromContext(ctx)
-	logger.Info("deleting team", "name", t.Name)
+	logger.Info("deleting team", "team", t.Name, "uid", t.UID)
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
 
 	deps := MemberDeps{
@@ -662,10 +729,18 @@ func (r *TeamReconciler) removeLegacyMember(ctx context.Context, runtimeName str
 }
 
 func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch, msg string) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+	prevPhase := t.Status.Phase
 	t.Status.Phase = "Failed"
+	now := metav1.Now()
+	t.Status.PhaseTransitionTime = &now
 	t.Status.Message = msg
+	logger.Info("phase transition: Failed",
+		"team", t.Name, "uid", t.UID,
+		"from", prevPhase,
+		"message", msg)
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
-		log.FromContext(ctx).Error(err, "failed to patch team status after failure (non-fatal)")
+		logger.Error(err, "failed to patch team status after failure (non-fatal)")
 	}
 	return reconcile.Result{RequeueAfter: reconcileRetryDelay}, fmt.Errorf("%s", msg)
 }
