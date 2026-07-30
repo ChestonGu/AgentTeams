@@ -13,7 +13,7 @@
 # Build args:
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
-#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/higress-group/openclaw.git)
+#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/shepherd-aaa/hiclaw-openclaw.git — 二开 fork)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -28,7 +28,9 @@ ARG HTTPS_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-ARG OPENCLAW_REPO_URL=https://github.com/higress-group/openclaw.git
+ARG OPENCLAW_REPO_URL=https://github.com/shepherd-aaa/hiclaw-openclaw.git
+ARG OPENCLAW_BRANCH=hiclaw-2026.4.14-custom
+ARG OPENCLAW_COMMIT=
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \
@@ -62,14 +64,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone, build, and optimize OpenClaw
-# 1. Clone with single branch to minimize .git size
+# 1. Clone OPENCLAW_BRANCH (default: hiclaw-2026.4.14-custom). If OPENCLAW_COMMIT
+#    is set, pin to that commit; otherwise use the branch tip (latest).
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
-RUN git clone --depth 1 --single-branch -b hiclaw-2026.4.14 \
+RUN git clone --depth 1 --single-branch -b "${OPENCLAW_BRANCH}" \
         ${OPENCLAW_REPO_URL} /opt/openclaw && \
     cd /opt/openclaw && \
-    git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
-    git checkout 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
+    if [ -n "${OPENCLAW_COMMIT}" ]; then \
+        git fetch --depth 1 origin "${OPENCLAW_COMMIT}" && \
+        git checkout "${OPENCLAW_COMMIT}"; \
+    fi && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && \
     pnpm build && \
