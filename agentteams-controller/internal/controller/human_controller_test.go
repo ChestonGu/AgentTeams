@@ -297,6 +297,76 @@ func TestHumanReconciler_InitialPassword_AlreadyProvisioned_NoReset(t *testing.T
 	}
 }
 
+// TestHumanReconciler_DisplayName_Optional locks in the optional
+// displayName contract for Humans (mirroring Worker/Team): with an empty
+// spec.displayName the reconciler must NOT call SetDisplayName (an empty
+// value would clear the Matrix profile displayname), and it must not touch
+// the displayName generation marker or acquire a token just to skip it.
+func TestHumanReconciler_DisplayName_Optional(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		PermissionLevel: 2,
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(rig.prov.Calls.SetDisplayName) != 0 {
+		t.Errorf("SetDisplayName must not be called when spec.displayName is empty, got %+v",
+			rig.prov.Calls.SetDisplayName)
+	}
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword must not be called when there is nothing to sync or join, got %d",
+			len(rig.prov.Calls.LoginWithPassword))
+	}
+	if out.Status.DisplayNameSyncedGeneration != 0 {
+		t.Errorf("DisplayNameSyncedGeneration=%d, want 0 (empty displayName is never marked synced)",
+			out.Status.DisplayNameSyncedGeneration)
+	}
+}
+
+// TestHumanReconciler_DisplayName_Synced verifies the displayName sync path
+// for a non-empty value: one SetDisplayName on first provisioning, then a
+// generation-guarded idempotent steady state (no duplicate calls).
+func TestHumanReconciler_DisplayName_Synced(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(rig.prov.Calls.SetDisplayName) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1: %+v",
+			len(rig.prov.Calls.SetDisplayName), rig.prov.Calls.SetDisplayName)
+	}
+	if got := rig.prov.Calls.SetDisplayName[0]; got.UserID != "@alice:localhost" || got.DisplayName != "Alice" {
+		t.Errorf("SetDisplayName=%+v, want (@alice:localhost, Alice)", got)
+	}
+	if out.Status.DisplayNameSyncedGeneration != out.Generation {
+		t.Errorf("DisplayNameSyncedGeneration=%d, want %d", out.Status.DisplayNameSyncedGeneration, out.Generation)
+	}
+
+	// Steady-state reconcile must not re-sync an unchanged displayName.
+	rig.prov.ClearCalls()
+	_, _, err = rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(rig.prov.Calls.SetDisplayName) != 0 {
+		t.Errorf("SetDisplayName must not be called again on steady-state, got %+v",
+			rig.prov.Calls.SetDisplayName)
+	}
+}
+
 // TestHumanReconciler_FinalizerPatchPreservesIdentitySource locks in the
 // Worker-style MergeFrom patch when adding the cleanup finalizer. A full
 // Update would rewrite the entire spec from the in-memory object and can

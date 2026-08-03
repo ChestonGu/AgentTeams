@@ -14,10 +14,11 @@ spec:
           properties:
             spec:
               type: object
-              required: [displayName, permissionLevel]
+              required: [permissionLevel]
               properties:
                 displayName:
                   type: string
+                  description: Friendly display name (Matrix profile displayname and listings). Empty leaves the Matrix profile displayname unset.
                 username:
                   type: string
                   description: Matrix localpart for this human (fallback to metadata.name)

@@ -316,13 +316,11 @@ func createHumanCmd() *cobra.Command {
 		Long: `Create a new Human resource (Matrix account + room access).
 
   agt create human --name bob --display-name "Bob Chen"
-  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50`,
+  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50
+  agt create human --name bob --permission-level 50`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
-			}
-			if displayName == "" {
-				return fmt.Errorf("--display-name is required")
 			}
 
 			req := map[string]interface{}{
@@ -351,7 +349,7 @@ func createHumanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Human username (required)")
-	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (optional; empty leaves the Matrix profile displayname unset)")
 	cmd.Flags().StringVar(&email, "email", "", "Email address")
 	cmd.Flags().IntVar(&permissionLevel, "permission-level", 0, "Permission level (0-100)")
 	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")

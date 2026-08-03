@@ -590,7 +590,10 @@ type Human struct {
 }
 
 type HumanSpec struct {
-	DisplayName       string              `json:"displayName"`
+	// DisplayName is the friendly name for this Human (Matrix profile
+	// displayname and listings). Optional: empty leaves the Matrix profile
+	// displayname unset and listings show the username.
+	DisplayName       string              `json:"displayName,omitempty"`
 	Username          string              `json:"username,omitempty"`
 	Email             string              `json:"email,omitempty"`
 	PermissionLevel   int                 `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker

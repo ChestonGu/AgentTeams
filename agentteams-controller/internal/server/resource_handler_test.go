@@ -840,6 +840,28 @@ func TestCreateHuman_InitialPassword(t *testing.T) {
 	}
 }
 
+func TestCreateHuman_DisplayNameOptional(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+
+	body := []byte(`{"name":"h1","permissionLevel":2}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "h1", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.DisplayName != "" {
+		t.Errorf("Spec.DisplayName=%q, want empty (optional)", human.Spec.DisplayName)
+	}
+}
+
 func TestCreateManager_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()

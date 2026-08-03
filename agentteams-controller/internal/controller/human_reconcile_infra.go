@@ -84,8 +84,12 @@ func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope
 		h.Status.InitialPassword = ""
 	}
 
-	// Sync Matrix profile displayName on first provisioning and when spec changes.
-	shouldSyncDisplayName := needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation
+	// Sync Matrix profile displayName on first provisioning and when spec
+	// changes. Empty displayName is left untouched (mirrors the Worker
+	// syncMemberDisplayName contract): the Matrix profile keeps whatever it
+	// has and we never issue a SetDisplayName call to clear it.
+	shouldSyncDisplayName := (needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation) &&
+		h.Spec.DisplayName != ""
 	if shouldSyncDisplayName {
 		token := r.ensureUserToken(ctx, s)
 		if token != "" {
