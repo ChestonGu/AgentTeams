@@ -487,6 +487,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 			AccessibleTeams:   req.AccessibleTeams,
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,
+			InitialPassword:   req.InitialPassword,
 		},
 	}
 
@@ -818,6 +819,13 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 }
 
 func humanToResponse(h *v1beta1.Human) HumanResponse {
+	// Prefer the status value (the password actually set on the Matrix
+	// account); before the first reconcile it is empty, so fall back to the
+	// spec value the caller pinned at create time.
+	initialPassword := h.Status.InitialPassword
+	if initialPassword == "" {
+		initialPassword = h.Spec.InitialPassword
+	}
 	resp := HumanResponse{
 		Name:              h.Name,
 		Phase:             h.Status.Phase,
@@ -828,7 +836,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
-		InitialPassword:   h.Status.InitialPassword,
+		InitialPassword:   initialPassword,
 		Rooms:             h.Status.Rooms,
 		Message:           h.Status.Message,
 	}

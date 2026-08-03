@@ -155,6 +155,7 @@ type CreateHumanRequest struct {
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
+	InitialPassword   string   `json:"initialPassword,omitempty"`
 }
 
 type HumanResponse struct {

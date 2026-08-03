@@ -62,6 +62,15 @@ func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope
 		h.Status.MatrixUserID = expectedUserID
 		if s.identity.ManagesInitialPassword {
 			h.Status.InitialPassword = creds.Password
+			// Persist a controller-generated initial password into spec so
+			// it is durable and auditable across reconciles. The spec write
+			// bumps generation exactly once (next reconcile sees the pinned
+			// value, needsProvision is false, and nothing regenerates).
+			if h.Spec.InitialPassword == "" && creds.Password != "" {
+				h.Spec.InitialPassword = creds.Password
+				s.specInitialPassword = creds.Password
+				s.specDirty = true
+			}
 		} else {
 			h.Status.InitialPassword = ""
 		}

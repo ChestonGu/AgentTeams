@@ -598,6 +598,14 @@ type HumanSpec struct {
 	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
 	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
 	Note              string              `json:"note,omitempty"`
+	// InitialPassword pins the Matrix password assigned to this Human on
+	// first provisioning. Empty means the controller generates a random
+	// one and persists it back into spec.initialPassword + status.initialPassword
+	// on creation. Only honored for password-bearing identity sources
+	// (legacy_password); external_sso humans authenticate via SSO and never
+	// receive a controller-managed password. Enforced only at provisioning
+	// time — later edits do not reset a password the user has rotated.
+	InitialPassword string `json:"initialPassword,omitempty"`
 }
 
 type IdentitySourceSpec struct {

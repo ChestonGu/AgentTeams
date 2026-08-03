@@ -50,6 +50,9 @@ spec:
                   required: [issuer, subject]
                 note:
                   type: string
+                initialPassword:
+                  type: string
+                  description: "Custom initial Matrix password (legacy_password only); empty means the controller generates one and persists it into spec/status on creation"
             status:
               type: object
               properties:

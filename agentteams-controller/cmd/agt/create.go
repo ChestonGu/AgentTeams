@@ -307,6 +307,7 @@ func createHumanCmd() *cobra.Command {
 		accessibleTeams   string
 		accessibleWorkers string
 		note              string
+		initialPassword   string
 	)
 
 	cmd := &cobra.Command{
@@ -331,6 +332,7 @@ func createHumanCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "email", email)
 			setIfNotEmpty(req, "note", note)
+			setIfNotEmpty(req, "initialPassword", initialPassword)
 			if accessibleTeams != "" {
 				req["accessibleTeams"] = splitCSV(accessibleTeams)
 			}
@@ -355,6 +357,7 @@ func createHumanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")
 	cmd.Flags().StringVar(&accessibleWorkers, "accessible-workers", "", "Comma-separated worker names")
 	cmd.Flags().StringVar(&note, "note", "", "Note for the Human user")
+	cmd.Flags().StringVar(&initialPassword, "initial-password", "", "Initial Matrix password (controller generates one when omitted)")
 	return cmd
 }
 
