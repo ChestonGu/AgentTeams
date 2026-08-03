@@ -94,6 +94,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
 			ModelProvider:    req.ModelProvider,
+			DisplayName:      req.DisplayName,
 			WorkerName:       req.WorkerName,
 			Runtime:          runtime,
 			Image:            req.Image,
@@ -213,6 +214,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName
 		}
+		if req.DisplayName != "" {
+			worker.Spec.DisplayName = req.DisplayName
+		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
 		}
@@ -322,6 +326,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.TeamSpec{
 			Description:    req.Description,
+			DisplayName:    req.DisplayName,
 			TeamName:       req.TeamName,
 			Admin:          req.Admin,
 			HumanMembers:   req.HumanMembers,
@@ -402,6 +407,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 
 		if req.Description != "" {
 			team.Spec.Description = req.Description
+		}
+		if req.DisplayName != "" {
+			team.Spec.DisplayName = req.DisplayName
 		}
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
@@ -717,6 +725,7 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		Name:             w.Name,
+		DisplayName:      w.Spec.DisplayName,
 		WorkerName:       w.Spec.WorkerName,
 		Phase:            w.Status.Phase,
 		State:            w.Spec.DesiredState(),
@@ -749,6 +758,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 func teamToResponse(t *v1beta1.Team) TeamResponse {
 	resp := TeamResponse{
 		Name:           t.Name,
+		DisplayName:    t.Spec.DisplayName,
 		TeamName:       t.Spec.EffectiveTeamName(t.Name),
 		Phase:          t.Status.Phase,
 		Description:    t.Spec.Description,

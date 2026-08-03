@@ -49,6 +49,7 @@ type WorkerDeprovisionRequest struct {
 // TeamRoomRequest describes rooms to create for a team.
 type TeamRoomRequest struct {
 	TeamName             string
+	DisplayName          string
 	LeaderName           string
 	LeaderCredentialName string
 	WorkerNames          []string
@@ -56,12 +57,23 @@ type TeamRoomRequest struct {
 	HumanMembers         []v1beta1.TeamMemberSpec
 	TeamAdminActorToken  string
 	TeamAdminActorName   string
+
+	// Generation is the Team CR generation. When it differs from
+	// DisplayNameSyncedGeneration and DisplayName is non-empty,
+	// ProvisionTeamRooms renames the existing Team room.
+	Generation int64
+	// DisplayNameSyncedGeneration records the last generation whose
+	// DisplayName was applied to the Team room name.
+	DisplayNameSyncedGeneration int64
 }
 
 // TeamRoomResult contains the created room IDs.
 type TeamRoomResult struct {
 	TeamRoomID     string
 	LeaderDMRoomID string
+	// DisplayNameSynced reports that the Team room was renamed to the
+	// requested display name during this call.
+	DisplayNameSynced bool
 }
 
 // TeamRoomArchiveRequest describes Team-owned rooms to mark as deleted while
@@ -801,8 +813,12 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrix.UserID)
+	teamRoomName := fmt.Sprintf("Team: %s", req.TeamName)
+	if req.DisplayName != "" {
+		teamRoomName = fmt.Sprintf("Team: %s", req.DisplayName)
+	}
 	teamRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
-		Name:          fmt.Sprintf("Team: %s", req.TeamName),
+		Name:          teamRoomName,
 		Topic:         fmt.Sprintf("Team room for %s", req.TeamName),
 		Invite:        teamInvites,
 		PowerLevels:   teamRoomPowerLevels,
@@ -814,6 +830,17 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		return nil, fmt.Errorf("team room creation failed: %w", err)
 	}
 	logger.Info("team room ready", "roomID", teamRoom.RoomID, "created", teamRoom.Created)
+
+	// Rename an existing Team room when a display name was (re)configured and
+	// the Team generation advanced since the last successful sync.
+	result := &TeamRoomResult{TeamRoomID: teamRoom.RoomID, LeaderDMRoomID: ""}
+	if req.DisplayName != "" && req.Generation != req.DisplayNameSyncedGeneration {
+		if err := p.matrix.SetRoomName(ctx, teamRoom.RoomID, teamRoomName, req.TeamAdminActorToken); err != nil {
+			return nil, fmt.Errorf("rename team room: %w", err)
+		}
+		result.DisplayNameSynced = true
+		logger.Info("team room displayName synced", "roomID", teamRoom.RoomID, "name", teamRoomName)
+	}
 
 	// Reconcile unconditionally: on fresh creation the invite list already
 	// took effect and Reconcile is a no-op; on alias resolution it catches
@@ -910,10 +937,8 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		return nil, fmt.Errorf("set leader DM room meta: %w", err)
 	}
 
-	return &TeamRoomResult{
-		TeamRoomID:     teamRoom.RoomID,
-		LeaderDMRoomID: leaderDMRoom.RoomID,
-	}, nil
+	result.LeaderDMRoomID = leaderDMRoom.RoomID
+	return result, nil
 }
 
 func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {

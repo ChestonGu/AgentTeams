@@ -180,6 +180,7 @@ type WorkerSpec struct {
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
 	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
+	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
@@ -384,6 +385,12 @@ type WorkerStatus struct {
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
+	// DisplayNameSyncedGeneration records the Worker generation whose
+	// spec.displayName was last synced to the Matrix profile. Mirrors the
+	// Human status field of the same name; used as the idempotency guard so
+	// the controller only calls SetDisplayName after a displayName change.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
+
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
 	// Values: "pod" (default), or "" before the first successful deployment.
@@ -423,6 +430,7 @@ type Team struct {
 
 type TeamSpec struct {
 	Description  string           `json:"description,omitempty"`
+	DisplayName  string           `json:"displayName,omitempty"` // friendly display name (Team room name, listings); falls back to teamName
 	TeamName     string           `json:"teamName,omitempty"`
 	Admin        *TeamAdminSpec   `json:"admin,omitempty"`
 	HumanMembers []TeamMemberSpec `json:"humanMembers,omitempty"`
@@ -480,6 +488,11 @@ type TeamStatus struct {
 	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
 	TotalWorkers   int    `json:"totalWorkers,omitempty"`
 	Message        string `json:"message,omitempty"`
+	// DisplayNameSyncedGeneration records the Team generation whose
+	// spec.displayName was last applied to the Team room name. Used as the
+	// idempotency guard so ProvisionTeamRooms only renames the room after a
+	// displayName change instead of on every reconcile.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.

@@ -6,6 +6,7 @@ import v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1
 
 type CreateWorkerRequest struct {
 	Name          string                             `json:"name"`
+	DisplayName   string                             `json:"displayName,omitempty"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
@@ -30,6 +31,7 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
+	DisplayName   string                             `json:"displayName,omitempty"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
@@ -55,6 +57,7 @@ type UpdateWorkerRequest struct {
 
 type WorkerResponse struct {
 	Name             string                     `json:"name"`
+	DisplayName      string                     `json:"displayName,omitempty"`
 	WorkerName       string                     `json:"workerName,omitempty"`
 	Phase            string                     `json:"phase"`
 	ContainerManaged bool                       `json:"containerManaged"`
@@ -93,6 +96,7 @@ type WorkerListResponse struct {
 
 type CreateTeamRequest struct {
 	Name           string                     `json:"name"`
+	DisplayName    string                     `json:"displayName,omitempty"`
 	TeamName       string                     `json:"teamName,omitempty"`
 	Description    string                     `json:"description,omitempty"`
 	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -104,6 +108,7 @@ type CreateTeamRequest struct {
 }
 
 type UpdateTeamRequest struct {
+	DisplayName    string                     `json:"displayName,omitempty"`
 	TeamName       string                     `json:"teamName,omitempty"`
 	Description    string                     `json:"description,omitempty"`
 	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -116,6 +121,7 @@ type UpdateTeamRequest struct {
 
 type TeamResponse struct {
 	Name               string                       `json:"name"`
+	DisplayName        string                       `json:"displayName,omitempty"`
 	TeamName           string                       `json:"teamName,omitempty"`
 	Phase              string                       `json:"phase"`
 	Description        string                       `json:"description,omitempty"`

@@ -31,6 +31,7 @@ func createCmd() *cobra.Command {
 func createWorkerCmd() *cobra.Command {
 	var (
 		name        string
+		displayName string
 		model       string
 		runtime     string
 		image       string
@@ -86,6 +87,7 @@ func createWorkerCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
@@ -130,6 +132,7 @@ func createWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Matrix profile, defaults to worker name)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
@@ -217,6 +220,7 @@ func renderWorkerStatusSummary(resp *workerResp) string {
 func createTeamCmd() *cobra.Command {
 	var (
 		name                 string
+		displayName          string
 		teamName             string
 		leaderName           string
 		leaderHeartbeatEvery string
@@ -260,6 +264,7 @@ resources, skills, and lifecycle state.`,
 			}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
 			if adminName != "" {
 				req["admin"] = map[string]interface{}{"name": adminName, "matrixUserId": adminMatrixID}
@@ -277,6 +282,7 @@ resources, skills, and lifecycle state.`,
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Team room name, defaults to --name)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")

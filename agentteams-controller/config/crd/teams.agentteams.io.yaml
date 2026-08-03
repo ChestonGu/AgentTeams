@@ -18,6 +18,9 @@ spec:
               properties:
                 description:
                   type: string
+                displayName:
+                  type: string
+                  description: Friendly display name for the Team (used for the Team room name and listings). Falls back to teamName.
                 teamName:
                   type: string
                   description: Runtime/storage team identity. Defaults to metadata.name.
@@ -109,6 +112,10 @@ spec:
                   type: string
                 leaderDMRoomID:
                   type: string
+                displayNameSyncedGeneration:
+                  type: integer
+                  format: int64
+                  description: Generation whose spec.displayName was last applied to the Team room name.
                 leaderReady:
                   type: boolean
                 readyWorkers:

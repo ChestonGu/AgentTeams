@@ -41,6 +41,9 @@ type WorkerProvisioner interface {
 	// for the given room. Best-effort; the actual deletion runs
 	// asynchronously inside tuwunel.
 	DeleteWorkerRoom(ctx context.Context, roomID string) error
+	// SetDisplayName updates a worker-like user's Matrix profile
+	// displayname using a user-scoped access token.
+	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
 	MatrixUserID(name string) string
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 	LoginAppServiceUser(ctx context.Context, username string) (string, error)

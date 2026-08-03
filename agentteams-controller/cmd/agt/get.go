@@ -70,11 +70,12 @@ func getWorkersCmd() *cobra.Command {
 				fmt.Println("No workers found.")
 				return nil
 			}
-			headers := []string{"NAME", "PHASE", "MODEL", "TEAM", "RUNTIME"}
+			headers := []string{"NAME", "DISPLAY-NAME", "PHASE", "MODEL", "TEAM", "RUNTIME"}
 			var rows [][]string
 			for _, w := range resp.Workers {
 				rows = append(rows, []string{
 					w.Name,
+					or(w.DisplayName, "-"),
 					or(w.Phase, "Pending"),
 					w.Model,
 					or(w.Team, "-"),
@@ -135,12 +136,13 @@ func getTeamsCmd() *cobra.Command {
 				fmt.Println("No teams found.")
 				return nil
 			}
-			headers := []string{"NAME", "PHASE", "LEADER", "WORKERS", "READY"}
+			headers := []string{"NAME", "DISPLAY-NAME", "PHASE", "LEADER", "WORKERS", "READY"}
 			var rows [][]string
 			for _, t := range resp.Teams {
 				ready := fmt.Sprintf("%d/%d", t.ReadyWorkers, t.TotalWorkers)
 				rows = append(rows, []string{
 					t.Name,
+					or(t.DisplayName, "-"),
 					or(t.Phase, "Pending"),
 					t.LeaderName,
 					strings.Join(t.WorkerNames, ","),
@@ -288,6 +290,7 @@ func getManagersCmd() *cobra.Command {
 
 type workerResp struct {
 	Name             string                   `json:"name"`
+	DisplayName      string                   `json:"displayName,omitempty"`
 	WorkerName       string                   `json:"workerName,omitempty"`
 	Phase            string                   `json:"phase"`
 	ContainerManaged bool                     `json:"containerManaged"`
@@ -313,6 +316,7 @@ type workerListResp struct {
 
 type teamResp struct {
 	Name              string              `json:"name"`
+	DisplayName       string              `json:"displayName,omitempty"`
 	TeamName          string              `json:"teamName,omitempty"`
 	Phase             string              `json:"phase"`
 	Description       string              `json:"description,omitempty"`
@@ -395,6 +399,7 @@ type managerListResp struct {
 func workerDetail(w workerResp) []KeyValue {
 	return []KeyValue{
 		{"Name", w.Name},
+		{"DisplayName", w.DisplayName},
 		{"Phase", or(w.Phase, "Pending")},
 		{"Model", w.Model},
 		{"Runtime", or(w.Runtime, "openclaw")},
@@ -411,6 +416,7 @@ func workerDetail(w workerResp) []KeyValue {
 func teamDetail(t teamResp) []KeyValue {
 	return []KeyValue{
 		{"Name", t.Name},
+		{"DisplayName", t.DisplayName},
 		{"TeamName", t.TeamName},
 		{"Phase", or(t.Phase, "Pending")},
 		{"Description", t.Description},
