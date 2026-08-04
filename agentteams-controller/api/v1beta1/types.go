@@ -476,6 +476,15 @@ type TeamStatus struct {
 	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
 	TotalWorkers   int    `json:"totalWorkers,omitempty"`
 	Message        string `json:"message,omitempty"`
+	// ReconcileAttempt is a monotonic counter incremented on each reconcile
+	// pass. Used to correlate log entries across passes and diagnose
+	// workqueue scheduling gaps (e.g., long gaps between attempts indicate
+	// rate-limiter backoff, not slow reconcile internals).
+	ReconcileAttempt int64 `json:"reconcileAttempt,omitempty"`
+	// PhaseTransitionTime records when the current Phase was last entered.
+	// Combined with ReconcileAttempt, this reveals how long the Pending
+	// phase has been active and how many passes it took to converge.
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.

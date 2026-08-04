@@ -105,6 +105,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "agentteams.storage.adminSecretName" . }}
                   key: {{ include "agentteams.storage.adminSecretKeyKey" . }}
+            {{- else if eq .Values.storage.provider "oss" }}
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.ossCredsSecretName" . }}
+                  key: accessKey
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.ossCredsSecretName" . }}
+                  key: secretKey
             {{- end }}
             - name: AGENTTEAMS_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}
@@ -138,6 +149,8 @@ spec:
               value: {{ include "agentteams.matrix.internalURL" . | quote }}
             - name: AGENTTEAMS_MATRIX_DOMAIN
               value: {{ include "agentteams.matrix.serverName" . | quote }}
+            - name: AGENTTEAMS_MATRIX_PROVIDER
+              value: {{ .Values.matrix.provider | quote }}
             {{- /* OSS storage prefix */}}
             - name: AGENTTEAMS_STORAGE_PREFIX
               value: {{ include "agentteams.storage.remoteRoot" . | quote }}

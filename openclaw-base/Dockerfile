@@ -13,7 +13,7 @@
 # Build args:
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
-#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/higress-group/openclaw.git)
+#   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/shepherd-aaa/hiclaw-openclaw.git — 二开 fork)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -28,7 +28,9 @@ ARG HTTPS_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-ARG OPENCLAW_REPO_URL=https://github.com/higress-group/openclaw.git
+ARG OPENCLAW_REPO_URL=https://github.com/shepherd-aaa/hiclaw-openclaw.git
+ARG OPENCLAW_BRANCH=hiclaw-2026.4.14-custom
+ARG OPENCLAW_COMMIT=
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \

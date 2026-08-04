@@ -133,6 +133,26 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end }}
 
+{{- define "agentteams.synapse.fullname" -}}
+{{- printf "%s-synapse" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "agentteams.synapse.clusterFQDN" -}}
+{{- printf "%s.%s.svc.cluster.local" (include "agentteams.synapse.fullname" .) (include "agentteams.namespace" .) -}}
+{{- end }}
+
+{{- define "agentteams.synapse.internalURL" -}}
+{{- printf "http://%s:%d" (include "agentteams.synapse.clusterFQDN" .) (.Values.matrix.synapse.service.port | int) -}}
+{{- end }}
+
+{{- define "agentteams.synapse.serverName" -}}
+{{- if .Values.matrix.serverName -}}{{- .Values.matrix.serverName -}}{{- else -}}{{- include "agentteams.synapse.clusterFQDN" . -}}{{- end -}}
+{{- end }}
+
+{{- define "agentteams.synapse.postgres.fullname" -}}
+{{- printf "%s-synapse-pg" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "agentteams.minio.internalURL" -}}
 {{- printf "http://%s.%s.svc.cluster.local:%d" (include "agentteams.minio.fullname" .) (include "agentteams.namespace" .) (.Values.storage.minio.service.apiPort | int) }}
 {{- end }}
