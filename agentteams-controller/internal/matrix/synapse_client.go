@@ -67,7 +67,7 @@ func (s *SynapseClient) AdminCommand(ctx context.Context, command string) error 
 }
 
 // synAdminCall issues a Synapse admin REST request with the cached admin
-// token and treats 2xx as success. The admin account (HICLAW_ADMIN_USER)
+// token and treats 2xx as success. The admin account (AGENTTEAMS_ADMIN_USER)
 // must be a Synapse server admin, or these endpoints return 403.
 func (s *SynapseClient) synAdminCall(ctx context.Context, method, path string, body interface{}) error {
 	token, err := s.ensureAdminToken(ctx)
