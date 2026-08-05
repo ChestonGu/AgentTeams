@@ -84,8 +84,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
-- fix(controller): unblock Team reconcile — concurrency, failTeam backoff, observedGeneration fast path ([c019f8f](https://github.com/agentscope-ai/HiClaw/commit/c019f8f))
-- fix(controller): add Human reconcile exponential backoff and observedGeneration parity ([c019f8f](https://github.com/agentscope-ai/HiClaw/commit/c019f8f))
+- fix(controller): unblock Team reconcile — concurrency, failTeam backoff, observedGeneration fast path ([48ce4aa](https://github.com/agentscope-ai/HiClaw/commit/48ce4aa))
+- fix(controller): add Human reconcile exponential backoff and observedGeneration parity ([48ce4aa](https://github.com/agentscope-ai/HiClaw/commit/48ce4aa))
 - fix(install): add non-interactive deep-defense guards to step functions ([6cbec18](https://github.com/agentscope-ai/HiClaw/commit/6cbec18))
 - chore(helm): bump chart to 1.1.1 and update repo URLs ([fd09d98](https://github.com/agentscope-ai/HiClaw/commit/fd09d98))
 - fix(install): update GitHub repo URL to agentscope-ai/HiClaw and bump stable fallback to v1.1.1 ([f39601a](https://github.com/agentscope-ai/HiClaw/commit/f39601a))
