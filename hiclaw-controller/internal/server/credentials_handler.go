@@ -20,7 +20,11 @@ func NewCredentialsHandler(stsService *credentials.STSService) *CredentialsHandl
 
 // RefreshSTS handles POST /api/v1/credentials/sts
 func (h *CredentialsHandler) RefreshSTS(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[INFO] STS credential request received from %s", r.RemoteAddr)
+	// Per-request INFO logging is commented out (not removed) for future
+	// debugging: workers refresh STS credentials on every startup/sync, so
+	// these lines flooded the controller log and drowned out reconcile
+	// diagnostics. WARN/ERROR paths below still log.
+	// log.Printf("[INFO] STS credential request received from %s", r.RemoteAddr)
 	if h.stsService == nil {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "STS service not available (not in cloud mode)")
 		return
@@ -33,7 +37,7 @@ func (h *CredentialsHandler) RefreshSTS(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	log.Printf("[INFO] STS credential request from %s/%s", caller.Role, caller.Username)
+	// log.Printf("[INFO] STS credential request from %s/%s", caller.Role, caller.Username)
 	token, err := h.stsService.IssueForCaller(r.Context(), caller)
 	if err != nil {
 		log.Printf("[ERROR] issue STS token for %s/%s: %v", caller.Role, caller.Username, err)

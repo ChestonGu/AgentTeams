@@ -147,6 +147,10 @@ type Config struct {
 	// a deadline aborts long provisioning passes (large package uploads, slow
 	// Matrix syncs) that would previously be allowed to run to completion.
 	TeamReconcileTimeoutSeconds int // HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
+	// TeamMaxConcurrentReconciles is the Team controller's worker parallelism.
+	// 1 (default) preserves legacy serial behavior; raise it to unblock the
+	// workqueue when one Team hangs.
+	TeamMaxConcurrentReconciles int // HICLAW_TEAM_MAX_CONCURRENT_RECONCILES; 1 = serial
 
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
@@ -331,6 +335,7 @@ func LoadConfig() *Config {
 		OpenAIBaseURL:               os.Getenv("HICLAW_OPENAI_BASE_URL"),
 		AIStreamIdleTimeoutSeconds:  envOrDefaultInt("HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
 		TeamReconcileTimeoutSeconds: envOrDefaultInt("HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
+		TeamMaxConcurrentReconciles: envOrDefaultInt("HICLAW_TEAM_MAX_CONCURRENT_RECONCILES", 1),
 		ElementWebURL:               os.Getenv("HICLAW_ELEMENT_WEB_URL"),
 
 		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),

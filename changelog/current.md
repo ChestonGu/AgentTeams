@@ -38,7 +38,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Gateway and auth stability**: The configured AI stream idle timeout is applied to the self-hosted Higress gateway, observability/stream-timeout env is propagated during bootstrap, and TokenReview cache entries are capped and swept.
 
-- **Team reconcile unblocking**: Team reconcile runs with 5 concurrent workers, so one slow/hung Team can no longer stall every other Team (including newly created ones stuck in Phase ""/Pending). An optional per-pass deadline (`HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS`, disabled by default) bounds a single pass against hung external calls; `failTeam` uses exponential backoff (30s → 10min cap) and stops requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation; finalizer add/remove use merge patches instead of `Update`. `TeamStatus` gains `observedGeneration`, so unchanged Active teams skip the full provisioning chain after a controller restart or informer re-sync (periodic requeue extended to 30min).
+- **Team reconcile unblocking**: Team reconcile parallelism is configurable via `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` (default 1, preserving legacy serial behavior; raise it so one slow/hung Team can no longer stall every other Team, including newly created ones stuck in Phase ""/Pending). An optional per-pass deadline (`HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS`, disabled by default) bounds a single pass against hung external calls; `failTeam` uses exponential backoff (30s → 10min cap) and stops requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation; finalizer add/remove use merge patches instead of `Update`. `TeamStatus` gains `observedGeneration`, so unchanged Active teams skip the full provisioning chain after a controller restart or informer re-sync (periodic requeue extended to 30min).
+
+- **Team reconcile observability**: Each Team reconcile pass logs per-step timing (`team reconcile: admin actor / step 1 rooms / step 1 storage / …`), and `DeployWorkerConfig` logs per-phase upload timing, so slow steps (e.g. hung object-storage syncs) are identifiable at a glance. Per-request STS credential INFO logs are commented out (not removed) to reduce log noise; WARN/ERROR paths still log.
 
 - **Human reconcile backoff and parity**: `HumanStatus` gains `observedGeneration` (parity with Worker/Team/Manager) plus `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`. Infra failures now use exponential backoff (30s → 10min cap) and stop requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation, replacing the previous double-requeue (`RequeueAfter` + rate-limiter error) pattern.
 
@@ -78,7 +80,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **网关与认证稳定性**: 自托管 Higress 网关应用配置的 AI stream idle timeout；启动时传递 observability / stream-timeout 环境变量；TokenReview 缓存增加容量上限和清理机制。
 
-- **Team 调谐解除阻塞**: Team 调谐以 5 并发执行，单个 Team 缓慢或挂起不再拖垮其他所有 Team（含新建、停在 Phase ""/Pending 的）。可通过 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` 开启单次调谐超时（默认关闭，保持原有行为）；`failTeam` 改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；finalizer 增删改用 merge patch 而非 `Update`。`TeamStatus` 新增 `observedGeneration`，控制器重启或 informer re-sync 后未变更的 Active Team 跳过全量调谐链（周期 requeue 延长至 30min）。
+- **Team 调谐解除阻塞**: Team 调谐并发度可通过 `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` 配置（默认 1，保持原有串行行为；调高后单个 Team 缓慢或挂起不再拖垮其他所有 Team，含新建、停在 Phase ""/Pending 的）。可通过 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` 开启单次调谐超时（默认关闭，保持原有行为）；`failTeam` 改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；finalizer 增删改用 merge patch 而非 `Update`。`TeamStatus` 新增 `observedGeneration`，控制器重启或 informer re-sync 后未变更的 Active Team 跳过全量调谐链（周期 requeue 延长至 30min）。
+
+- **Team 调谐可观测性**: Team 调谐每次执行按步骤打印耗时日志（`team reconcile: admin actor / step 1 rooms / step 1 storage / …`），`DeployWorkerConfig` 打印各上传阶段耗时，便于快速定位慢步骤（如对象存储同步挂起）。STS 凭据逐请求 INFO 日志改为注释保留（不删除）以降低日志噪声；WARN/ERROR 路径仍会打印。
 
 - **Human 调谐退避与字段对齐**: `HumanStatus` 新增 `observedGeneration`（与 Worker/Team/Manager 对齐）以及 `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`。Infra 失败改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；修复了原先 `RequeueAfter` + error 的双重 requeue 模式。
 

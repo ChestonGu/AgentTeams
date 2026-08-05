@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
@@ -179,13 +180,17 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := os.MkdirAll(localAgentDir, 0755); err != nil {
 		return fmt.Errorf("create agent dir: %w", err)
 	}
+	phaseStart := time.Now()
 	logger.Info("syncing agent files to storage", "name", req.Name)
 	seedExcludes := map[string]struct{}{"SOUL.md": {}, "AGENTS.md": {}, "HEARTBEAT.md": {}}
 	if err := d.seedLocalAgentFiles(ctx, localAgentDir, agentPrefix, seedExcludes); err != nil {
 		logger.Error(err, "agent file sync failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: seed agent files", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- openclaw.json ---
+	phaseStart = time.Now()
 	var channelPolicy *agentconfig.ChannelPolicy
 	if req.Spec.ChannelPolicy != nil {
 		channelPolicy = &agentconfig.ChannelPolicy{
@@ -226,8 +231,11 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", configJSON); err != nil {
 		return fmt.Errorf("config push to storage failed: %w", err)
 	}
+	logger.Info("deploy worker config: openclaw.json", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- SOUL.md (seed-only) ---
+	phaseStart = time.Now()
 	// Written once on first deploy; never overwritten so the agent owns it
 	// after startup. Team leaders are handled by renderAndPushSoulTemplate
 	// in InjectCoordinationContext, so skip here.
@@ -273,8 +281,11 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			}
 		}
 	}
+	logger.Info("deploy worker config: SOUL.md", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- mcporter-servers.json ---
+	phaseStart = time.Now()
 	if len(req.McpServers) > 0 {
 		mcporterJSON, err := d.agentConfig.GenerateMcporterConfig(req.GatewayKey, req.McpServers)
 		if err != nil {
@@ -285,28 +296,42 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			}
 		}
 	}
+	logger.Info("deploy worker config: mcporter", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Matrix password to storage for E2EE re-login ---
+	phaseStart = time.Now()
 	if req.MatrixPassword != "" {
 		if err := d.oss.PutObject(ctx, agentPrefix+"/credentials/matrix/password", []byte(req.MatrixPassword)); err != nil {
 			logger.Error(err, "failed to write Matrix password to storage (non-fatal)")
 		}
 	}
+	logger.Info("deploy worker config: matrix password", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Builtin top-level files (e.g. HEARTBEAT.md for team leaders) ---
+	phaseStart = time.Now()
 	if err := d.pushBuiltinTopLevelFiles(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
 		logger.Error(err, "builtin top-level file sync failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: builtin top-level files", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
+	phaseStart = time.Now()
 	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: AGENTS.md", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Push builtin skills from worker-agent template ---
+	phaseStart = time.Now()
 	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
 		logger.Error(err, "builtin skills push failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: builtin skills", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	return nil
 }
