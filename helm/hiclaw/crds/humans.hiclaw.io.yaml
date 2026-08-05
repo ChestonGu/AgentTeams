@@ -63,6 +63,20 @@ spec:
                   type: boolean
                 message:
                   type: string
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: "Most recent generation observed by the controller. Mirrors observedGeneration on Worker/Team/Manager status."
+                consecutiveFailures:
+                  type: integer
+                  description: "Consecutive reconcile failures driving failHuman's exponential backoff. Reset to 0 on a successful pass."
+                maxRetriesReached:
+                  type: boolean
+                  description: "True once maxHumanRetries consecutive failures stop automatic requeuing. Reset by setting the hiclaw.io/retry annotation."
+                phaseTransitionTime:
+                  type: string
+                  format: date-time
+                  description: "When the current Phase was last entered. Used by the backoff guard to skip passes before the backoff window elapses."
       subresources:
         status: {}
       additionalPrinterColumns:

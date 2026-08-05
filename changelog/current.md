@@ -38,6 +38,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Gateway and auth stability**: The configured AI stream idle timeout is applied to the self-hosted Higress gateway, observability/stream-timeout env is propagated during bootstrap, and TokenReview cache entries are capped and swept.
 
+- **Team reconcile unblocking**: Team reconcile runs with 5 concurrent workers, so one slow/hung Team can no longer stall every other Team (including newly created ones stuck in Phase ""/Pending). An optional per-pass deadline (`HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS`, disabled by default) bounds a single pass against hung external calls; `failTeam` uses exponential backoff (30s → 10min cap) and stops requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation; finalizer add/remove use merge patches instead of `Update`. `TeamStatus` gains `observedGeneration`, so unchanged Active teams skip the full provisioning chain after a controller restart or informer re-sync (periodic requeue extended to 30min).
+
+- **Human reconcile backoff and parity**: `HumanStatus` gains `observedGeneration` (parity with Worker/Team/Manager) plus `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`. Infra failures now use exponential backoff (30s → 10min cap) and stop requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation, replacing the previous double-requeue (`RequeueAfter` + rate-limiter error) pattern.
+
 ---
 
 **新增功能**
@@ -74,8 +78,14 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **网关与认证稳定性**: 自托管 Higress 网关应用配置的 AI stream idle timeout；启动时传递 observability / stream-timeout 环境变量；TokenReview 缓存增加容量上限和清理机制。
 
+- **Team 调谐解除阻塞**: Team 调谐以 5 并发执行，单个 Team 缓慢或挂起不再拖垮其他所有 Team（含新建、停在 Phase ""/Pending 的）。可通过 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` 开启单次调谐超时（默认关闭，保持原有行为）；`failTeam` 改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；finalizer 增删改用 merge patch 而非 `Update`。`TeamStatus` 新增 `observedGeneration`，控制器重启或 informer re-sync 后未变更的 Active Team 跳过全量调谐链（周期 requeue 延长至 30min）。
+
+- **Human 调谐退避与字段对齐**: `HumanStatus` 新增 `observedGeneration`（与 Worker/Team/Manager 对齐）以及 `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`。Infra 失败改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；修复了原先 `RequeueAfter` + error 的双重 requeue 模式。
+
 ---
 
+- fix(controller): unblock Team reconcile — concurrency, failTeam backoff, observedGeneration fast path ([c019f8f](https://github.com/agentscope-ai/HiClaw/commit/c019f8f))
+- fix(controller): add Human reconcile exponential backoff and observedGeneration parity ([c019f8f](https://github.com/agentscope-ai/HiClaw/commit/c019f8f))
 - fix(install): add non-interactive deep-defense guards to step functions ([6cbec18](https://github.com/agentscope-ai/HiClaw/commit/6cbec18))
 - chore(helm): bump chart to 1.1.1 and update repo URLs ([fd09d98](https://github.com/agentscope-ai/HiClaw/commit/fd09d98))
 - fix(install): update GitHub repo URL to agentscope-ai/HiClaw and bump stable fallback to v1.1.1 ([f39601a](https://github.com/agentscope-ai/HiClaw/commit/f39601a))

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/accessresolver"
@@ -512,16 +513,17 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if err := (&controller.TeamReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		AgentFSDir:     a.cfg.AgentFSDir(),
-		ControllerName: a.cfg.ControllerName,
-		ResourcePrefix: resourcePrefix,
+		Client:           a.mgr.GetClient(),
+		Provisioner:      a.provisioner,
+		Deployer:         a.deployer,
+		Backend:          a.registry,
+		EnvBuilder:       a.envBuilder,
+		Legacy:           a.legacy,
+		DefaultRuntime:   a.cfg.DefaultWorkerRuntime,
+		AgentFSDir:       a.cfg.AgentFSDir(),
+		ControllerName:   a.cfg.ControllerName,
+		ResourcePrefix:   resourcePrefix,
+		ReconcileTimeout: time.Duration(a.cfg.TeamReconcileTimeoutSeconds) * time.Second,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
