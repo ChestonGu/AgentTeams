@@ -4,12 +4,40 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
+
+func TestReconcileActiveInterval(t *testing.T) {
+	t.Run("defaults to 5m with positive jitter", func(t *testing.T) {
+		r := &TeamReconciler{} // ReconcileInterval zero → 5m base
+		seen := map[time.Duration]struct{}{}
+		for i := 0; i < 100; i++ {
+			got := r.reconcileActiveInterval()
+			if got < 5*time.Minute || got > 5*time.Minute+30*time.Second {
+				t.Fatalf("default interval %v out of range [5m, 5m30s]", got)
+			}
+			seen[got] = struct{}{}
+		}
+		if len(seen) < 2 {
+			t.Fatalf("expected jitter to vary the interval across calls, all got %v", seen)
+		}
+	})
+
+	t.Run("uses configured interval with jitter", func(t *testing.T) {
+		r := &TeamReconciler{ReconcileInterval: 2 * time.Minute}
+		for i := 0; i < 100; i++ {
+			got := r.reconcileActiveInterval()
+			if got < 2*time.Minute || got > 2*time.Minute+12*time.Second {
+				t.Fatalf("configured interval %v out of range [2m, 2m12s]", got)
+			}
+		}
+	})
+}
 
 func TestLeaderHeartbeatEvery(t *testing.T) {
 	team := &v1beta1.Team{}

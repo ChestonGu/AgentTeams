@@ -524,6 +524,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		ControllerName:          a.cfg.ControllerName,
 		ResourcePrefix:          resourcePrefix,
 		ReconcileTimeout:        time.Duration(a.cfg.TeamReconcileTimeoutSeconds) * time.Second,
+		ReconcileInterval:       time.Duration(a.cfg.TeamReconcileIntervalSeconds) * time.Second,
 		MaxConcurrentReconciles: a.cfg.TeamMaxConcurrentReconciles,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)

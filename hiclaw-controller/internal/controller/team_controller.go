@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -42,9 +43,6 @@ const (
 // single hung mc upload with MaxConcurrentReconciles=1 blocked every Team,
 // including newly created ones, for the lifetime of the hang).
 const (
-	// reconcileActiveInterval is the periodic requeue for a fully converged
-	// Active Team whose spec has not changed since the last successful pass.
-	reconcileActiveInterval = 30 * time.Minute
 	// maxTeamRetries caps consecutive failTeam passes before the Team stops
 	// auto-requeuing (status.maxRetriesReached=true). Reset with
 	// kubectl annotate team <name> hiclaw.io/retry="".
@@ -84,6 +82,13 @@ type TeamReconciler struct {
 	// worker slot until it returns. Sourced from
 	// HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS.
 	ReconcileTimeout time.Duration
+
+	// ReconcileInterval is the periodic requeue for a fully converged Active
+	// Team whose spec has not changed since the last successful pass. 0
+	// (default) falls back to 5 minutes. Positive jitter (0–10% of the
+	// interval) is added on every wakeup so concurrent Teams do not requeue
+	// in lockstep. Sourced from HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS.
+	ReconcileInterval time.Duration
 
 	// MaxConcurrentReconciles is the Team controller's worker parallelism.
 	// 0 or 1 keeps the controller-runtime default of 1 (legacy behavior);
@@ -265,7 +270,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 				"readyWorkers", readyWorkers,
 				"totalWorkers", t.Status.TotalWorkers,
 				"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
-			return reconcile.Result{RequeueAfter: reconcileActiveInterval}, nil
+			return reconcile.Result{RequeueAfter: r.reconcileActiveInterval()}, nil
 		}
 		// A member is not ready — fall through to the full pass to recover it.
 	}
@@ -552,7 +557,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 
 	requeue := reconcileInterval
 	if t.Status.Phase == "Active" && t.Generation == t.Status.ObservedGeneration {
-		requeue = reconcileActiveInterval
+		requeue = r.reconcileActiveInterval()
 	}
 	if len(perMemberErrors) > 0 {
 		requeue = reconcileRetryDelay
@@ -870,6 +875,18 @@ func (r *TeamReconciler) removeLegacyMember(ctx context.Context, runtimeName str
 	if err := r.Legacy.RemoveFromWorkersRegistry(runtimeName); err != nil {
 		log.FromContext(ctx).Error(err, "workers-registry remove failed (non-fatal)", "runtimeName", runtimeName)
 	}
+}
+
+// reconcileActiveInterval returns the periodic requeue for a fully converged
+// Active Team: the configured interval (default 5m, see ReconcileInterval)
+// plus positive jitter of 0–10% so concurrent Teams do not wake up in
+// lockstep and hammer Matrix/OSS at the same instant.
+func (r *TeamReconciler) reconcileActiveInterval() time.Duration {
+	base := r.ReconcileInterval
+	if base <= 0 {
+		base = 5 * time.Minute
+	}
+	return base + time.Duration(rand.Int63n(int64(base)/10+1))
 }
 
 // failBackoffFor returns the exponential backoff delay for the given
