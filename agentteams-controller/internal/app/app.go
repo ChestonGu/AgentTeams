@@ -285,7 +285,13 @@ func (a *App) initInfraClients(_ context.Context) error {
 	cfg := a.cfg
 	logger := ctrl.Log.WithName("app")
 
-	a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+	if cfg.UsesSynapse() {
+		a.matrix = matrix.NewSynapseClient(cfg.MatrixConfig(), nil)
+		logger.Info("matrix provider: synapse")
+	} else {
+		a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+		logger.Info("matrix provider: tuwunel")
+	}
 	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
 	a.shell = executor.NewShell(cfg.SkillsDir)
 	a.packages = executor.NewPackageResolver("/tmp/import")
@@ -331,23 +337,34 @@ func (a *App) initInfraClients(_ context.Context) error {
 	// API is unavailable (buckets/users/policies are provisioned externally).
 	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
 	if cfg.UsesExternalOSS() {
-		if a.credProvider == nil {
-			return fmt.Errorf("oss provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
-		}
-		if cfg.OSSConfig().Endpoint == "" {
+		oc := cfg.OSSConfig()
+		if oc.Endpoint == "" {
 			return fmt.Errorf("oss provider requires AGENTTEAMS_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
 		}
-		gatewayID := ""
-		if cfg.UsesAIGateway() {
-			gatewayID = cfg.GWGatewayID
+		switch {
+		case a.credProvider != nil:
+			// Dynamic STS path: per-invocation credentials sourced from
+			// the credential-provider sidecar via a CredentialSource.
+			gatewayID := ""
+			if cfg.UsesAIGateway() {
+				gatewayID = cfg.GWGatewayID
+			}
+			tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
+				SessionName: "agentteams-controller",
+				Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
+			})
+			mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			a.oss = mcClient
+			logger.Info("storage provider: oss (external, dynamic STS credentials)", "bucket", cfg.OSSBucket)
+		case oc.AccessKey != "" && oc.SecretKey != "":
+			// Static credential path: external S3 with a long-lived appkey/secret
+			// (e.g. a company's own S3-compatible service). mc uses the AccessKey/
+			// SecretKey from OSSConfig via a persistent `mc alias set` — no sidecar.
+			a.oss = mcClient
+			logger.Info("storage provider: oss (external, static credentials)", "bucket", cfg.OSSBucket)
+		default:
+			return fmt.Errorf("oss provider requires either AGENTTEAMS_CREDENTIAL_PROVIDER_URL (dynamic STS) or static AGENTTEAMS_FS_ACCESS_KEY/AGENTTEAMS_FS_SECRET_KEY")
 		}
-		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
-			SessionName: "agentteams-controller",
-			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
-		})
-		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
-		a.oss = mcClient
-		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
 	} else {
 		a.oss = mcClient
 		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)

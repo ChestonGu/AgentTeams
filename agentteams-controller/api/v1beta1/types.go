@@ -488,6 +488,15 @@ type TeamStatus struct {
 	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
 	TotalWorkers   int    `json:"totalWorkers,omitempty"`
 	Message        string `json:"message,omitempty"`
+	// ReconcileAttempt is a monotonic counter incremented on each reconcile
+	// pass. Used to correlate log entries across passes and diagnose
+	// workqueue scheduling gaps (e.g., long gaps between attempts indicate
+	// rate-limiter backoff, not slow reconcile internals).
+	ReconcileAttempt int64 `json:"reconcileAttempt,omitempty"`
+	// PhaseTransitionTime records when the current Phase was last entered.
+	// Combined with ReconcileAttempt, this reveals how long the Pending
+	// phase has been active and how many passes it took to converge.
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 	// DisplayNameSyncedGeneration records the Team generation whose
 	// spec.displayName was last applied to the Team room name. Used as the
 	// idempotency guard so ProvisionTeamRooms only renames the room after a

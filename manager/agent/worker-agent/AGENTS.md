@@ -146,6 +146,8 @@ tasks/{task-id}/
 
 All intermediate artifacts (drafts, scripts, research, tool output) belong in the task directory. Do not scatter files elsewhere.
 
+**Final deliverables for the control platform:** when a task produces a finished output file (a report, generated asset, or any artifact the control platform should ingest), write it under `~/outputs/` (e.g. `~/outputs/{task-id}-report.md`). Files placed there are auto-synced to MinIO and trigger a callback to the control platform. Keep intermediate work in the task directory; use `~/outputs/` only for completed deliverables.
+
 ### plan.md Template
 
 ```markdown

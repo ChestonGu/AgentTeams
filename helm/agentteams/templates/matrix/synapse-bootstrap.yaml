@@ -1,0 +1,82 @@
+{{- if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") }}
+{{- /* Bootstrap: create the admin user (register_new_matrix_user) and a
+     registration token matching agentteams_REGISTRATION_TOKEN so the controller's
+     EnsureUser (m.login.registration_token) flow works against Synapse.
+     NOTE: needs validation against a running Synapse — the admin API shape
+     for registration_tokens is Synapse-version sensitive. */ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "agentteams.synapse.fullname" . }}-bootstrap
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "synapse") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - name: config
+          configMap: { name: {{ include "agentteams.synapse.fullname" . }} }
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.matrix.synapse.image.repository }}:{{ .Values.matrix.synapse.image.tag }}"
+          imagePullPolicy: {{ .Values.matrix.synapse.image.pullPolicy }}
+          env:
+            - { name: SYNAPSE_URL,  value: {{ printf "http://%s:%d" (include "agentteams.synapse.clusterFQDN" .) (.Values.matrix.synapse.service.port | int) | quote }} }
+            - { name: ADMIN_USER,   value: {{ .Values.credentials.adminUser | default .Values.matrix.synapse.adminUser | quote }} }
+            - { name: ADMIN_PASS,   value: {{ .Values.credentials.adminPassword | quote }} }
+            - { name: REG_TOKEN,    value: {{ .Values.credentials.registrationToken | quote }} }
+            - { name: SHARED_SECRET, value: {{ .Values.matrix.synapse.registrationSharedSecret | default "change-me-reg-shared-secret" | quote }} }
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "Waiting for Synapse at ${SYNAPSE_URL} ..."
+              python - <<'PY'
+              import os, time, urllib.request
+              url = os.environ["SYNAPSE_URL"] + "/_matrix/client/versions"
+              for _ in range(60):
+                  try:
+                      urllib.request.urlopen(url, timeout=3); break
+                  except Exception as e:
+                      time.sleep(3)
+              else:
+                  raise SystemExit("Synapse not ready")
+              PY
+              # 1) Create / idempotently ensure the admin user.
+              register_new_matrix_user -u "${ADMIN_USER}" -p "${ADMIN_PASS}" -a \
+                  -k "${SHARED_SECRET}" "${SYNAPSE_URL}" || true
+              # 2) Create the registration token the controller registers workers with.
+              python - <<'PY'
+              import os, json, urllib.request
+              base = os.environ["SYNAPSE_URL"]
+              # login as admin to obtain an access token
+              login = json.load(urllib.request.urlopen(urllib.request.Request(
+                  base + "/_matrix/client/v3/login",
+                  data=json.dumps({"type":"m.login.password",
+                                   "identifier":{"type":"m.id.user","user":os.environ["ADMIN_USER"]},
+                                   "password":os.environ["ADMIN_PASS"]}).encode(),
+                  headers={"Content-Type":"application/json"})))
+              tok = login["access_token"]
+              body = json.dumps({"token": os.environ["REG_TOKEN"], "uses_allowed": 0,
+                                 "pending": False}).encode()
+              req = urllib.request.Request(base + "/_synapse/admin/v1/registration_tokens/new",
+                                           data=body, method="POST",
+                                           headers={"Content-Type":"application/json",
+                                                    "Authorization":"Bearer "+tok})
+              try:
+                  urllib.request.urlopen(req, timeout=10); print("registration token created")
+              except urllib.error.HTTPError as e:
+                  # M_UNKNOWN or already-exists: treat as success
+                  print("registration token response:", e.code, e.read()[:200])
+              PY
+              echo "bootstrap done"
+{{- end }}
