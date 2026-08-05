@@ -88,6 +88,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(controller): make Active Team reconcile interval configurable with positive jitter ([462f84d](https://github.com/agentscope-ai/HiClaw/commit/462f84d))
 - fix(controller): build hiclaw-controller image with shared/lib via named build context ([82a75e8](https://github.com/agentscope-ai/HiClaw/commit/82a75e8))
 - feat(controller): add per-step Team reconcile timing logs, configurable max concurrency, and quieter STS INFO logs ([c01aaec](https://github.com/agentscope-ai/HiClaw/commit/c01aaec))
 - fix(controller): unblock Team reconcile — concurrency, failTeam backoff, observedGeneration fast path ([48ce4aa](https://github.com/agentscope-ai/HiClaw/commit/48ce4aa))
