@@ -45,11 +45,10 @@ func (p *Provisioner) RegisterAppServiceUser(ctx context.Context, username strin
 	}, nil
 }
 
-// RegisterLegacyUser performs a single registration_token-based
-// register; on M_USER_IN_USE the underlying client falls through to
-// orphan-recovery (admin reset-password + login). The returned
-// HumanCredentials always carries a Password since legacy auth has no
-// AS bypass.
+// RegisterLegacyUser provisions a password-mode Matrix account via
+// MatrixOps.ProvisionUser. On existing accounts the provider falls through
+// to password reset + login. The returned HumanCredentials always carries a
+// Password since legacy auth has no AS bypass.
 func (p *Provisioner) RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error) {
 	_, uc, err := p.matrixOps.ProvisionUser(ctx, matrix.UserSpec{Username: username})
 	if err != nil {
@@ -144,9 +143,9 @@ func (p *Provisioner) EnsureHumanUser(ctx context.Context, username string) (*Hu
 // LoginAsHuman obtains a fresh access token for an already-provisioned
 // Human without touching their password. This is the steady-state path
 // the reconciler uses once Status.MatrixUserID is non-empty; it must NOT
-// fall back to EnsureUser on failure because EnsureUser's orphan-recovery
-// branch issues "!admin users reset-password", which would silently
-// overwrite any password the user changed via Element.
+// fall back to ProvisionUser on failure because the provider's
+// password-reset fallback would silently overwrite any password the user
+// changed via Element.
 func (p *Provisioner) LoginAsHuman(ctx context.Context, username, password string) (string, error) {
 	if p.MatrixAppServiceEnabled() {
 		return p.LoginAppServiceUser(ctx, username)
@@ -187,18 +186,17 @@ func (p *Provisioner) KickFromRoom(ctx context.Context, roomID, userID, reason s
 // is not possible (e.g. the controller no longer holds a valid user token or
 // the room power levels block the kick). Delegates to MatrixOps.RemoveMember,
 // which tries the admin kick first and falls back to the provider-specific
-// escalation (Tuwunel admin bot `!admin users force-leave-room`, Synapse
-// make_room_admin + kick retry). Fire-and-forget at the bot layer.
+// escalation (Tuwunel admin bot force-leave, Synapse make_room_admin + kick
+// retry).
 func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string) error {
 	log.FromContext(ctx).Info("force-leaving user from room", "room", roomID, "user", userID)
 	return p.matrixOps.RemoveMember(ctx, roomID, userID, "force leave by admin")
 }
 
-// DeactivateHumanUser disables a Matrix account. Routes through
-// MatrixOps.DeactivateUser, which is provider-specific: the Tuwunel admin bot
-// "!admin users deactivate" command or the Synapse admin REST deactivate
-// endpoint. The controller treats a successful admin call as the offboard
-// handoff point.
+// DeactivateHumanUser disables a Matrix account via MatrixOps.DeactivateUser.
+// The provider-specific admin operation (Tuwunel admin bot, Synapse admin
+// REST) is fire-and-forget; the controller treats a successful call as the
+// offboard handoff point.
 func (p *Provisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
 	log.FromContext(ctx).Info("deactivating human matrix user", "user", userID)
 	return p.matrixOps.DeactivateUser(ctx, userID)

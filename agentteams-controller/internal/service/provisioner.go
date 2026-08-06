@@ -278,10 +278,9 @@ func (p *Provisioner) leaveAllRooms(ctx context.Context, credsKey, matrixUsernam
 	})
 }
 
-// deleteRoom dissolves a room on a best-effort, fire-and-forget basis.
-// Tuwunel processes `!admin rooms delete-room` asynchronously, and the
-// `delete_rooms_after_leave`/`forget_forced_upon_leave` homeserver
-// settings act as a fallback if this never lands.
+// deleteRoom dissolves a room on a best-effort, fire-and-forget basis via
+// MatrixOps.DissolveRoom. The provider-specific admin operation (Tuwunel
+// admin bot, Synapse admin REST) runs asynchronously inside the homeserver.
 func (p *Provisioner) deleteRoom(ctx context.Context, roomID string) error {
 	return p.matrixOps.DissolveRoom(ctx, roomID)
 }

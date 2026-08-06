@@ -31,7 +31,7 @@ const welcomeRequeueInterval = 5 * time.Second
 // docker single-container deploys; in k8s / embedded mode the controller
 // owns this responsibility because:
 //
-//   - it has admin Matrix credentials cached in TuwunelClient already;
+//   - it has admin Matrix credentials cached in the MatrixOps layer already;
 //   - it knows when the DM Room was just created (via Status.WelcomeSent);
 //   - it does not need to give every Manager container the admin password
 //     just to send one prompt at boot.

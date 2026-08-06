@@ -29,9 +29,8 @@ import (
 //     credential store, so we avoid the call altogether unless needed.
 //
 // We deliberately never fall back to EnsureHumanUser after the first
-// provisioning: its orphan-recovery branch issues
-// "!admin users reset-password" and would silently overwrite a password
-// the user may have rotated via Element.
+// provisioning: the provider's password-reset fallback would silently
+// overwrite a password the user may have rotated via Element.
 func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope) error {
 	h := s.human
 	username := s.username
