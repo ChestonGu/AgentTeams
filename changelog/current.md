@@ -6,6 +6,22 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **S3 SDK storage driver (default)**: The controller's object-storage layer now defaults to the minio-go S3 SDK (`HICLAW_STORAGE_DRIVER=sdk`), replacing the per-call `mc` subprocess fork with a connection-pooled HTTP client — ~5.8× lower per-member config latency per the `bench_s3` measurements, with static long-lived AK/SK credentials (`HICLAW_FS_ACCESS_KEY`/`HICLAW_FS_SECRET_KEY`) for cloud S3. `HICLAW_STORAGE_DRIVER=mc` restores the legacy driver, and dynamic STS credential sources remain supported on both drivers.
+
+- **Storage stability observability**: New Prometheus metrics expose S3 health and reconcile cost: `hiclaw_storage_op_duration_seconds` (per-op latency histogram, op × driver), `hiclaw_storage_op_errors_total` (op × driver × class: network/timeout/not_found/other), `hiclaw_storage_probe_failures_total`, and `hiclaw_member_reconcile_duration_seconds` (per-member full flow: infra → SA → config → container → expose, kind × result). A rising network/timeout series is the "storage endpoint unstable" alarm that previously showed up only as reconcile stalls.
+
+- **Flaky-storage resilience**: `DeployWorkerConfig` now probes storage reachability first (10s bounded) and aborts fast instead of burning the mc/SDK dial timeout on every subsequent op; the mc driver retries transport-level failures once after 1s; the SDK driver uses a 5s dial timeout with bounded retries (3) instead of the default 10×30s stall.
+
+- **Builtin skill push content-compare**: `pushBuiltinSkills` now pushes per-file, skipping unchanged objects (GET-compare instead of a full `mc mirror --overwrite` re-upload), cutting the per-member skill phase from ~25–35s to a few seconds while still propagating skill updates from new controller images.
+
+- **Active Team no-requeue mode**: `HICLAW_TEAM_ACTIVE_NO_REQUEUE=true` stops the periodic requeue for fully converged Active Teams whose spec is unchanged — they reconcile only on events (pod phase changes, spec edits) instead of on the 5m timer. Default false preserves the existing periodic behavior.
+
+- **On-demand skill push off by default**: The controller-side local skill push (`spec.skills` via `push-worker-skills.sh`) is skipped by default (`HICLAW_LOCAL_SKILL_PUSH=true` re-enables it) — the script reads the Manager's local `workers-registry.json`, which does not exist in the controller container, so the push always failed there. Remote (nacos) skills still push via Go.
+
+**Bug Fixes**
+
+- **Script `log` fallback**: `hiclaw-env.sh` now defines a minimal `log()` when `base.sh` is absent (controller/worker images), so scripts fail on the real error instead of `log: command not found` (exit 127).
+
 - **QwenPaw-first local install flow**: The installer now presents QwenPaw as the default worker runtime, supports keep-all upgrades with enter-to-keep prompts for existing parameters, and improves non-interactive guardrails for scripted installs.
 
 - **Team human coordinators**: Team resources can include human coordinator members, with team-admin-owned Matrix rooms and updated Team Leader / Worker prompts so coordination stays inside the Team Room.
@@ -100,6 +116,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(controller): add minio-go S3 SDK storage driver — HICLAW_STORAGE_DRIVER=sdk default with mc fallback, flaky-storage resilience (probe fast-abort, bounded retries), content-compare builtin skill push ([95dcae1](https://github.com/agentscope-ai/HiClaw/commit/95dcae1))
+- feat(controller): optional no-requeue for converged Active teams — HICLAW_TEAM_ACTIVE_NO_REQUEUE, plus team member reconcile flow metrics ([84a9429](https://github.com/agentscope-ai/HiClaw/commit/84a9429))
+- fix(shared): add log fallback when base.sh is absent — scripts fail on the real error instead of exit 127 ([c895d3a](https://github.com/agentscope-ai/HiClaw/commit/c895d3a))
+- feat(controller): add storage stability and member reconcile metrics — storage op duration/errors (op x driver x class), probe failures, member flow duration ([77ef4b8](https://github.com/agentscope-ai/HiClaw/commit/77ef4b8))
 - feat(controller): add team-scoped reconcile telemetry — ctx logger injection (team/teamUID), timed helper, failure-path elapsed, mc slow-call threshold logs, ProvisionWorker/modifyAIRoutes/ensureImage timing, panic guard ([ce1a531](https://github.com/agentscope-ai/HiClaw/commit/ce1a531))
 - test(bench): add S3 reproduction benchmark under bench/ (mc vs minio-go SDK, real-bucket read-only) ([a12c5b3](https://github.com/agentscope-ai/HiClaw/commit/a12c5b3))
 - feat(controller): add build-time pprof switch — ENABLE_PPROF build arg with -tags pprof, no-op stub in default builds ([6cf6f86](https://github.com/agentscope-ai/HiClaw/commit/6cf6f86))
