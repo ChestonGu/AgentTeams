@@ -154,15 +154,9 @@ type SyncMessagesResult struct {
 // operations (Tuwunel admin-bot "!admin" commands, Synapse admin REST API)
 // live on the concrete wrapper types, NOT here.
 type matrixClient struct {
-	config      Config
-	http        *http.Client
-	adminToken  atomic.Value // cached admin access token (string)
-	adminRoomID atomic.Value // cached admin room ID (string), resolved from #admins:<domain>
-
-	// orphanRetryBaseDelay is the base backoff between Login retries
-	// after issuing an admin reset-password command. Exposed as a field
-	// (not a const) so tests can collapse the delay.
-	orphanRetryBaseDelay time.Duration
+	config     Config
+	http       *http.Client
+	adminToken atomic.Value // cached admin access token (string)
 }
 
 // newMatrixClient creates the shared Matrix CS API client used by both providers.
@@ -171,9 +165,8 @@ func newMatrixClient(cfg Config, httpClient *http.Client) *matrixClient {
 		httpClient = http.DefaultClient
 	}
 	return &matrixClient{
-		config:               cfg,
-		http:                 httpClient,
-		orphanRetryBaseDelay: 500 * time.Millisecond,
+		config: cfg,
+		http:   httpClient,
 	}
 }
 
@@ -1236,6 +1229,16 @@ var txnCounter atomic.Int64
 // (#admins:<domain>) via AdminCommand.
 type TuwunelClient struct {
 	*matrixClient
+
+	// adminRoomID caches the Tuwunel admin bot room ID resolved from
+	// #admins:<domain>. Tuwunel-only: Synapse has no admin bot room.
+	adminRoomID atomic.Value
+
+	// orphanRetryBaseDelay is the base backoff between Login retries
+	// after issuing an admin reset-password command (Tuwunel orphan
+	// recovery). Exposed as a field so tests can collapse the delay.
+	// Tuwunel-only: Synapse EnsureUser has no orphan-recovery loop.
+	orphanRetryBaseDelay time.Duration
 }
 
 // Compile-time assertion that TuwunelClient satisfies the Client interface.
@@ -1243,5 +1246,8 @@ var _ Client = (*TuwunelClient)(nil)
 
 // NewTuwunelClient creates a Matrix client for a Tuwunel homeserver.
 func NewTuwunelClient(cfg Config, httpClient *http.Client) *TuwunelClient {
-	return &TuwunelClient{matrixClient: newMatrixClient(cfg, httpClient)}
+	return &TuwunelClient{
+		matrixClient:         newMatrixClient(cfg, httpClient),
+		orphanRetryBaseDelay: 500 * time.Millisecond,
+	}
 }
