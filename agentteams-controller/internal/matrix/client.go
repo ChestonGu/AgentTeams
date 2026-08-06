@@ -194,7 +194,7 @@ func (c *matrixClient) ensureAdminToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (c *matrixClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
+func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
 		var err error
@@ -424,7 +424,7 @@ func (c *matrixClient) LoginAppServiceUser(ctx context.Context, username string)
 // SetPasswordAsAdmin sets a user's password via the Tuwunel admin bot command.
 // This is used in AppService mode to set initial passwords for Human users
 // so they can still log in via Element with username/password.
-func (c *matrixClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
+func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
 	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
 	return c.AdminCommand(ctx, cmd)
 }
@@ -785,7 +785,7 @@ func (c *matrixClient) SendMessage(ctx context.Context, roomID, token, body stri
 // ensureAdminRoomID resolves the Tuwunel admin room via the well-known
 // alias "#admins:<domain>" and caches the result for the lifetime of the
 // client. Controller restart re-resolves.
-func (c *matrixClient) ensureAdminRoomID(ctx context.Context) (string, error) {
+func (c *TuwunelClient) ensureAdminRoomID(ctx context.Context) (string, error) {
 	if r, ok := c.adminRoomID.Load().(string); ok && r != "" {
 		return r, nil
 	}
@@ -813,7 +813,7 @@ func (c *matrixClient) ensureAdminRoomID(ctx context.Context) (string, error) {
 // Errors from token acquisition and message send are wrapped to identify
 // the failing stage. Used by the controller for system-level prompts that
 // must originate from the admin identity (e.g. Manager onboarding welcome).
-func (c *matrixClient) SendMessageAsAdmin(ctx context.Context, roomID, body string) error {
+func (c *TuwunelClient) SendMessageAsAdmin(ctx context.Context, roomID, body string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("send admin message: %w", err)
@@ -827,7 +827,7 @@ func (c *matrixClient) SendMessageAsAdmin(ctx context.Context, roomID, body stri
 // AdminCommand sends a command message to the Tuwunel admin bot room as
 // the admin user. The bot parses messages starting with "!admin" in the
 // admin room. Processing is asynchronous; this call is fire-and-forget.
-func (c *matrixClient) AdminCommand(ctx context.Context, command string) error {
+func (c *TuwunelClient) AdminCommand(ctx context.Context, command string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("admin command: %w", err)
@@ -1204,30 +1204,36 @@ var txnCounter atomic.Int64
 // ---------------------------------------------------------------------------
 // Provider wrapper types
 //
-// matrixClient (above) holds the shared /_matrix/client/v3/* CS API surface.
+// matrixClient (above) holds ONLY the shared /_matrix/client/v3/* CS API
+// surface — room/membership/messaging/login/query methods plus the neutral
+// AppServiceSmokeTest (both providers support AS login). It is genuinely
+// provider-neutral: zero Tuwunel or Synapse admin concepts live here.
+//
 // Each provider wraps it with its own admin-operation surface:
 //
-//   - TuwunelClient embeds *matrixClient and adds no methods of its own; the
-//     Tuwunel-specific admin methods (AdminCommand, SendMessageAsAdmin,
-//     SetPasswordAsAdmin, EnsureUser, RegisterAppService, UnregisterAppService,
-//     AppServiceSmokeTest) are defined on *matrixClient and reach the Tuwunel
-//     admin bot via AdminCommand. TuwunelMatrixOps embeds *TuwunelClient.
+//   - TuwunelClient embeds *matrixClient and adds the Tuwunel-specific admin
+//     methods directly on *TuwunelClient: AdminCommand (sends "!admin ..."
+//     chat to the #admins:<domain> bot room), SendMessageAsAdmin,
+//     SetPasswordAsAdmin, EnsureUser (registration_token + orphan-recovery
+//     via AdminCommand), RegisterAppService / UnregisterAppService (runtime
+//     admin-bot AS registration). TuwunelMatrixOps embeds *TuwunelClient.
 //
-//   - SynapseClient embeds *matrixClient and overrides AdminCommand (returns
-//     an error — Synapse has no admin bot). Synapse admin operations go through
-//     the Synapse-specific REST helpers (synResetPassword, synDeactivateUser,
-//     synSetDisplayName, MakeRoomAdmin, DeleteRoom, EnsureUser override).
-//     SynapseMatrixOps embeds *matrixClient directly (not *TuwunelClient) plus
-//     a *SynapseClient for the admin REST surface, so it never touches
-//     Tuwunel-only methods.
+//   - SynapseClient embeds *matrixClient and defines a Synapse-native
+//     AdminCommand guard (returns an error — Synapse has no admin bot) plus
+//     Synapse-specific REST helpers (synResetPassword, synDeactivateUser,
+//     synSetDisplayName, MakeRoomAdmin, DeleteRoom, EnsureUser via admin
+//     REST). SynapseMatrixOps embeds *matrixClient directly (not
+//     *TuwunelClient) plus a *SynapseClient for the admin REST surface, so it
+//     never touches Tuwunel-only methods.
 // ---------------------------------------------------------------------------
 
 // TuwunelClient is the Tuwunel (conduwuit) homeserver client. It embeds the
-// provider-neutral matrixClient for the shared CS API surface; the Tuwunel-
-// specific admin methods (AdminCommand "!admin ..." chat-bot commands,
+// provider-neutral *matrixClient for the shared CS API surface. The
+// Tuwunel-specific admin methods (AdminCommand "!admin ..." chat-bot commands,
 // SendMessageAsAdmin, SetPasswordAsAdmin, EnsureUser with registration_token
-// + orphan-recovery, runtime AppService register/unregister) are inherited
-// from matrixClient and reach the Tuwunel admin bot room (#admins:<domain>).
+// + orphan-recovery, runtime AppService register/unregister) are defined
+// directly on *TuwunelClient and reach the Tuwunel admin bot room
+// (#admins:<domain>) via AdminCommand.
 type TuwunelClient struct {
 	*matrixClient
 }

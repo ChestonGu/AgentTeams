@@ -63,7 +63,7 @@ func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 // token was rotated), it unregisters the old registration first to ensure
 // clean state regardless of Tuwunel's overwrite semantics for same-ID
 // registrations.
-func (c *matrixClient) RegisterAppService(ctx context.Context, reg AppServiceRegistration) error {
+func (c *TuwunelClient) RegisterAppService(ctx context.Context, reg AppServiceRegistration) error {
 	// Fast path: current token already works.
 	if err := c.AppServiceSmokeTest(ctx); err == nil {
 		return nil
@@ -98,7 +98,7 @@ func (c *matrixClient) RegisterAppService(ctx context.Context, reg AppServiceReg
 // UnregisterAppService removes the AppService registration from the homeserver.
 // Uses the admin bot command; works regardless of the current as_token validity
 // because admin commands authenticate via admin user login, not as_token.
-func (c *matrixClient) UnregisterAppService(ctx context.Context, id string) error {
+func (c *TuwunelClient) UnregisterAppService(ctx context.Context, id string) error {
 	cmd := fmt.Sprintf("!admin appservices unregister %s", id)
 	return c.AdminCommand(ctx, cmd)
 }

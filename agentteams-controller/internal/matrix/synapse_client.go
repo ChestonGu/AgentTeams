@@ -13,16 +13,14 @@ import (
 // /_matrix/client/v3/* CS API surface. Synapse-specific admin operations go
 // through the REST helpers below (synAdminCall, synResetPassword,
 // synDeactivateUser, synSetDisplayName, MakeRoomAdmin, DeleteRoom) and the
-// EnsureUser override (PUT /_synapse/admin/v2/users/{id}), NOT through any
-// Tuwunel concept.
+// Synapse-native EnsureUser (PUT /_synapse/admin/v2/users/{id}), NOT through
+// any Tuwunel concept.
 //
-// AdminCommand is overridden to return an error: Synapse has no admin bot, and
-// the inherited matrixClient.AdminCommand would otherwise silently deliver a
-// "!admin" message into a Synapse room. The Tuwunel admin-bot methods
-// (AdminCommand, SendMessageAsAdmin, SetPasswordAsAdmin, EnsureUser,
-// RegisterAppService, UnregisterAppService) remain reachable through the
-// embedded matrixClient for backward compatibility with LegacyClientOps, but
-// SynapseMatrixOps never calls them — it uses its own Synapse-specific paths.
+// AdminCommand is explicitly defined to return an error as a regression guard:
+// even though *matrixClient no longer carries AdminCommand (it lives on
+// *TuwunelClient), this guard ensures any future accidental re-addition to
+// matrixClient surfaces immediately on Synapse rather than silently delivering
+// a "!admin" message into a Synapse room.
 type SynapseClient struct {
 	*matrixClient
 }
@@ -37,12 +35,14 @@ func NewSynapseClient(cfg Config, httpClient *http.Client) *SynapseClient {
 
 // AdminCommand is a Tuwunel-only concept (sends a "!admin ..." chat message to
 // the Tuwunel admin bot room). Synapse has no admin bot — it exposes a REST
-// admin API consumed directly by the SynapseMatrixOps layer. Override the
-// inherited TuwunelClient.AdminCommand with an explicit error so a stray call
-// through the embedded pointer cannot silently deliver a "!admin" message into
-// a Synapse room. Callers that need a Synapse admin operation should use the
-// SynapseMatrixOps methods (DissolveRoom, DeactivateUser, ResetUserPassword,
-// …), which call synAdminCall / MakeRoomAdmin / etc. directly.
+// admin API consumed directly by the SynapseMatrixOps layer. This method
+// exists as a regression guard: it returns an explicit error so that if
+// AdminCommand is ever accidentally re-added to *matrixClient, the Synapse
+// path surfaces the problem immediately instead of silently sending a
+// "!admin" message into a Synapse room. Callers that need a Synapse admin
+// operation should use the SynapseMatrixOps methods (DissolveRoom,
+// DeactivateUser, ResetUserPassword, …), which call synAdminCall /
+// MakeRoomAdmin / etc. directly.
 func (s *SynapseClient) AdminCommand(ctx context.Context, command string) error {
 	return fmt.Errorf("synapse: AdminCommand %q not supported — Synapse has no admin bot; use SynapseMatrixOps methods (REST admin API) instead", command)
 }
