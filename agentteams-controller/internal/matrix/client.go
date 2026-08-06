@@ -27,16 +27,16 @@ var ErrAppServiceNotReady = errors.New("matrix appservice token not active yet")
 
 // Client abstracts the provider-agnostic Matrix client-server (CS) API surface
 // plus the user/AppService operations every homeserver implements identically.
-// Both *TuwunelClient and *SynapseClient satisfy it (SynapseClient via the
-// embedded *TuwunelClient, since both homeservers implement the same
-// /_matrix/client/v3/* surface).
+// The provider-neutral *matrixClient satisfies it; *TuwunelClient embeds
+// matrixClient and adds Tuwunel-specific admin-bot methods; *SynapseClient
+// embeds matrixClient and adds Synapse-specific admin REST helpers.
 //
 // Provider-specific admin operations are deliberately NOT here: Tuwunel drives
 // them through a chat-bot "!admin ..." room (AdminCommand), while Synapse
 // exposes a REST admin API (/_synapse/admin/v1/*). Those live on the concrete
-// *TuwunelClient type and the SynapseMatrixOps layer respectively. The
-// business-level MatrixOps abstraction (ops.go) is where callers should depend,
-// not this protocol-level interface.
+// *TuwunelClient / *SynapseClient types and the MatrixOps layer respectively.
+// The business-level MatrixOps abstraction (ops.go) is where callers should
+// depend, not this protocol-level interface.
 type Client interface {
 	// CreateRoom creates a new Matrix room with the given configuration.
 	// When req.RoomAliasName is non-empty the call is idempotent: if a room
@@ -148,8 +148,12 @@ type SyncMessagesResult struct {
 	Events    []MessageEvent
 }
 
-// TuwunelClient implements Client for Tuwunel (conduwuit) homeservers.
-type TuwunelClient struct {
+// matrixClient is the provider-neutral Matrix CS API client. Both TuwunelClient
+// and SynapseClient embed it to reuse the shared /_matrix/client/v3/* surface
+// (room/membership/messaging/login/query methods). Provider-specific admin
+// operations (Tuwunel admin-bot "!admin" commands, Synapse admin REST API)
+// live on the concrete wrapper types, NOT here.
+type matrixClient struct {
 	config      Config
 	http        *http.Client
 	adminToken  atomic.Value // cached admin access token (string)
@@ -161,24 +165,24 @@ type TuwunelClient struct {
 	orphanRetryBaseDelay time.Duration
 }
 
-// NewTuwunelClient creates a Matrix client for a Tuwunel homeserver.
-func NewTuwunelClient(cfg Config, httpClient *http.Client) *TuwunelClient {
+// newMatrixClient creates the shared Matrix CS API client used by both providers.
+func newMatrixClient(cfg Config, httpClient *http.Client) *matrixClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &TuwunelClient{
+	return &matrixClient{
 		config:               cfg,
 		http:                 httpClient,
 		orphanRetryBaseDelay: 500 * time.Millisecond,
 	}
 }
 
-func (c *TuwunelClient) UserID(localpart string) string {
+func (c *matrixClient) UserID(localpart string) string {
 	return fmt.Sprintf("@%s:%s", localpart, c.config.Domain)
 }
 
 // ensureAdminToken obtains and caches an admin access token via Login.
-func (c *TuwunelClient) ensureAdminToken(ctx context.Context) (string, error) {
+func (c *matrixClient) ensureAdminToken(ctx context.Context) (string, error) {
 	if t, ok := c.adminToken.Load().(string); ok && t != "" {
 		return t, nil
 	}
@@ -190,7 +194,7 @@ func (c *TuwunelClient) ensureAdminToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
+func (c *matrixClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
 		var err error
@@ -236,7 +240,7 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 		return nil, fmt.Errorf("register user %s: %s (%s)", req.Username, regResp.ErrCode, regResp.Error)
 	}
 
-	// Registration failed with M_USER_IN_USE — try login
+	// Registration failed with M_USER_IN_USE �?try login
 	token, err := c.Login(ctx, req.Username, password)
 	if err == nil {
 		return &UserCredentials{
@@ -286,7 +290,7 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 		req.Username, lastErr)
 }
 
-func (c *TuwunelClient) Login(ctx context.Context, username, password string) (string, error) {
+func (c *matrixClient) Login(ctx context.Context, username, password string) (string, error) {
 	body := map[string]interface{}{
 		"type": "m.login.password",
 		"identifier": map[string]string{
@@ -316,7 +320,7 @@ func (c *TuwunelClient) Login(ctx context.Context, username, password string) (s
 // EnsureAppServiceUser registers a user via the Matrix Application Service API.
 // It uses the as_token as Bearer authentication instead of a registration token.
 // If the user already exists (M_USER_IN_USE), it falls back to LoginAppServiceUser.
-func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username string) (*UserCredentials, error) {
+func (c *matrixClient) EnsureAppServiceUser(ctx context.Context, username string) (*UserCredentials, error) {
 	regBody := map[string]interface{}{
 		"type":     "m.login.application_service",
 		"username": username,
@@ -348,7 +352,7 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 		}, nil
 	}
 
-	// User already exists → fall back to AS login
+	// User already exists �?fall back to AS login
 	if regResp.ErrCode == "M_USER_IN_USE" {
 		logger.Info("Matrix account already exists; falling back to AppService login", "httpStatus", statusCode)
 		token, loginErr := c.LoginAppServiceUser(ctx, username)
@@ -385,7 +389,7 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 // LoginAppServiceUser obtains an access token for a user via the Application
 // Service login flow. The as_token authenticates the request; no user password
 // is needed.
-func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string) (string, error) {
+func (c *matrixClient) LoginAppServiceUser(ctx context.Context, username string) (string, error) {
 	body := map[string]interface{}{
 		"type": "m.login.application_service",
 		"identifier": map[string]string{
@@ -420,7 +424,7 @@ func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string
 // SetPasswordAsAdmin sets a user's password via the Tuwunel admin bot command.
 // This is used in AppService mode to set initial passwords for Human users
 // so they can still log in via Element with username/password.
-func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
+func (c *matrixClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
 	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
 	return c.AdminCommand(ctx, cmd)
 }
@@ -428,13 +432,13 @@ func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password
 // doJSONWithASToken performs an HTTP request authenticated with the AppService
 // as_token instead of a user access token. Reuses the same JSON plumbing as
 // doJSON but substitutes the Bearer token.
-func (c *TuwunelClient) doJSONWithASToken(ctx context.Context, method, path string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
+func (c *matrixClient) doJSONWithASToken(ctx context.Context, method, path string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
 	return c.doJSON(ctx, method, path, c.config.AppServiceToken, reqBody, respOut)
 }
 
 // VerifyAccessToken checks whether a user access token is still valid
 // by calling GET /_matrix/client/v3/account/whoami.
-func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken string) error {
+func (c *matrixClient) VerifyAccessToken(ctx context.Context, accessToken string) error {
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
 		"/_matrix/client/v3/account/whoami", accessToken, nil, nil)
 	if err != nil {
@@ -445,7 +449,7 @@ func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken strin
 	}
 	return nil
 }
-func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
+func (c *matrixClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
 	path := fmt.Sprintf("/_matrix/client/v3/profile/%s/displayname", url.PathEscape(userID))
 	body := map[string]string{"displayname": displayName}
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodPut, path, accessToken, body, nil)
@@ -458,7 +462,7 @@ func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken,
 	return nil
 }
 
-func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (*RoomInfo, error) {
+func (c *matrixClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (*RoomInfo, error) {
 	token := req.CreatorToken
 	tokenSource := "explicit"
 	if token == "" {
@@ -546,7 +550,7 @@ func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (
 		req.Name, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 }
 
-func (c *TuwunelClient) logCreateRoomFailureDiagnostics(ctx context.Context, req CreateRoomRequest, token, tokenSource string, statusCode int, errCode, errText string, respBody []byte) {
+func (c *matrixClient) logCreateRoomFailureDiagnostics(ctx context.Context, req CreateRoomRequest, token, tokenSource string, statusCode int, errCode, errText string, respBody []byte) {
 	senderUserID := ""
 	senderPowerLevel := 0
 	senderPowerLevelFound := false
@@ -582,7 +586,7 @@ func (c *TuwunelClient) logCreateRoomFailureDiagnostics(ctx context.Context, req
 		"invite", req.Invite)
 }
 
-func (c *TuwunelClient) accessTokenUserID(ctx context.Context, accessToken string) (string, error) {
+func (c *matrixClient) accessTokenUserID(ctx context.Context, accessToken string) (string, error) {
 	var resp struct {
 		UserID string `json:"user_id"`
 	}
@@ -601,7 +605,7 @@ func (c *TuwunelClient) accessTokenUserID(ctx context.Context, accessToken strin
 }
 
 // ResolveRoomAlias implements Client.ResolveRoomAlias.
-func (c *TuwunelClient) ResolveRoomAlias(ctx context.Context, alias string) (string, bool, error) {
+func (c *matrixClient) ResolveRoomAlias(ctx context.Context, alias string) (string, bool, error) {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return "", false, fmt.Errorf("resolve alias %s: %w", alias, err)
@@ -633,7 +637,7 @@ func (c *TuwunelClient) ResolveRoomAlias(ctx context.Context, alias string) (str
 }
 
 // DeleteRoomAlias implements Client.DeleteRoomAlias.
-func (c *TuwunelClient) DeleteRoomAlias(ctx context.Context, alias string) error {
+func (c *matrixClient) DeleteRoomAlias(ctx context.Context, alias string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("delete alias %s: %w", alias, err)
@@ -660,7 +664,7 @@ func (c *TuwunelClient) DeleteRoomAlias(ctx context.Context, alias string) error
 		alias, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 }
 
-func (c *TuwunelClient) SetRoomName(ctx context.Context, roomID, name, userToken string) error {
+func (c *matrixClient) SetRoomName(ctx context.Context, roomID, name, userToken string) error {
 	token := userToken
 	if token == "" {
 		var err error
@@ -683,7 +687,7 @@ func (c *TuwunelClient) SetRoomName(ctx context.Context, roomID, name, userToken
 	return nil
 }
 
-func (c *TuwunelClient) SetRoomState(ctx context.Context, roomID, eventType, stateKey string, content map[string]interface{}, userToken string) error {
+func (c *matrixClient) SetRoomState(ctx context.Context, roomID, eventType, stateKey string, content map[string]interface{}, userToken string) error {
 	token := userToken
 	if token == "" {
 		var err error
@@ -709,7 +713,7 @@ func (c *TuwunelClient) SetRoomState(ctx context.Context, roomID, eventType, sta
 	return nil
 }
 
-func (c *TuwunelClient) JoinRoom(ctx context.Context, roomID, userToken string) error {
+func (c *matrixClient) JoinRoom(ctx context.Context, roomID, userToken string) error {
 	encodedRoom := encodeRoomID(roomID)
 
 	var resp struct {
@@ -736,7 +740,7 @@ func (c *TuwunelClient) JoinRoom(ctx context.Context, roomID, userToken string) 
 		roomID, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 }
 
-func (c *TuwunelClient) LeaveRoom(ctx context.Context, roomID, userToken string) error {
+func (c *matrixClient) LeaveRoom(ctx context.Context, roomID, userToken string) error {
 	token := userToken
 	if token == "" {
 		var err error
@@ -758,7 +762,7 @@ func (c *TuwunelClient) LeaveRoom(ctx context.Context, roomID, userToken string)
 	return nil
 }
 
-func (c *TuwunelClient) SendMessage(ctx context.Context, roomID, token, body string) error {
+func (c *matrixClient) SendMessage(ctx context.Context, roomID, token, body string) error {
 	encodedRoom := encodeRoomID(roomID)
 	txnID := fmt.Sprintf("hc-%d", txnCounter.Add(1))
 	msg := map[string]string{
@@ -781,7 +785,7 @@ func (c *TuwunelClient) SendMessage(ctx context.Context, roomID, token, body str
 // ensureAdminRoomID resolves the Tuwunel admin room via the well-known
 // alias "#admins:<domain>" and caches the result for the lifetime of the
 // client. Controller restart re-resolves.
-func (c *TuwunelClient) ensureAdminRoomID(ctx context.Context) (string, error) {
+func (c *matrixClient) ensureAdminRoomID(ctx context.Context) (string, error) {
 	if r, ok := c.adminRoomID.Load().(string); ok && r != "" {
 		return r, nil
 	}
@@ -809,7 +813,7 @@ func (c *TuwunelClient) ensureAdminRoomID(ctx context.Context) (string, error) {
 // Errors from token acquisition and message send are wrapped to identify
 // the failing stage. Used by the controller for system-level prompts that
 // must originate from the admin identity (e.g. Manager onboarding welcome).
-func (c *TuwunelClient) SendMessageAsAdmin(ctx context.Context, roomID, body string) error {
+func (c *matrixClient) SendMessageAsAdmin(ctx context.Context, roomID, body string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("send admin message: %w", err)
@@ -823,7 +827,7 @@ func (c *TuwunelClient) SendMessageAsAdmin(ctx context.Context, roomID, body str
 // AdminCommand sends a command message to the Tuwunel admin bot room as
 // the admin user. The bot parses messages starting with "!admin" in the
 // admin room. Processing is asynchronous; this call is fire-and-forget.
-func (c *TuwunelClient) AdminCommand(ctx context.Context, command string) error {
+func (c *matrixClient) AdminCommand(ctx context.Context, command string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("admin command: %w", err)
@@ -838,7 +842,7 @@ func (c *TuwunelClient) AdminCommand(ctx context.Context, command string) error 
 	return nil
 }
 
-func (c *TuwunelClient) ListRoomMembers(ctx context.Context, roomID string) ([]RoomMember, error) {
+func (c *matrixClient) ListRoomMembers(ctx context.Context, roomID string) ([]RoomMember, error) {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list members %s: %w", roomID, err)
@@ -846,7 +850,7 @@ func (c *TuwunelClient) ListRoomMembers(ctx context.Context, roomID string) ([]R
 	return c.ListRoomMembersWithToken(ctx, roomID, token)
 }
 
-func (c *TuwunelClient) ListRoomMembersWithToken(ctx context.Context, roomID, userToken string) ([]RoomMember, error) {
+func (c *matrixClient) ListRoomMembersWithToken(ctx context.Context, roomID, userToken string) ([]RoomMember, error) {
 	if userToken == "" {
 		return nil, fmt.Errorf("list members %s: empty user token", roomID)
 	}
@@ -890,7 +894,7 @@ func (c *TuwunelClient) ListRoomMembersWithToken(ctx context.Context, roomID, us
 	return members, nil
 }
 
-func (c *TuwunelClient) InviteToRoom(ctx context.Context, roomID, userID string) error {
+func (c *matrixClient) InviteToRoom(ctx context.Context, roomID, userID string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("invite %s to %s: %w", userID, roomID, err)
@@ -898,7 +902,7 @@ func (c *TuwunelClient) InviteToRoom(ctx context.Context, roomID, userID string)
 	return c.InviteToRoomWithToken(ctx, roomID, userID, token)
 }
 
-func (c *TuwunelClient) InviteToRoomWithToken(ctx context.Context, roomID, userID, inviterToken string) error {
+func (c *matrixClient) InviteToRoomWithToken(ctx context.Context, roomID, userID, inviterToken string) error {
 	if inviterToken == "" {
 		return fmt.Errorf("invite %s to %s: empty inviter token", userID, roomID)
 	}
@@ -929,7 +933,7 @@ func (c *TuwunelClient) InviteToRoomWithToken(ctx context.Context, roomID, userI
 		userID, roomID, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 }
 
-func (c *TuwunelClient) KickFromRoom(ctx context.Context, roomID, userID, reason string) error {
+func (c *matrixClient) KickFromRoom(ctx context.Context, roomID, userID, reason string) error {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return fmt.Errorf("kick %s from %s: %w", userID, roomID, err)
@@ -937,7 +941,7 @@ func (c *TuwunelClient) KickFromRoom(ctx context.Context, roomID, userID, reason
 	return c.KickFromRoomWithToken(ctx, roomID, userID, reason, token)
 }
 
-func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userID, reason, kickerToken string) error {
+func (c *matrixClient) KickFromRoomWithToken(ctx context.Context, roomID, userID, reason, kickerToken string) error {
 	if kickerToken == "" {
 		return fmt.Errorf("kick %s from %s: empty kicker token", userID, roomID)
 	}
@@ -974,9 +978,9 @@ func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userI
 		//     (synapse/handlers/room_member.py:1022, 1039)
 		//   - Tuwunel:       "User @x:d is not in the room."
 		// Deliberately NOT matched (these are real errors, not idempotency):
-		//   - "@sender:d not in room !r:d."  — sender not joined
+		//   - "@sender:d not in room !r:d."  �?sender not joined
 		//     (synapse/event_auth.py:687)
-		//   - "You cannot kick user @x:d."   — insufficient power
+		//   - "You cannot kick user @x:d."   �?insufficient power
 		//     (synapse/event_auth.py:717)
 		if strings.Contains(lower, "target user is not in") ||
 			strings.Contains(lower, "is not in the room") ||
@@ -990,7 +994,7 @@ func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userI
 
 // ListJoinedRooms returns the room IDs joined by the user identified by
 // the given access token.
-func (c *TuwunelClient) ListJoinedRooms(ctx context.Context, userToken string) ([]string, error) {
+func (c *matrixClient) ListJoinedRooms(ctx context.Context, userToken string) ([]string, error) {
 	var resp struct {
 		JoinedRooms []string `json:"joined_rooms"`
 	}
@@ -1005,7 +1009,7 @@ func (c *TuwunelClient) ListJoinedRooms(ctx context.Context, userToken string) (
 	return resp.JoinedRooms, nil
 }
 
-func (c *TuwunelClient) SyncMessages(ctx context.Context, since string, timeout time.Duration) (*SyncMessagesResult, error) {
+func (c *matrixClient) SyncMessages(ctx context.Context, since string, timeout time.Duration) (*SyncMessagesResult, error) {
 	token, err := c.ensureAdminToken(ctx)
 	if err != nil {
 		return nil, err
@@ -1065,7 +1069,7 @@ func (c *TuwunelClient) SyncMessages(ctx context.Context, since string, timeout 
 // If respOut is nil, the response body is not decoded (but still read and returned).
 // The raw body is always returned (possibly nil) so callers can include it in
 // diagnostic error messages even when respOut is set.
-func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
+func (c *matrixClient) doJSON(ctx context.Context, method, path, token string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
 	operation := matrixOperation(method, path)
 	start := time.Now()
 	statusCode := 0
@@ -1196,3 +1200,42 @@ func truncate(b []byte, max int) string {
 
 // txnCounter provides unique transaction IDs for Matrix event sends.
 var txnCounter atomic.Int64
+
+// ---------------------------------------------------------------------------
+// Provider wrapper types
+//
+// matrixClient (above) holds the shared /_matrix/client/v3/* CS API surface.
+// Each provider wraps it with its own admin-operation surface:
+//
+//   - TuwunelClient embeds *matrixClient and adds no methods of its own; the
+//     Tuwunel-specific admin methods (AdminCommand, SendMessageAsAdmin,
+//     SetPasswordAsAdmin, EnsureUser, RegisterAppService, UnregisterAppService,
+//     AppServiceSmokeTest) are defined on *matrixClient and reach the Tuwunel
+//     admin bot via AdminCommand. TuwunelMatrixOps embeds *TuwunelClient.
+//
+//   - SynapseClient embeds *matrixClient and overrides AdminCommand (returns
+//     an error — Synapse has no admin bot). Synapse admin operations go through
+//     the Synapse-specific REST helpers (synResetPassword, synDeactivateUser,
+//     synSetDisplayName, MakeRoomAdmin, DeleteRoom, EnsureUser override).
+//     SynapseMatrixOps embeds *matrixClient directly (not *TuwunelClient) plus
+//     a *SynapseClient for the admin REST surface, so it never touches
+//     Tuwunel-only methods.
+// ---------------------------------------------------------------------------
+
+// TuwunelClient is the Tuwunel (conduwuit) homeserver client. It embeds the
+// provider-neutral matrixClient for the shared CS API surface; the Tuwunel-
+// specific admin methods (AdminCommand "!admin ..." chat-bot commands,
+// SendMessageAsAdmin, SetPasswordAsAdmin, EnsureUser with registration_token
+// + orphan-recovery, runtime AppService register/unregister) are inherited
+// from matrixClient and reach the Tuwunel admin bot room (#admins:<domain>).
+type TuwunelClient struct {
+	*matrixClient
+}
+
+// Compile-time assertion that TuwunelClient satisfies the Client interface.
+var _ Client = (*TuwunelClient)(nil)
+
+// NewTuwunelClient creates a Matrix client for a Tuwunel homeserver.
+func NewTuwunelClient(cfg Config, httpClient *http.Client) *TuwunelClient {
+	return &TuwunelClient{matrixClient: newMatrixClient(cfg, httpClient)}
+}

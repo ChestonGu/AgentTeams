@@ -9,25 +9,22 @@ import (
 
 // SynapseClient implements Client for Synapse homeservers.
 //
-// It reuses TuwunelClient's Matrix client-server API methods verbatim —
-// both homeservers implement the same /_matrix/client/v3/* surface, so the
-// standard CS methods (Login, CreateRoom, JoinRoom, SendMessage, …) need no
-// change. EnsureUser is overridden so user provisioning goes through the
-// Synapse admin REST API (PUT /_synapse/admin/v2/users/{id}) instead of
-// Tuwunel's registration_token flow, which Synapse 1.127 rejects as a
-// single-step UI auth submission.
+// It embeds the provider-neutral *matrixClient to reuse the shared
+// /_matrix/client/v3/* CS API surface. Synapse-specific admin operations go
+// through the REST helpers below (synAdminCall, synResetPassword,
+// synDeactivateUser, synSetDisplayName, MakeRoomAdmin, DeleteRoom) and the
+// EnsureUser override (PUT /_synapse/admin/v2/users/{id}), NOT through any
+// Tuwunel concept.
 //
-// Admin operations that Tuwunel drives through its "!admin ..." chat bot
-// (AdminCommand, SetPasswordAsAdmin, runtime AppService register/unregister)
-// are NOT supported here: Synapse has no equivalent chat bot. Those operations
-// live on the concrete *TuwunelClient type and are surfaced at the business
-// layer through SynapseMatrixOps (which calls the Synapse admin REST helpers
-// below directly). AdminCommand is explicitly overridden to return an error
-// so the inherited TuwunelClient.AdminCommand (which would silently send a
-// "!admin" message into a Synapse room) can never leak through the embedded
-// pointer.
+// AdminCommand is overridden to return an error: Synapse has no admin bot, and
+// the inherited matrixClient.AdminCommand would otherwise silently deliver a
+// "!admin" message into a Synapse room. The Tuwunel admin-bot methods
+// (AdminCommand, SendMessageAsAdmin, SetPasswordAsAdmin, EnsureUser,
+// RegisterAppService, UnregisterAppService) remain reachable through the
+// embedded matrixClient for backward compatibility with LegacyClientOps, but
+// SynapseMatrixOps never calls them — it uses its own Synapse-specific paths.
 type SynapseClient struct {
-	*TuwunelClient
+	*matrixClient
 }
 
 // Compile-time assertion that SynapseClient satisfies the Client interface.
@@ -35,7 +32,7 @@ var _ Client = (*SynapseClient)(nil)
 
 // NewSynapseClient creates a Matrix client for a Synapse homeserver.
 func NewSynapseClient(cfg Config, httpClient *http.Client) *SynapseClient {
-	return &SynapseClient{TuwunelClient: NewTuwunelClient(cfg, httpClient)}
+	return &SynapseClient{matrixClient: newMatrixClient(cfg, httpClient)}
 }
 
 // AdminCommand is a Tuwunel-only concept (sends a "!admin ..." chat message to
