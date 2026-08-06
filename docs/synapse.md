@@ -1,6 +1,6 @@
 # Synapse Matrix Support
 
-AgentTeams ships with a default embedded Matrix homeserver called **Tuwunel** (a conduwuit fork). Starting with the Synapse support work, the controller can also run against an external **[Synapse](https://github.com/element-hq/synapse) 1.127+** homeserver. Both providers are wired behind the same business-level `MatrixOps` abstraction, so the controller's orchestration logic, the Manager Agent, and every Worker behave identically regardless of which homeserver stores the rooms and accounts.
+AgentTeams ships with two Matrix homeserver options: **[Synapse](https://github.com/element-hq/synapse) 1.127+** (the default for Helm installs as of this work) and **Tuwunel** (a conduwuit fork, used by the embedded all-in-one installer and by older releases). Both providers are wired behind the same business-level `MatrixOps` abstraction, so the controller's orchestration logic, the Manager Agent, and every Worker behave identically regardless of which homeserver stores the rooms and accounts.
 
 This guide covers the four things operators actually need to know:
 
@@ -15,30 +15,43 @@ For the internal design rationale (why the abstraction looks the way it does, th
 
 | Provider | When to pick it |
 |----------|-----------------|
-| `tuwunel` (default) | Fresh install, embedded homeserver, no existing Matrix deployment. The fastest path; the installer brings Tuwunel up for you and the controller manages everything at runtime. |
-| `synapse` | You already operate a Synapse cluster, you need Synapse-grade federation / moderation / audit tooling, or your compliance team mandates Synapse. AgentTeams provisions rooms and accounts against your existing homeserver. |
+| `synapse` (default for Helm) | Production / Kubernetes installs. The Helm chart deploys Synapse + Postgres as StatefulSets and renders the AppService registration declaratively. Pick this when you need Synapse-grade federation, moderation, audit tooling, or when your compliance team mandates Synapse. |
+| `tuwunel` | The embedded all-in-one install (single machine / Docker Compose). Lighter weight than Synapse; the installer brings it up and the controller registers the AppService at runtime. Pick this for local dev or single-node deployments where the full Synapse+Postgres stack is overkill. |
 
 Both providers implement the full `MatrixOps` surface (33 methods across room lifecycle, room membership, room metadata and messaging, queries, user identity, and AppService governance). The cross-implementation equivalence suite in `agentteams-controller/internal/matrix/ops_exhaustive_test.go` pins behavior parity for every method.
 
 ## Switching the provider
 
-The provider is selected by the `AGENTTEAMS_MATRIX_PROVIDER` environment variable, which the Helm chart sets from `matrix.provider`. Valid values are `tuwunel` (the default when the variable is empty or unset) and `synapse`. The provider name is compared case-insensitively after trimming whitespace; any other value fails fast at controller startup.
+The provider is selected by the `AGENTTEAMS_MATRIX_PROVIDER` environment variable, which the Helm chart sets from `matrix.provider` (default `synapse`). Valid values are `synapse` (default when the variable is empty or unset inside the container) and `tuwunel`. The provider name is compared case-insensitively after trimming whitespace; any other value fails fast at controller startup.
+
+The default Helm install brings up Synapse + Postgres. `matrix.provider=synapse` is the chart default, so a plain install already lands on Synapse:
 
 ```bash
 helm install agentteams higress.io/agentteams \
   -n agentteams-system --create-namespace \
   --set credentials.llmApiKey=<key> \
   --set credentials.adminPassword=<admin-password> \
-  --set gateway.publicURL=http://localhost:18080 \
-  --set matrix.provider=synapse
+  --set gateway.publicURL=http://localhost:18080
 ```
 
-Switching an existing release is a `helm upgrade` — the controller restarts and rebinds to the new homeserver:
+> **Override the AppService tokens in production.** The chart ships `change-me-as-token` / `change-me-hs-token` defaults so a first install works out of the box (Helm cannot sync auto-generated tokens across the two Secrets the declarative model needs). Override both before any real deployment:
+>
+> ```bash
+> helm install agentteams higress.io/agentteams \
+>   -n agentteams-system --create-namespace \
+>   --set credentials.llmApiKey=<key> \
+>   --set credentials.adminPassword=<admin-password> \
+>   --set gateway.publicURL=http://localhost:18080 \
+>   --set matrix.appservice.asToken=$(openssl rand -hex 32) \
+>   --set matrix.appservice.hsToken=$(openssl rand -hex 32)
+> ```
+
+Switching an existing release to Tuwunel (or back) is a `helm upgrade` — the controller restarts and rebinds to the new homeserver:
 
 ```bash
 helm upgrade agentteams higress.io/agentteams \
   -n agentteams-system --reuse-values \
-  --set matrix.provider=synapse
+  --set matrix.provider=tuwunel
 ```
 
 > **Heads-up on switching.** Tuwunel and Synapse are separate databases. Rooms and accounts created under one homeserver do not migrate automatically; switching the provider points the controller at a fresh homeserver. Plan a maintenance window and re-provision Workers/Teams after the switch.
