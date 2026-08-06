@@ -43,9 +43,9 @@
 | `maxFailBackoff` | `10min` | team_controller.go |
 | 失败退避表 | 30s → 1m → 2m → 4m → 8m（封顶 10m） | `failBackoffFor` |
 | 重试武装注解 | `hiclaw.io/retry`（Team 与 Human 共用） | Reconcile 入口守卫 |
-| SDK 驱动 dial 超时 / 重试 | 5s / 3 次 | minio_sdk.go（`sdkDialTimeout` / `sdkMaxRetries`） |
-| mc 驱动网络错误重试 | 1 次，间隔 1s | minio.go（`mcRetryBackoff`） |
-| 存储可达性探测 | 10s 上限，config 阶段前置 | deployer.go（`storageProbeTimeout` / `probeStorage`） |
+| SDK 驱动 dial 超时 / 重试 | 2s / 30s 总窗口（退避 0.5s→5s 封顶） | minio_sdk.go（`sdkDialTimeout` / `storageRetryWindow`） |
+| mc 驱动网络错误重试 | 30s 总窗口（与 SDK 共享 `retryStorageOp`） | minio.go（`runMC`） |
+| 存储可达性探测 | 30s 上限（与重试窗口一致），config 阶段前置 | deployer.go（`storageProbeTimeout` / `probeStorage`） |
 | mc 慢调用日志阈值 | 300ms | minio.go（`mcSlowCallThreshold`） |
 
 ---
