@@ -239,16 +239,20 @@ var _ MatrixOps = (*SynapseMatrixOps)(nil)
 // legacyClient is the protocol-level surface the LegacyClientOps bridge needs:
 // the provider-agnostic Client interface PLUS the Tuwunel-only admin methods
 // (AdminCommand / SetPasswordAsAdmin / RegisterAppService / UnregisterAppService)
-// that were removed from Client because they have no Synapse equivalent. The
-// bridge drives them with Tuwunel semantics, so it holds this composite
-// interface rather than the slimmed Client. *TuwunelClient satisfies it; the
-// fakeTeamMatrix test double satisfies it by implementing every method.
+// and the user-provisioning methods (EnsureUser / SendMessageAsAdmin) that were
+// removed from Client because their default implementations are tightly coupled
+// to Tuwunel specifics (registration_token flow, admin-bot orphan recovery,
+// cached admin token). Both *TuwunelClient and *SynapseClient implement these
+// on the concrete type; the test fake (fakeTeamMatrix) satisfies the composite
+// interface by implementing every method.
 type legacyClient interface {
 	Client
 	AdminCommand(ctx context.Context, command string) error
 	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
 	RegisterAppService(ctx context.Context, reg AppServiceRegistration) error
 	UnregisterAppService(ctx context.Context, id string) error
+	EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error)
+	SendMessageAsAdmin(ctx context.Context, roomID, body string) error
 }
 
 // LegacyClientOps adapts a protocol-level matrix client into the MatrixOps

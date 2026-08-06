@@ -38,10 +38,6 @@ var ErrAppServiceNotReady = errors.New("matrix appservice token not active yet")
 // business-level MatrixOps abstraction (ops.go) is where callers should depend,
 // not this protocol-level interface.
 type Client interface {
-	// EnsureUser registers a user or logs in if the account already exists.
-	// Returns credentials regardless of whether the user was newly created.
-	EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error)
-
 	// CreateRoom creates a new Matrix room with the given configuration.
 	// When req.RoomAliasName is non-empty the call is idempotent: if a room
 	// with that alias already exists on the homeserver, the existing RoomID
@@ -78,14 +74,6 @@ type Client interface {
 
 	// SendMessage sends a plain-text message to a room.
 	SendMessage(ctx context.Context, roomID, token, body string) error
-
-	// SendMessageAsAdmin sends a plain-text message to a room using the
-	// homeserver-admin user identity. Used by the controller to inject
-	// system-level prompts (e.g. the first-boot Manager onboarding
-	// welcome) into rooms where it does not own the recipient's token.
-	// Mirrors the AdminCommand pattern: ensures the admin token is
-	// cached, then delegates to SendMessage.
-	SendMessageAsAdmin(ctx context.Context, roomID, body string) error
 
 	// Login obtains an access token for an existing user.
 	Login(ctx context.Context, username, password string) (string, error)
