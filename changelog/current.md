@@ -46,6 +46,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **S3 benchmark harness**: New `bench/` module with `bench_s3.go` — a read-only reproduction benchmark over the real scenario bucket (mc subprocess vs minio-go SDK drivers, config-phase op mix 12 GET + 3 PUT + 2 STAT + 1 LIST, per-op latency percentiles + per-round wall-clock; write space isolated under `bench-probe/` and auto-cleaned).
 
+- **Debug pprof build switch**: The controller image build accepts `ENABLE_PPROF=true` (`--build-arg`), compiling `cmd/controller` with `-tags pprof` to expose `/debug/pprof` on port 6060 (`HICLAW_PPROF_ADDR` overridable) with block/mutex sampling enabled. Default builds compile a no-op stub — no pprof code, no extra listener, zero debug surface in release images.
+
 - **Human reconcile backoff and parity**: `HumanStatus` gains `observedGeneration` (parity with Worker/Team/Manager) plus `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`. Infra failures now use exponential backoff (30s → 10min cap) and stop requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation, replacing the previous double-requeue (`RequeueAfter` + rate-limiter error) pattern.
 
 ---
@@ -92,12 +94,15 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **S3 基准复现工具**: 新增 `bench/` module，含 `bench_s3.go` —— 复用真实场景桶的只读复现基准（mc 子进程 vs minio-go SDK 双驱动，对齐 config 阶段操作配比 12 GET + 3 PUT + 2 STAT + 1 LIST，输出各操作延迟分位数与单成员轮次墙钟耗时；写空间隔离在 `bench-probe/` 前缀下并自动清理）。
 
+- **pprof 调试构建开关**: 控制器镜像构建支持 `ENABLE_PPROF=true`（`--build-arg`），以 `-tags pprof` 编译 `cmd/controller`，暴露 6060 端口 `/debug/pprof`（可用 `HICLAW_PPROF_ADDR` 覆盖）并开启 block/mutex 采样。默认构建编译 no-op stub——不含 pprof 代码、不开额外端口，发布镜像零调试面。
+
 - **Human 调谐退避与字段对齐**: `HumanStatus` 新增 `observedGeneration`（与 Worker/Team/Manager 对齐）以及 `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`。Infra 失败改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；修复了原先 `RequeueAfter` + error 的双重 requeue 模式。
 
 ---
 
 - feat(controller): add team-scoped reconcile telemetry — ctx logger injection (team/teamUID), timed helper, failure-path elapsed, mc slow-call threshold logs, ProvisionWorker/modifyAIRoutes/ensureImage timing, panic guard ([ce1a531](https://github.com/agentscope-ai/HiClaw/commit/ce1a531))
 - test(bench): add S3 reproduction benchmark under bench/ (mc vs minio-go SDK, real-bucket read-only) ([a12c5b3](https://github.com/agentscope-ai/HiClaw/commit/a12c5b3))
+- feat(controller): add build-time pprof switch — ENABLE_PPROF build arg with -tags pprof, no-op stub in default builds ([6cf6f86](https://github.com/agentscope-ai/HiClaw/commit/6cf6f86))
 - feat(controller): make Active Team reconcile interval configurable with positive jitter ([462f84d](https://github.com/agentscope-ai/HiClaw/commit/462f84d))
 - fix(controller): build hiclaw-controller image with shared/lib via named build context ([82a75e8](https://github.com/agentscope-ai/HiClaw/commit/82a75e8))
 - feat(controller): add per-step Team reconcile timing logs, configurable max concurrency, and quieter STS INFO logs ([c01aaec](https://github.com/agentscope-ai/HiClaw/commit/c01aaec))
