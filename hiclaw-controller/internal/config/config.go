@@ -158,6 +158,11 @@ type Config struct {
 	// 1 (default) preserves legacy serial behavior; raise it to unblock the
 	// workqueue when one Team hangs.
 	TeamMaxConcurrentReconciles int // HICLAW_TEAM_MAX_CONCURRENT_RECONCILES; 1 = serial
+	// TeamActiveNoRequeue stops re-enqueueing a fully converged Active Team
+	// whose spec is unchanged; the Team then reconciles only on events
+	// (pod phase changes, spec edits) instead of on a periodic timer.
+	// Default false keeps the periodic requeue (see TeamReconcileIntervalSeconds).
+	TeamActiveNoRequeue bool // HICLAW_TEAM_ACTIVE_NO_REQUEUE; true = no periodic requeue
 
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
@@ -345,6 +350,7 @@ func LoadConfig() *Config {
 		TeamReconcileTimeoutSeconds:  envOrDefaultInt("HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
 		TeamReconcileIntervalSeconds: envOrDefaultInt("HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS", 300),
 		TeamMaxConcurrentReconciles:  envOrDefaultInt("HICLAW_TEAM_MAX_CONCURRENT_RECONCILES", 1),
+		TeamActiveNoRequeue:          envBool("HICLAW_TEAM_ACTIVE_NO_REQUEUE"),
 		ElementWebURL:                os.Getenv("HICLAW_ELEMENT_WEB_URL"),
 
 		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),

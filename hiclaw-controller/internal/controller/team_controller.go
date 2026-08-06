@@ -96,6 +96,13 @@ type TeamReconciler struct {
 	// Sourced from HICLAW_TEAM_MAX_CONCURRENT_RECONCILES.
 	MaxConcurrentReconciles int
 
+	// ActiveNoRequeue, when true, returns no requeue after a fully converged
+	// Active Team whose spec is unchanged (both the fast path and the full
+	// pass tail). The Team then reconciles only on events (pod phase changes,
+	// spec edits) instead of on the periodic timer. Sourced from
+	// HICLAW_TEAM_ACTIVE_NO_REQUEUE.
+	ActiveNoRequeue bool
+
 	// ControllerName, when non-empty, is merged as hiclaw.io/controller
 	// into the PodLabels of every team member MemberContext this reconciler
 	// builds, so the resulting Pods match the owning controller instance's
@@ -299,6 +306,9 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 				"readyWorkers", readyWorkers,
 				"totalWorkers", t.Status.TotalWorkers,
 				"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
+			if r.ActiveNoRequeue {
+				return reconcile.Result{}, nil
+			}
 			return reconcile.Result{RequeueAfter: r.reconcileActiveInterval()}, nil
 		}
 		// A member is not ready — fall through to the full pass to recover it.
@@ -592,7 +602,11 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 
 	requeue := reconcileInterval
 	if t.Status.Phase == "Active" && t.Generation == t.Status.ObservedGeneration {
-		requeue = r.reconcileActiveInterval()
+		if r.ActiveNoRequeue {
+			requeue = 0
+		} else {
+			requeue = r.reconcileActiveInterval()
+		}
 	}
 	if len(perMemberErrors) > 0 {
 		requeue = reconcileRetryDelay
@@ -617,8 +631,16 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 // ms.Observed is flipped to true the instant ReconcileMemberInfra succeeds —
 // see the Step 4 comment in reconcileTeamNormal for why post-infra failures
 // must not revoke observed status (token-rotation hazard).
-func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m MemberContext, ms *v1beta1.TeamMemberStatus) error {
+func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m MemberContext, ms *v1beta1.TeamMemberStatus) (err error) {
 	logger := log.FromContext(ctx)
+	start := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.MemberReconcileDuration.WithLabelValues("team", result).Observe(time.Since(start).Seconds())
+	}()
 	state := &MemberState{}
 
 	// Pre-populate ExistingMatrixUserID when we've already provisioned the
