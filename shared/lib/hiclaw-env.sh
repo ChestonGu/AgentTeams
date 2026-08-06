@@ -20,6 +20,13 @@
 # Worker images don't ship base.sh; the silent fallback is intentional.
 source /opt/hiclaw/scripts/lib/base.sh 2>/dev/null || true
 
+# Images without base.sh (controller, worker) still run scripts that call
+# log(); define a minimal fallback so they fail on the real error instead of
+# "log: command not found" (exit 127).
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[hiclaw $(date '+%H:%M:%S')] $*"; }
+fi
+
 # ── Runtime detection ─────────────────────────────────────────────────────────
 # HICLAW_RUNTIME is normally pre-set by the deployment (Helm sets "k8s",
 # Dockerfile.aliyun sets "aliyun", local scripts leave it unset).
