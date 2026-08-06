@@ -134,11 +134,40 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	}
 
 	logger := log.FromContext(ctx)
+	// Team-scoped logger: propagated through ctx so every downstream
+	// log.FromContext(ctx) call (deployer, oss, backend, gateway) is tagged
+	// with the Team identity without per-call parameters. A single
+	// `grep "team=<name>"` then covers the whole reconcile span, including
+	// the slow mc calls logged by the oss layer.
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"team", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
+
+	// Panic guard: without this a panic in any phase escapes to
+	// controller-runtime's generic "Observed a panic" handler, losing the
+	// team context. Recover here, log with the team-scoped logger, and return
+	// the panic as an error so the workqueue rate-limiter requeues the Team
+	// and metrics.Observe (registered above) records the failure.
+	defer func() {
+		if p := recover(); p != nil {
+			logger.Error(nil, "reconcile panic", "panic", p)
+			reterr = fmt.Errorf("reconcile panic: %v", p)
+		}
+	}()
 
 	var team v1beta1.Team
 	if err := r.Get(ctx, req.NamespacedName, &team); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
+
+	// teamUID is only known after Get; layer it onto the ctx logger so every
+	// downstream log.FromContext call (including the oss slow-call telemetry)
+	// carries the unique Team identity — name alone is ambiguous across a
+	// delete/recreate of the same-named CR.
+	ctx = log.IntoContext(ctx, log.FromContext(ctx).WithValues(
+		"teamUID", string(team.UID),
+	))
 
 	// Team exhausted its automatic retry budget: stop requeuing until an
 	// operator re-arms retries with the hiclaw.io/retry annotation. Placed
@@ -549,8 +578,14 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 			"message", t.Status.Message)
 	}
 
+	patchStart := time.Now()
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
-		logger.Error(err, "failed to patch team status (non-fatal)")
+		logger.Error(err, "failed to patch team status (non-fatal)",
+			"elapsed", time.Since(patchStart).Truncate(time.Millisecond).String())
+	} else {
+		logger.Info("team status patched",
+			"team", t.Name, "uid", t.UID,
+			"elapsed", time.Since(patchStart).Truncate(time.Millisecond).String())
 	}
 	logger.Info("team reconcile: step 6 readiness + status",
 		"team", t.Name, "uid", t.UID, "elapsed", time.Since(stepStart).Truncate(time.Millisecond).String())
@@ -594,6 +629,10 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 
 	phaseStart := time.Now()
 	if _, err := ReconcileMemberInfra(ctx, deps, m, state); err != nil {
+		logger.Error(err, "member reconcile: infra failed",
+			"member", m.Name, "runtimeName", m.RuntimeName, "role", m.Role.String(),
+			"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String(),
+			"isUpdate", m.IsUpdate)
 		return err
 	}
 	logger.Info("member reconcile: infra",
@@ -611,6 +650,9 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 
 	phaseStart = time.Now()
 	if err := EnsureMemberServiceAccount(ctx, deps, m); err != nil {
+		logger.Error(err, "member reconcile: service-account failed",
+			"member", m.Name, "runtimeName", m.RuntimeName,
+			"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 		return err
 	}
 	logger.Info("member reconcile: service-account",
@@ -619,6 +661,9 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 
 	phaseStart = time.Now()
 	if err := ReconcileMemberConfig(ctx, deps, m, state); err != nil {
+		logger.Error(err, "member reconcile: config failed",
+			"member", m.Name, "runtimeName", m.RuntimeName,
+			"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 		return err
 	}
 	logger.Info("member reconcile: config",
@@ -627,6 +672,10 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 
 	phaseStart = time.Now()
 	if _, err := ReconcileMemberContainer(ctx, deps, m, state); err != nil {
+		logger.Error(err, "member reconcile: container failed",
+			"member", m.Name, "runtimeName", m.RuntimeName,
+			"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String(),
+			"containerState", state.ContainerState)
 		return err
 	}
 	logger.Info("member reconcile: container",
@@ -664,11 +713,19 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 	if wb == nil {
 		return false, 0
 	}
+	logger := log.FromContext(ctx)
 	for _, m := range members {
+		start := time.Now()
 		result, err := wb.Status(ctx, m.Name)
+		elapsed := time.Since(start).Truncate(time.Millisecond)
 		if err != nil {
+			logger.Error(err, "member backend status failed",
+				"member", m.Name, "role", m.Role.String(), "elapsed", elapsed.String())
 			continue
 		}
+		logger.Info("member backend status",
+			"member", m.Name, "role", m.Role.String(),
+			"status", result.Status, "elapsed", elapsed.String())
 		ready := result.Status == backend.StatusRunning || result.Status == backend.StatusReady
 		if ms := t.Status.MemberByName(m.Name); ms != nil {
 			ms.Ready = ready
@@ -857,7 +914,9 @@ func (r *TeamReconciler) reconcileLegacyMember(ctx context.Context, t *v1beta1.T
 		TeamID:       nilIfEmpty(t.Spec.EffectiveTeamName(t.Name)),
 		Image:        nilIfEmpty(m.Spec.Image),
 	}
-	if err := r.Legacy.UpdateWorkersRegistry(entry); err != nil {
+	if err := timed(ctx, "workers-registry update", func() error {
+		return r.Legacy.UpdateWorkersRegistry(entry)
+	}); err != nil {
 		logger.Error(err, "workers-registry update failed (non-fatal)", "name", m.Name, "runtimeName", runtimeName)
 	}
 }
@@ -925,7 +984,9 @@ func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBas
 			"from", prevPhase,
 			"consecutiveFailures", t.Status.ConsecutiveFailures,
 			"message", msg)
-		if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+		if err := timed(ctx, "fail status patch", func() error {
+			return r.Status().Patch(ctx, t, patchBase)
+		}); err != nil {
 			logger.Error(err, "failed to patch team status after failure (non-fatal)")
 		}
 		// No error, no requeue: Reconcile's MaxRetriesReached guard keeps the
@@ -940,7 +1001,9 @@ func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBas
 		"consecutiveFailures", t.Status.ConsecutiveFailures,
 		"backoff", delay,
 		"message", msg)
-	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+	if err := timed(ctx, "fail status patch", func() error {
+		return r.Status().Patch(ctx, t, patchBase)
+	}); err != nil {
 		logger.Error(err, "failed to patch team status after failure (non-fatal)")
 	}
 	return reconcile.Result{RequeueAfter: delay}, nil

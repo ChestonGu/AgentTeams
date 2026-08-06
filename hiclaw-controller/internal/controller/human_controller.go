@@ -43,6 +43,10 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 	defer func() { metrics.Observe("human", start, reterr) }()
 
 	logger := log.FromContext(ctx)
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"human", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
 
 	var human v1beta1.Human
 	if err := r.Get(ctx, req.NamespacedName, &human); err != nil {

@@ -8,7 +8,17 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// mcSlowCallThreshold is the per-call duration above which runMC logs a
+// "mc slow call" entry. Config-phase OSS work runs dozens of mc subprocess
+// calls per member per reconcile (GET-heavy, see troubleshooting doc §1.3);
+// the threshold keeps the log to the outliers that actually matter instead
+// of one line per call.
+const mcSlowCallThreshold = 300 * time.Millisecond
 
 // MinIOClient implements StorageClient using the mc (MinIO Client) CLI.
 // This provides zero-migration-risk compatibility with the existing shell scripts
@@ -201,6 +211,7 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
+	start := time.Now()
 	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -218,7 +229,18 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 		cmd.Env = append(os.Environ(), hostEnv)
 	}
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	// Slow-call telemetry: the oss layer is the suspected step-4 bottleneck
+	// (mc subprocess fork + TLS + no connection pool). Logging the outliers
+	// quantifies single-call latency and op distribution; the caller's ctx
+	// carries the team/member context injected by the reconcilers.
+	if elapsed := time.Since(start); elapsed > mcSlowCallThreshold {
+		log.FromContext(ctx).Info("mc slow call",
+			"cmd", strings.Join(args, " "),
+			"op", args[0],
+			"elapsed", elapsed.Truncate(time.Millisecond).String())
+	}
+	if err != nil {
 		return "", fmt.Errorf("mc %s: %w (stderr: %s)",
 			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}

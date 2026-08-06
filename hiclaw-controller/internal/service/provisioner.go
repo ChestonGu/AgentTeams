@@ -317,6 +317,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	}
 
 	// Step 2: Register Matrix account
+	stepStart := time.Now()
 	logger.Info("registering Matrix account", "name", workerName)
 	userCreds, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
 		Username: workerName,
@@ -325,6 +326,8 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	if err != nil {
 		return nil, fmt.Errorf("Matrix registration failed: %w", err)
 	}
+	logger.Info("Matrix account ready", "name", workerName,
+		"elapsed", time.Since(stepStart).Truncate(time.Millisecond).String())
 	creds.MatrixPassword = userCreds.Password
 	// Cache the freshly issued access token so subsequent reconciles can reuse
 	// it via RefreshCredentials instead of issuing a new login (which would
@@ -336,6 +339,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 
 	// Step 3: Create MinIO user (embedded mode only)
 	if p.ossAdmin != nil {
+		stepStart = time.Now()
 		logger.Info("creating MinIO user", "name", workerName)
 		if err := p.ossAdmin.EnsureUser(ctx, workerName, creds.MinIOPassword); err != nil {
 			return nil, fmt.Errorf("MinIO user creation failed: %w", err)
@@ -346,9 +350,12 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		}); err != nil {
 			return nil, fmt.Errorf("MinIO policy creation failed: %w", err)
 		}
+		logger.Info("MinIO user ready", "name", workerName,
+			"elapsed", time.Since(stepStart).Truncate(time.Millisecond).String())
 	}
 
 	// Step 4: Create Matrix room
+	stepStart = time.Now()
 	logger.Info("creating Matrix room", "name", workerName)
 
 	// Pick an authority for the room.
@@ -388,7 +395,8 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		return nil, fmt.Errorf("Matrix room creation failed: %w", err)
 	}
 	roomID := roomInfo.RoomID
-	logger.Info("Matrix room ready", "roomID", roomID, "created", roomInfo.Created)
+	logger.Info("Matrix room ready", "roomID", roomID, "created", roomInfo.Created,
+		"elapsed", time.Since(stepStart).Truncate(time.Millisecond).String())
 
 	// Persist the freshly-registered Matrix token. Room identity is no
 	// longer stored here — the Matrix alias is the sole source of truth
@@ -403,8 +411,13 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// provisioning) or recovered power levels are applied. This may
 	// (re)invite the worker if it had been removed from the room.
 	if !roomInfo.Created {
+		membershipStart := time.Now()
 		if err := p.ReconcileRoomMembership(ctx, roomID, []string{adminMatrixID, authorityID, workerMatrixID}); err != nil {
-			logger.Error(err, "failed to reconcile worker room membership (non-fatal)", "roomID", roomID)
+			logger.Error(err, "failed to reconcile worker room membership (non-fatal)", "roomID", roomID,
+				"elapsed", time.Since(membershipStart).Truncate(time.Millisecond).String())
+		} else {
+			logger.Info("worker room membership reconciled", "roomID", roomID,
+				"elapsed", time.Since(membershipStart).Truncate(time.Millisecond).String())
 		}
 	}
 
@@ -425,15 +438,19 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// (see tests/lib/matrix-client.sh::matrix_send_and_wait_for_reply)
 	// rather than treating membership=join as a readiness signal.
 	if userCreds.AccessToken != "" && roomID != "" {
+		joinStart := time.Now()
 		if err := p.matrix.JoinRoom(ctx, roomID, userCreds.AccessToken); err != nil {
 			logger.Error(err, "failed to join worker into its own room (non-fatal)",
-				"name", workerName, "roomID", roomID)
+				"name", workerName, "roomID", roomID,
+				"elapsed", time.Since(joinStart).Truncate(time.Millisecond).String())
 		} else {
-			logger.Info("worker joined own room", "name", workerName, "roomID", roomID)
+			logger.Info("worker joined own room", "name", workerName, "roomID", roomID,
+				"elapsed", time.Since(joinStart).Truncate(time.Millisecond).String())
 		}
 	}
 
 	// Step 5: Gateway consumer and authorization
+	stepStart = time.Now()
 	logger.Info("creating gateway consumer", "consumer", consumerName)
 	consumerResult, err := p.gateway.EnsureConsumer(ctx, gateway.ConsumerRequest{
 		Name:          consumerName,
@@ -442,14 +459,19 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	if err != nil {
 		return nil, fmt.Errorf("gateway consumer creation failed: %w", err)
 	}
+	logger.Info("gateway consumer ready", "consumer", consumerName, "status", consumerResult.Status,
+		"elapsed", time.Since(stepStart).Truncate(time.Millisecond).String())
 	if consumerResult.APIKey != "" && consumerResult.APIKey != creds.GatewayKey {
 		creds.GatewayKey = consumerResult.APIKey
 		_ = p.creds.Save(ctx, credentialName, creds)
 	}
 
+	authStart := time.Now()
 	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
+	logger.Info("AI routes authorized", "consumer", consumerName,
+		"elapsed", time.Since(authStart).Truncate(time.Millisecond).String())
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
 	// Without this, the worker's first LLM call may get 401.
 	time.Sleep(2 * time.Second)

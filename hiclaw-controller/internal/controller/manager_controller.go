@@ -76,6 +76,10 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	defer func() { metrics.Observe("manager", start, reterr) }()
 
 	logger := log.FromContext(ctx)
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"manager", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
 
 	var mgr v1beta1.Manager
 	if err := r.Get(ctx, req.NamespacedName, &mgr); err != nil {
