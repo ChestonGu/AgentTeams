@@ -983,14 +983,25 @@ func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userI
 	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
 		return nil
 	}
-	// Idempotent: user not in the room (or already left).
+	// Idempotent: target user is not in the room (or already left).
 	if statusCode == http.StatusNotFound {
 		return nil
 	}
 	if statusCode == http.StatusForbidden && resp.ErrCode == "M_FORBIDDEN" {
 		lower := strings.ToLower(resp.Error)
-		if strings.Contains(lower, "not in") || strings.Contains(lower, "not a member") ||
-			strings.Contains(lower, "cannot kick") {
+		// Match ONLY target-not-in-room idempotency (see
+		// design/synapse-interface-contracts.md §1 修复 1):
+		//   - Synapse 1.127: "The target user is not in the room"
+		//     (synapse/handlers/room_member.py:1022, 1039)
+		//   - Tuwunel:       "User @x:d is not in the room."
+		// Deliberately NOT matched (these are real errors, not idempotency):
+		//   - "@sender:d not in room !r:d."  — sender not joined
+		//     (synapse/event_auth.py:687)
+		//   - "You cannot kick user @x:d."   — insufficient power
+		//     (synapse/event_auth.py:717)
+		if strings.Contains(lower, "target user is not in") ||
+			strings.Contains(lower, "is not in the room") ||
+			strings.Contains(lower, "not a member") {
 			return nil
 		}
 	}
