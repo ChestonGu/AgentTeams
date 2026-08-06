@@ -234,9 +234,12 @@ type HumanProvisioner interface {
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
 
-	// ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out
-	// of roomID via "!admin users force-leave-room". Fire-and-forget at
-	// the bot layer, but the admin message delivery itself is confirmed.
+	// ForceLeaveRoom removes userID from roomID even when a normal admin
+	// kick is not possible. Delegates to the MatrixOps implementation, which
+	// tries the admin kick first and falls back to the provider escalation
+	// (Tuwunel admin bot `!admin users force-leave-room`, Synapse
+	// make_room_admin + kick retry). Fire-and-forget at the bot layer, but
+	// the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
 
 	// DeactivateHumanUser disables a Human Matrix account after membership
