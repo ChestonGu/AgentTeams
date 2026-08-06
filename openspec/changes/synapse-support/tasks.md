@@ -104,14 +104,14 @@
 
 ## 6. Helm 声明式 AS（与 Phase 并行，独立可验证）
 
-- [ ] 6.1 新增 `helm/agentteams/templates/matrix/synapse-appservice-secret.yaml`：条件 `matrix.provider=synapse AND matrix.mode=managed AND matrix.appservice.enabled`；渲染 Secret `<synapse-fullname>-appservice`，`stringData.agentteams-controller.yaml` 含 id/as_token/hs_token/sender_localpart/namespaces/url/rate_limited
-- [ ] 6.2 修改 `helm/agentteams/templates/matrix/synapse-configmap.yaml`：AS 启用时追加 `app_service_config_files: [/as-registrations/agentteams-controller.yaml]`
-- [ ] 6.3 修改 `helm/agentteams/templates/matrix/synapse-statefulset.yaml`：AS 启用时追加 volume（secret）+ volumeMount（`/as-registrations` readOnly）
-- [ ] 6.4 修改 `helm/agentteams/templates/secrets/runtime-env.yaml`：注入 `AGENTTEAMS_MATRIX_PROVIDER` + AS 启用时注入 `_APPSERVICE_*` env
-- [ ] 6.5 修改 `helm/agentteams/templates/_helpers.tpl`：新增 `agentteams.appservice.pushURL` helper
-- [ ] 6.6 修改 `helm/agentteams/values.yaml`：新增 `matrix.provider`（默认 tuwunel）+ `matrix.appservice.*`（enabled 默认 false / id / senderLocalpart / asToken / hsToken / userNamespaceRegex / pushURL）
-- [ ] 6.7 修改 `helm/agentteams/templates/00-validate.yaml`：AS 启用时 required 校验 `asToken` / `hsToken`；`matrix.mode != managed` 且 `userNamespaceRegex` 为空时 fail
-- [ ] 6.8 `helm template` 验证 4 组合：(a) `synapse + appservice.enabled=true`；(b) `tuwunel`；(c) `synapse + appservice.enabled=false`；(d) `asToken=""` fail
+- [x] 6.1 新增 `helm/agentteams/templates/matrix/synapse-appservice-secret.yaml`：条件 `matrix.provider=synapse AND matrix.mode=managed AND matrix.appservice.enabled`；渲染 Secret `<synapse-fullname>-appservice`，`stringData.agentteams-controller.yaml` 含 id/as_token/hs_token/sender_localpart/namespaces/url/rate_limited
+- [x] 6.2 修改 `helm/agentteams/templates/matrix/synapse-configmap.yaml`：AS 启用时追加 `app_service_config_files: [/as-registrations/agentteams-controller.yaml]`
+- [x] 6.3 修改 `helm/agentteams/templates/matrix/synapse-statefulset.yaml`：AS 启用时追加 volume（secret）+ volumeMount（`/as-registrations` readOnly）
+- [x] 6.4 修改 `helm/agentteams/templates/secrets/runtime-env.yaml`：注入 `AGENTTEAMS_MATRIX_PROVIDER` + AS 启用时注入 `_APPSERVICE_*` env
+- [x] 6.5 修改 `helm/agentteams/templates/_helpers.tpl`：新增 `agentteams.appservice.pushURL` helper
+- [x] 6.6 修改 `helm/agentteams/values.yaml`：新增 `matrix.provider`（默认改为 synapse）+ `matrix.appservice.*`（enabled 默认 true / id / senderLocalpart / asToken / hsToken / userNamespaceRegex / pushURL）
+- [x] 6.7 修改 `helm/agentteams/templates/00-validate.yaml`：AS 启用时 required 校验 `asToken` / `hsToken`；`matrix.mode != managed` 且 `userNamespaceRegex` 为空时 fail
+- [x] 6.8 `helm template` 验证 4 组合：(a) `synapse + appservice.enabled=true`；(b) `tuwunel`；(c) `synapse + appservice.enabled=false`；(d) `asToken=""` fail
 
 ## 7. 集成验证
 
