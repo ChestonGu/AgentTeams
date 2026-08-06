@@ -45,6 +45,7 @@ func NewSynapseClient(cfg Config, httpClient *http.Client) *SynapseClient {
 //
 //	!admin users reset-password   <userID> <password>  -> POST /_synapse/admin/v1/reset_password/{userID}
 //	!admin users force-leave-room <userID> <roomID>    -> POST /_synapse/admin/v1/rooms/{roomID}/kick
+//	!admin users deactivate       <userID>             -> POST /_synapse/admin/v1/deactivate/{userID}
 //	!admin rooms  delete-room     <roomID>             -> DELETE /_synapse/admin/v2/rooms/{roomID}
 //
 // Any other "!admin" form returns an error (surfaced in controller logs).
@@ -59,6 +60,8 @@ func (s *SynapseClient) AdminCommand(ctx context.Context, command string) error 
 		return s.synResetPassword(ctx, f[3], f[4])
 	case len(f) >= 5 && f[1] == "users" && f[2] == "force-leave-room":
 		return s.synKick(ctx, f[4], f[3]) // roomID, userID
+	case len(f) >= 4 && f[1] == "users" && f[2] == "deactivate":
+		return s.synDeactivateUser(ctx, f[3])
 	case len(f) >= 4 && f[1] == "rooms" && f[2] == "delete-room":
 		return s.synDeleteRoom(ctx, f[3])
 	default:
@@ -89,9 +92,34 @@ func (s *SynapseClient) synResetPassword(ctx context.Context, userID, password s
 	return s.synAdminCall(ctx, http.MethodPost, path, map[string]string{"new_password": password})
 }
 
+// synDeactivateUser deactivates a user account via the Synapse admin API.
+// erase=false keeps the user's data (room memberships, messages) intact —
+// matching Tuwunel's deactivate semantics, which also do not erase.
+func (s *SynapseClient) synDeactivateUser(ctx context.Context, userID string) error {
+	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPost, path, map[string]bool{"erase": false})
+}
+
+// synSetDisplayName updates a user's displayname via the Synapse admin REST
+// users endpoint (PUT /_synapse/admin/v2/users/{id} accepts a displayname
+// field without touching the password). Used as the admin-identity fallback
+// when no user access token is available.
+func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayName string) error {
+	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPut, path, map[string]string{"displayname": displayName})
+}
+
 func (s *SynapseClient) synKick(ctx context.Context, roomID, userID string) error {
-	path := "/_synapse/admin/v1/rooms/" + url.PathEscape(roomID) + "/kick"
-	return s.synAdminCall(ctx, http.MethodPost, path, map[string]string{"user_id": userID})
+	// Synapse 1.127 has NO admin kick endpoint: every /_synapse/admin/v1/*
+	// route in synapse/rest/admin/ was checked, and none implements
+	// /rooms/{id}/kick (design/synapse-interface-contracts.md §3). Calling
+	// POST /_synapse/admin/v1/rooms/{id}/kick would return HTTP 404 and
+	// silently defeat the force-leave fallback. Return an explicit error so
+	// callers use the CS kick path instead (requires operator in-room with
+	// PL ≥ kick_level). SynapseMatrixOps.RemoveMember handles this via
+	// make_room_admin + CS kick retry.
+	return fmt.Errorf("synapse admin: POST /_synapse/admin/v1/rooms/%s/kick does not exist in Synapse 1.127; "+
+		"use CS API kick (requires operator in-room)", url.PathEscape(roomID))
 }
 
 func (s *SynapseClient) synDeleteRoom(ctx context.Context, roomID string) error {

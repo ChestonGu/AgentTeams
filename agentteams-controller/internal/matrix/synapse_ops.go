@@ -1,0 +1,459 @@
+package matrix
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// SynapseMatrixOps implements MatrixOps against a Synapse homeserver (1.127).
+//
+// CS API operations (createRoom, invite, kick) reuse the embedded
+// *TuwunelClient verbatim — Synapse implements the same /_matrix/client/v3/*
+// surface, so the 17 standard client methods need no change. Admin operations
+// go through the Synapse REST admin API (/_synapse/admin/v1/*) via the
+// synapseAdmin *SynapseClient.
+//
+// The in-room fallback strategy differs from TuwunelMatrixOps: Synapse 1.127
+// has no admin kick endpoint (see design/synapse-interface-contracts.md §3),
+// so a CS kick/invite that fails because the operator is not joined or lacks
+// power is recovered with make_room_admin — the admin REST API force-joins
+// the user AND grants PL=100 — followed by a CS retry.
+type SynapseMatrixOps struct {
+	*TuwunelClient
+	synapseAdmin *SynapseClient
+	config       Config
+}
+
+// NewSynapseMatrixOps creates a Synapse-backed MatrixOps implementation.
+// The embedded *TuwunelClient and the synapseAdmin *SynapseClient share the
+// same underlying client instance, so the cached admin access token is shared
+// between CS API calls and admin REST calls.
+func NewSynapseMatrixOps(cfg Config, httpClient *http.Client) *SynapseMatrixOps {
+	base := NewTuwunelClient(cfg, httpClient)
+	return &SynapseMatrixOps{
+		TuwunelClient: base,
+		synapseAdmin:  &SynapseClient{TuwunelClient: base},
+		config:        cfg,
+	}
+}
+
+// CreateRoom implements MatrixOps.CreateRoom for Synapse by translating the
+// business RoomSpec into a protocol CreateRoomRequest and delegating to the
+// embedded client (creator token from spec.ActorToken, empty → admin token;
+// alias idempotency preserved).
+//
+// Synapse 1.127 additionally rejects a power_level_content_override whose
+// "users" map omits the room creator (HTTP 400 M_BAD_JSON,
+// synapse/handlers/room.py:878-888). The creator is the user whose token
+// authenticates the request — spec.ActorUserID when set (e.g. a team admin
+// owning the team room), otherwise the admin user — so the ops layer
+// guarantees that creator is present with PL=100
+// (design/synapse-interface-contracts.md §4 修复 4). When the business layer
+// already put the actor in PowerLevels (the team room always does), this is
+// a no-op.
+func (o *SynapseMatrixOps) CreateRoom(ctx context.Context, spec RoomSpec) (*RoomRef, error) {
+	req := roomSpecToRequest(spec)
+	if len(req.PowerLevels) > 0 {
+		creator := spec.ActorUserID
+		if creator == "" {
+			creator = o.UserID(o.config.AdminUser)
+		}
+		if _, ok := req.PowerLevels[creator]; !ok {
+			req.PowerLevels[creator] = 100
+		}
+	}
+	info, err := o.TuwunelClient.CreateRoom(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &RoomRef{RoomID: info.RoomID, Created: info.Created}, nil
+}
+
+// DissolveRoom implements MatrixOps.DissolveRoom for Synapse via the admin
+// REST API: DELETE /_synapse/admin/v2/rooms/{roomID} shuts down and purges
+// the room (fire-and-forget — the purge runs asynchronously inside Synapse).
+func (o *SynapseMatrixOps) DissolveRoom(ctx context.Context, roomID string) error {
+	if roomID == "" {
+		return nil
+	}
+	return o.synapseAdmin.DeleteRoom(ctx, roomID)
+}
+
+// AddMember implements MatrixOps.AddMember for Synapse. It first invites via
+// the admin token (idempotent when the target is already joined/invited —
+// handled inside InviteToRoom). When the invite fails because the operator is
+// not joined ("@admin not in room", event_auth.py:687) or lacks power ("You
+// don't have permission to invite users", event_auth.py:703), it recovers via
+// make_room_admin (force-joins admin + PL=100) and retries the CS invite.
+func (o *SynapseMatrixOps) AddMember(ctx context.Context, roomID, userID string) error {
+	err := o.TuwunelClient.InviteToRoom(ctx, roomID, userID)
+	if err == nil {
+		return nil
+	}
+	if !synapseInviteNeedsMakeRoomAdmin(err) {
+		return err
+	}
+	adminID := o.UserID(o.config.AdminUser)
+	if adminErr := o.synapseAdmin.MakeRoomAdmin(ctx, roomID, adminID); adminErr != nil {
+		return fmt.Errorf("invite %s to %s failed (%v) and make_room_admin failed: %w",
+			userID, roomID, err, adminErr)
+	}
+	return o.TuwunelClient.InviteToRoom(ctx, roomID, userID)
+}
+
+// InviteMember implements MatrixOps.InviteMember for Synapse. When
+// member.ActorToken is set the invite is issued as that user (e.g. a team
+// leader already joined to the DM room, who may lack power to invite via the
+// admin identity); otherwise it falls back to AddMember (admin invite with
+// make_room_admin recovery when the admin is not joined or lacks PL).
+func (o *SynapseMatrixOps) InviteMember(ctx context.Context, roomID, userID string, member MemberSpec) error {
+	if member.ActorToken != "" {
+		return o.TuwunelClient.InviteToRoomWithToken(ctx, roomID, userID, member.ActorToken)
+	}
+	return o.AddMember(ctx, roomID, userID)
+}
+
+// RemoveMember implements MatrixOps.RemoveMember for Synapse. It first kicks
+// via the admin token (idempotent when the target is not in the room —
+// handled inside KickFromRoom). When the kick fails because the operator is
+// not joined or lacks power, it recovers via make_room_admin and retries the
+// CS kick. It deliberately does NOT call the non-existent Synapse admin kick
+// endpoint (/_synapse/admin/v1/rooms/{id}/kick — 404 on Synapse 1.127,
+// see design/synapse-interface-contracts.md §3).
+func (o *SynapseMatrixOps) RemoveMember(ctx context.Context, roomID, userID, reason string) error {
+	err := o.TuwunelClient.KickFromRoom(ctx, roomID, userID, reason)
+	if err == nil {
+		return nil
+	}
+	if !shouldForceLeaveAfterKickError(err) {
+		return err
+	}
+	adminID := o.UserID(o.config.AdminUser)
+	if adminErr := o.synapseAdmin.MakeRoomAdmin(ctx, roomID, adminID); adminErr != nil {
+		return fmt.Errorf("kick %s from %s failed (%v) and make_room_admin failed: %w",
+			userID, roomID, err, adminErr)
+	}
+	return o.TuwunelClient.KickFromRoom(ctx, roomID, userID, reason)
+}
+
+// synapseInviteNeedsMakeRoomAdmin reports whether an invite failure should be
+// escalated to the make_room_admin recovery path. Matches Synapse 1.127's
+// sender-not-joined and insufficient-power error strings (event_auth.py:687,
+// :703). It does NOT match the already-joined idempotent case — that returns
+// nil inside InviteToRoom before an error ever reaches here.
+func synapseInviteNeedsMakeRoomAdmin(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "m_forbidden") {
+		return false
+	}
+	// Synapse 1.127 style (event_auth.py:687 — sender not joined):
+	// "@admin:domain not in room !room:domain."
+	if strings.Contains(msg, "not in room") {
+		return true
+	}
+	// Synapse 1.127 style (event_auth.py:703 — PL < invite_level):
+	// "You don't have permission to invite users"
+	if strings.Contains(msg, "permission to invite") {
+		return true
+	}
+	return false
+}
+
+// === Phase 2: Room Lifecycle (alias) + Room Membership (full) ===
+
+// ReconcileMembers implements MatrixOps.ReconcileMembers for Synapse. It
+// shares the exact convergence core with TuwunelMatrixOps (same CS API
+// surface) — see reconcileMembersImpl. The admin path uses the ops layer's
+// provider-specific RemoveMember (make_room_admin + retry); the actor-token
+// path uses the CS WithToken methods and escalates a failing kick once via
+// RemoveMember.
+func (o *SynapseMatrixOps) ReconcileMembers(ctx context.Context, roomID string, desired []MemberSpec) error {
+	return reconcileMembersImpl(ctx, o, o.TuwunelClient, o.config.AdminUser, roomID, desired)
+}
+
+// JoinRoom implements MatrixOps.JoinRoom for Synapse by joining via the CS
+// API as the user described by member (empty ActorToken → admin identity).
+func (o *SynapseMatrixOps) JoinRoom(ctx context.Context, roomID string, member MemberSpec) error {
+	return joinRoomForMember(ctx, o.TuwunelClient, roomID, member, o.ensureAdminToken)
+}
+
+// LeaveRoom implements MatrixOps.LeaveRoom for Synapse by leaving via the CS
+// API as the user described by member (empty ActorToken → admin identity).
+func (o *SynapseMatrixOps) LeaveRoom(ctx context.Context, roomID string, member MemberSpec) error {
+	return leaveRoomForMember(ctx, o.TuwunelClient, roomID, member, o.ensureAdminToken)
+}
+
+// ForceLeaveAllRooms implements MatrixOps.ForceLeaveAllRooms for Synapse.
+// Best-effort: errors leaving individual rooms are logged, not returned.
+func (o *SynapseMatrixOps) ForceLeaveAllRooms(ctx context.Context, member MemberSpec) error {
+	return forceLeaveAllRoomsForMember(ctx, o.TuwunelClient, member, o.ensureAdminToken)
+}
+
+// ReleaseRoomAlias implements MatrixOps.ReleaseRoomAlias for Synapse.
+// Idempotent: a missing alias returns nil (handled inside DeleteRoomAlias).
+func (o *SynapseMatrixOps) ReleaseRoomAlias(ctx context.Context, alias string) error {
+	return o.TuwunelClient.DeleteRoomAlias(ctx, alias)
+}
+
+// ResolveRoomAlias implements MatrixOps.ResolveRoomAlias for Synapse.
+func (o *SynapseMatrixOps) ResolveRoomAlias(ctx context.Context, alias string) (string, bool, error) {
+	return o.TuwunelClient.ResolveRoomAlias(ctx, alias)
+}
+
+// ArchiveRoom implements MatrixOps.ArchiveRoom for Synapse by renaming the
+// room via SetRoomName with member.ActorToken (empty → admin identity).
+func (o *SynapseMatrixOps) ArchiveRoom(ctx context.Context, roomID, name string, member MemberSpec) error {
+	return o.TuwunelClient.SetRoomName(ctx, roomID, name, member.ActorToken)
+}
+
+// === Phase 3: Room Metadata & Messaging + Queries & Ops ===
+
+// synapseWriteNeedsMakeRoomAdmin reports whether a CS state/message write
+// failure (room.meta, m.room.name, m.room.message) should be escalated to the
+// make_room_admin recovery path. Matches Synapse 1.127's sender-not-joined
+// ("User @x:y not in room !r:d (None)", event_auth.py:731) and
+// insufficient-power ("You don't have permission to post that to the room...",
+// event_auth.py:768) strings. It does NOT match idempotent already-joined
+// cases — those return nil before an error reaches here.
+func synapseWriteNeedsMakeRoomAdmin(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "m_forbidden") {
+		return false
+	}
+	if strings.Contains(msg, "not in room") {
+		return true
+	}
+	return strings.Contains(msg, "permission to post")
+}
+
+// SetRoomMetadata implements MatrixOps.SetRoomMetadata for Synapse. It first
+// writes room.meta via the CS API as the user described by member (empty
+// ActorToken → admin identity). When the write fails because that user is not
+// joined or lacks power (PL < state_default=50), it recovers via
+// make_room_admin — the admin REST API force-joins the actor AND grants
+// PL=100 — followed by a CS retry with the same token.
+func (o *SynapseMatrixOps) SetRoomMetadata(ctx context.Context, roomID string, content map[string]interface{}, member MemberSpec) error {
+	err := o.TuwunelClient.SetRoomState(ctx, roomID, roomMetaEventType, "", content, member.ActorToken)
+	if err == nil {
+		return nil
+	}
+	if !synapseWriteNeedsMakeRoomAdmin(err) {
+		return err
+	}
+	actorID := member.ActorUserID
+	if actorID == "" {
+		actorID = o.UserID(o.config.AdminUser)
+	}
+	if adminErr := o.synapseAdmin.MakeRoomAdmin(ctx, roomID, actorID); adminErr != nil {
+		return fmt.Errorf("set room meta for %s failed (%v) and make_room_admin failed: %w",
+			roomID, err, adminErr)
+	}
+	return o.TuwunelClient.SetRoomState(ctx, roomID, roomMetaEventType, "", content, member.ActorToken)
+}
+
+// RenameRoom implements MatrixOps.RenameRoom for Synapse. Same recovery
+// strategy as SetRoomMetadata: CS rename (m.room.name send_level=50), then
+// make_room_admin + retry when the actor is not joined or lacks power.
+func (o *SynapseMatrixOps) RenameRoom(ctx context.Context, roomID, name string, member MemberSpec) error {
+	err := o.TuwunelClient.SetRoomName(ctx, roomID, name, member.ActorToken)
+	if err == nil {
+		return nil
+	}
+	if !synapseWriteNeedsMakeRoomAdmin(err) {
+		return err
+	}
+	actorID := member.ActorUserID
+	if actorID == "" {
+		actorID = o.UserID(o.config.AdminUser)
+	}
+	if adminErr := o.synapseAdmin.MakeRoomAdmin(ctx, roomID, actorID); adminErr != nil {
+		return fmt.Errorf("rename room %s failed (%v) and make_room_admin failed: %w",
+			roomID, err, adminErr)
+	}
+	return o.TuwunelClient.SetRoomName(ctx, roomID, name, member.ActorToken)
+}
+
+// SendSystemMessage implements MatrixOps.SendSystemMessage for Synapse. It
+// first sends via SendMessageAsAdmin (admin identity); when the admin is not
+// joined to the room (events_default=0, but the sender must still be in-room,
+// event_auth.py:731), it recovers via make_room_admin on the admin and
+// retries.
+func (o *SynapseMatrixOps) SendSystemMessage(ctx context.Context, roomID, body string) error {
+	err := o.TuwunelClient.SendMessageAsAdmin(ctx, roomID, body)
+	if err == nil {
+		return nil
+	}
+	if !synapseWriteNeedsMakeRoomAdmin(err) {
+		return err
+	}
+	adminID := o.UserID(o.config.AdminUser)
+	if adminErr := o.synapseAdmin.MakeRoomAdmin(ctx, roomID, adminID); adminErr != nil {
+		return fmt.Errorf("send system message to %s failed (%v) and make_room_admin failed: %w",
+			roomID, err, adminErr)
+	}
+	return o.TuwunelClient.SendMessageAsAdmin(ctx, roomID, body)
+}
+
+// ListRoomMembers implements MatrixOps.ListRoomMembers for Synapse. Reads via
+// the CS API; the admin identity bypasses in-room checks
+// (auth/base.py:206), so no fallback is needed. When member.ActorToken is set
+// the read uses that token instead.
+func (o *SynapseMatrixOps) ListRoomMembers(ctx context.Context, roomID string, member MemberSpec) ([]RoomMember, error) {
+	return listRoomMembersForMember(ctx, o.TuwunelClient, roomID, member)
+}
+
+// ListJoinedRooms implements MatrixOps.ListJoinedRooms for Synapse, listing
+// the rooms the user described by member is joined to (empty ActorToken →
+// admin identity).
+func (o *SynapseMatrixOps) ListJoinedRooms(ctx context.Context, member MemberSpec) ([]string, error) {
+	token, err := memberTokenFor(ctx, member, o.ensureAdminToken)
+	if err != nil {
+		return nil, fmt.Errorf("list joined rooms: %w", err)
+	}
+	return o.TuwunelClient.ListJoinedRooms(ctx, token)
+}
+
+// IsUserInRoom implements MatrixOps.IsUserInRoom for Synapse. Pure read via
+// the admin identity (bypasses in-room checks).
+func (o *SynapseMatrixOps) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {
+	return isUserInRoomForMember(ctx, o.TuwunelClient, roomID, userID)
+}
+
+// IsManagerJoinedDM implements MatrixOps.IsManagerJoinedDM for Synapse. Pure
+// read via the admin identity; safe to poll on every reconcile.
+func (o *SynapseMatrixOps) IsManagerJoinedDM(ctx context.Context, roomID string) (bool, error) {
+	return isManagerJoinedDMForMember(ctx, o.TuwunelClient, roomID)
+}
+
+// HealthCheck implements MatrixOps.HealthCheck for Synapse by attempting a
+// login with deliberately-invalid credentials. Any HTTP-level response (401,
+// 403, ...) means the server is up; a transport error (connection refused,
+// DNS failure, EOF) is returned.
+func (o *SynapseMatrixOps) HealthCheck(ctx context.Context) error {
+	_, err := o.TuwunelClient.Login(ctx, "__healthcheck__", "invalid")
+	if err != nil && isMatrixConnError(err) {
+		return err
+	}
+	return nil
+}
+
+// === Phase 4: User Identity & Credentials + AppService Governance ===
+
+// ProvisionUser implements MatrixOps.ProvisionUser for Synapse via the admin
+// REST API (PUT /_synapse/admin/v2/users/{id} creates the user with a
+// password, then a CS login returns the access token). Idempotent: PUT sets
+// the password whether the user is new or already exists. An empty
+// spec.Password yields a generated one, returned in the UserCredentials.
+// NOTE: SynapseClient.EnsureUser always reports Created=true (the admin API
+// has no register-vs-login distinction), so UserRef.Created is not meaningful
+// on Synapse.
+func (o *SynapseMatrixOps) ProvisionUser(ctx context.Context, spec UserSpec) (*UserRef, *UserCredentials, error) {
+	uc, err := o.synapseAdmin.EnsureUser(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &UserRef{UserID: uc.UserID, Created: uc.Created}, uc, nil
+}
+
+// ProvisionUserViaAppService implements MatrixOps.ProvisionUserViaAppService
+// for Synapse via the CS register endpoint authenticated with the as_token
+// (m.login.application_service) — the standard Matrix AppService user
+// provisioning flow, which Synapse supports identically to Tuwunel. Requires
+// the AppService to be registered (declaratively, via Helm).
+func (o *SynapseMatrixOps) ProvisionUserViaAppService(ctx context.Context, localpart string) (*UserRef, *UserCredentials, error) {
+	uc, err := o.TuwunelClient.EnsureAppServiceUser(ctx, localpart)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &UserRef{UserID: uc.UserID, Created: uc.Created}, uc, nil
+}
+
+// LoginUser implements MatrixOps.LoginUser for Synapse via password login.
+func (o *SynapseMatrixOps) LoginUser(ctx context.Context, username, password string) (string, error) {
+	return o.TuwunelClient.Login(ctx, username, password)
+}
+
+// LoginUserViaAppService implements MatrixOps.LoginUserViaAppService for
+// Synapse via the AS login flow (m.login.application_service).
+func (o *SynapseMatrixOps) LoginUserViaAppService(ctx context.Context, localpart string) (string, error) {
+	return o.TuwunelClient.LoginAppServiceUser(ctx, localpart)
+}
+
+// ResetUserPassword implements MatrixOps.ResetUserPassword for Synapse via
+// POST /_synapse/admin/v1/reset_password/{userID}.
+func (o *SynapseMatrixOps) ResetUserPassword(ctx context.Context, userID, password string) error {
+	return o.synapseAdmin.synResetPassword(ctx, userID, password)
+}
+
+// DeactivateUser implements MatrixOps.DeactivateUser for Synapse via
+// POST /_synapse/admin/v1/deactivate/{userID} with erase=false (data is
+// preserved, matching Tuwunel's deactivate semantics).
+func (o *SynapseMatrixOps) DeactivateUser(ctx context.Context, userID string) error {
+	return o.synapseAdmin.synDeactivateUser(ctx, userID)
+}
+
+// SetUserDisplayName implements MatrixOps.SetUserDisplayName for Synapse. With
+// a user access token it uses the CS profile endpoint; with an empty token it
+// falls back to the admin REST users endpoint (which can set any user's
+// displayname without touching the password).
+func (o *SynapseMatrixOps) SetUserDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
+	if accessToken == "" {
+		return o.synapseAdmin.synSetDisplayName(ctx, userID, displayName)
+	}
+	return o.TuwunelClient.SetDisplayName(ctx, userID, accessToken, displayName)
+}
+
+// VerifyUserAccessToken implements MatrixOps.VerifyUserAccessToken for Synapse
+// via GET /_matrix/client/v3/account/whoami.
+func (o *SynapseMatrixOps) VerifyUserAccessToken(ctx context.Context, accessToken string) error {
+	return o.TuwunelClient.VerifyAccessToken(ctx, accessToken)
+}
+
+// UserIDFor implements MatrixOps.UserIDFor for Synapse: pure formatting of
+// "@<localpart>:<domain>".
+func (o *SynapseMatrixOps) UserIDFor(localpart string) string {
+	return o.TuwunelClient.UserID(localpart)
+}
+
+// BackfillLegacyPassword implements MatrixOps.BackfillLegacyPassword for
+// Synapse. Same underlying admin operation as ResetUserPassword (admin REST
+// reset_password), kept separate to signal the bulk-migration intent.
+func (o *SynapseMatrixOps) BackfillLegacyPassword(ctx context.Context, userID, password string) error {
+	return o.synapseAdmin.synResetPassword(ctx, userID, password)
+}
+
+// RegisterAppService implements MatrixOps.RegisterAppService for Synapse.
+// Registrations are declarative (Helm-managed via the app_service_config_files
+// mechanism) — there is no runtime registration API. The implementation only
+// verifies the existing registration is active via a smoke test and reports an
+// error (pointing at the Helm config) when it is not.
+func (o *SynapseMatrixOps) RegisterAppService(ctx context.Context, reg AppServiceRegistration) error {
+	if err := o.TuwunelClient.AppServiceSmokeTest(ctx); err != nil {
+		return fmt.Errorf("synapse appservice %q is not active: registrations are declarative (Helm-managed); "+
+			"update the chart's matrix.appservice.* values and the homeserver app_service_config_files, then re-apply: %w",
+			reg.ID, err)
+	}
+	return nil
+}
+
+// UnregisterAppService implements MatrixOps.UnregisterAppService for Synapse.
+// Registrations are declarative (Helm-managed) and cannot be removed at
+// runtime; the returned error points the operator at the Helm chart.
+func (o *SynapseMatrixOps) UnregisterAppService(ctx context.Context, id string) error {
+	return fmt.Errorf("synapse appservice %q cannot be unregistered at runtime: registrations are declarative "+
+		"(Helm-managed); remove it from the chart's matrix.appservice values and re-apply", id)
+}
+
+// SmokeTestAppService implements MatrixOps.SmokeTestAppService for Synapse via
+// an AS login as the sender_localpart user.
+func (o *SynapseMatrixOps) SmokeTestAppService(ctx context.Context) error {
+	return o.TuwunelClient.AppServiceSmokeTest(ctx)
+}
