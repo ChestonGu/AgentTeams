@@ -42,6 +42,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Team reconcile observability**: Each Team reconcile pass logs per-step timing (`team reconcile: admin actor / step 1 rooms / step 1 storage / …`), and `DeployWorkerConfig` logs per-phase upload timing, so slow steps (e.g. hung object-storage syncs) are identifiable at a glance. Per-request STS credential INFO logs are commented out (not removed) to reduce log noise; WARN/ERROR paths still log.
 
+- **Team reconcile telemetry**: `Reconcile` injects a team-scoped logger (`team=<name>`, `teamUID=<uid>`) into the context so every downstream layer (deployer, oss, gateway, backend) is tagged with the Team identity — `grep "team=<name>"` covers the whole reconcile span. A unified `timed` helper logs elapsed on success, failure, and cancellation, and member phases now log elapsed on failure too (previously success-only). The oss layer logs `mc slow call` for any mc invocation over 300ms (with op type) to quantify the S3-layer latency distribution; `ProvisionWorker` logs per-step elapsed (Matrix register / MinIO user / room / join / gateway consumer / AI-route auth); `modifyAIRoutes` logs overall elapsed plus 409-conflict retry count; Docker image pulls log completion; a panic guard records reconcile panics with team context and requeues through the error path.
+
+- **S3 benchmark harness**: New `bench/` module with `bench_s3.go` — a read-only reproduction benchmark over the real scenario bucket (mc subprocess vs minio-go SDK drivers, config-phase op mix 12 GET + 3 PUT + 2 STAT + 1 LIST, per-op latency percentiles + per-round wall-clock; write space isolated under `bench-probe/` and auto-cleaned).
+
 - **Human reconcile backoff and parity**: `HumanStatus` gains `observedGeneration` (parity with Worker/Team/Manager) plus `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`. Infra failures now use exponential backoff (30s → 10min cap) and stop requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation, replacing the previous double-requeue (`RequeueAfter` + rate-limiter error) pattern.
 
 ---
@@ -84,10 +88,16 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Team 调谐可观测性**: Team 调谐每次执行按步骤打印耗时日志（`team reconcile: admin actor / step 1 rooms / step 1 storage / …`），`DeployWorkerConfig` 打印各上传阶段耗时，便于快速定位慢步骤（如对象存储同步挂起）。STS 凭据逐请求 INFO 日志改为注释保留（不删除）以降低日志噪声；WARN/ERROR 路径仍会打印。
 
+- **Team 调谐遥测增强**: `Reconcile` 入口将 team-scoped logger（`team=<name>`、`teamUID=<uid>`）注入 context，下游各层（deployer/oss/gateway/backend）日志自动携带 Team 身份，`grep "team=<name>"` 即可覆盖整条调谐链路。新增统一 `timed` helper，成功/失败/取消均记录 elapsed；member 各阶段失败路径补上 elapsed（原先仅成功时打印）。OSS 层对超过 300ms 的 mc 调用打 `mc slow call`（含 op 类型），量化 S3 层单次调用延迟分布；`ProvisionWorker` 各步骤（Matrix 注册 / MinIO 用户 / 建房 / join / gateway consumer / AI 路由授权）补 elapsed；`modifyAIRoutes` 记录整体耗时与 409 冲突重试次数；Docker 镜像拉取完成补日志；新增 panic 兜底，panic 时带 team 上下文记录并走错误路径 requeue。
+
+- **S3 基准复现工具**: 新增 `bench/` module，含 `bench_s3.go` —— 复用真实场景桶的只读复现基准（mc 子进程 vs minio-go SDK 双驱动，对齐 config 阶段操作配比 12 GET + 3 PUT + 2 STAT + 1 LIST，输出各操作延迟分位数与单成员轮次墙钟耗时；写空间隔离在 `bench-probe/` 前缀下并自动清理）。
+
 - **Human 调谐退避与字段对齐**: `HumanStatus` 新增 `observedGeneration`（与 Worker/Team/Manager 对齐）以及 `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`。Infra 失败改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；修复了原先 `RequeueAfter` + error 的双重 requeue 模式。
 
 ---
 
+- feat(controller): add team-scoped reconcile telemetry — ctx logger injection (team/teamUID), timed helper, failure-path elapsed, mc slow-call threshold logs, ProvisionWorker/modifyAIRoutes/ensureImage timing, panic guard ([ce1a531](https://github.com/agentscope-ai/HiClaw/commit/ce1a531))
+- test(bench): add S3 reproduction benchmark under bench/ (mc vs minio-go SDK, real-bucket read-only) ([a12c5b3](https://github.com/agentscope-ai/HiClaw/commit/a12c5b3))
 - feat(controller): make Active Team reconcile interval configurable with positive jitter ([462f84d](https://github.com/agentscope-ai/HiClaw/commit/462f84d))
 - fix(controller): build hiclaw-controller image with shared/lib via named build context ([82a75e8](https://github.com/agentscope-ai/HiClaw/commit/82a75e8))
 - feat(controller): add per-step Team reconcile timing logs, configurable max concurrency, and quieter STS INFO logs ([c01aaec](https://github.com/agentscope-ai/HiClaw/commit/c01aaec))
