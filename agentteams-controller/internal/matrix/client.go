@@ -25,8 +25,18 @@ import (
 // instead of logging it as a hard error.
 var ErrAppServiceNotReady = errors.New("matrix appservice token not active yet")
 
-// Client abstracts Matrix homeserver operations.
-// Implementations: TuwunelClient (current), future SynapseClient.
+// Client abstracts the provider-agnostic Matrix client-server (CS) API surface
+// plus the user/AppService operations every homeserver implements identically.
+// Both *TuwunelClient and *SynapseClient satisfy it (SynapseClient via the
+// embedded *TuwunelClient, since both homeservers implement the same
+// /_matrix/client/v3/* surface).
+//
+// Provider-specific admin operations are deliberately NOT here: Tuwunel drives
+// them through a chat-bot "!admin ..." room (AdminCommand), while Synapse
+// exposes a REST admin API (/_synapse/admin/v1/*). Those live on the concrete
+// *TuwunelClient type and the SynapseMatrixOps layer respectively. The
+// business-level MatrixOps abstraction (ops.go) is where callers should depend,
+// not this protocol-level interface.
 type Client interface {
 	// EnsureUser registers a user or logs in if the account already exists.
 	// Returns credentials regardless of whether the user was newly created.
@@ -83,11 +93,6 @@ type Client interface {
 	// SetDisplayName updates a user's profile displayname.
 	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
 
-	// AdminCommand sends a `!admin ...` text message to the tuwunel admin
-	// bot room (#admins:<domain>). Fire-and-forget: delivery of the
-	// message is confirmed but execution of the admin action is not.
-	AdminCommand(ctx context.Context, command string) error
-
 	// ListJoinedRooms returns the list of room IDs the user identified
 	// by userToken is currently joined to.
 	ListJoinedRooms(ctx context.Context, userToken string) ([]string, error)
@@ -133,20 +138,6 @@ type Client interface {
 	// Application Service login flow (m.login.application_service).
 	// The as_token is used as Bearer authentication; no password needed.
 	LoginAppServiceUser(ctx context.Context, username string) (string, error)
-
-	// SetPasswordAsAdmin sets a user's password via the Tuwunel admin bot.
-	// Used to set initial passwords for Human users in AppService mode so
-	// they can still log in via Element.
-	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
-
-	// RegisterAppService registers an Application Service with the homeserver
-	// via the admin bot command. Includes smoke-test-first idempotency and
-	// unregister-before-register fallback for safe token rotation.
-	RegisterAppService(ctx context.Context, reg AppServiceRegistration) error
-
-	// UnregisterAppService removes an Application Service registration by ID.
-	// Uses admin bot command; does not require a valid as_token.
-	UnregisterAppService(ctx context.Context, id string) error
 
 	// AppServiceSmokeTest verifies that a previously registered AppService
 	// is active by attempting an AS login as the sender_localpart user.

@@ -236,20 +236,37 @@ var _ MatrixOps = (*SynapseMatrixOps)(nil)
 // Legacy conversion layer
 // ---------------------------------------------------------------------------
 
-// LegacyClientOps adapts a protocol-level matrix.Client into the MatrixOps
+// legacyClient is the protocol-level surface the LegacyClientOps bridge needs:
+// the provider-agnostic Client interface PLUS the Tuwunel-only admin methods
+// (AdminCommand / SetPasswordAsAdmin / RegisterAppService / UnregisterAppService)
+// that were removed from Client because they have no Synapse equivalent. The
+// bridge drives them with Tuwunel semantics, so it holds this composite
+// interface rather than the slimmed Client. *TuwunelClient satisfies it; the
+// fakeTeamMatrix test double satisfies it by implementing every method.
+type legacyClient interface {
+	Client
+	AdminCommand(ctx context.Context, command string) error
+	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
+	RegisterAppService(ctx context.Context, reg AppServiceRegistration) error
+	UnregisterAppService(ctx context.Context, id string) error
+}
+
+// LegacyClientOps adapts a protocol-level matrix client into the MatrixOps
 // surface with Tuwunel semantics. It exists as the conversion layer for
-// callers that only hold a matrix.Client — existing tests, transitional
-// code paths, and any consumer that has not yet been migrated to construct a
-// concrete MatrixOps implementation. Its behavior is identical to the
-// pre-abstraction service layer (which called these client methods directly),
-// so it doubles as the zero-regression bridge during the Phase 1 migration.
+// tests and any transitional caller that still holds a Tuwunel-style client
+// instead of a concrete MatrixOps implementation. Production code constructs a
+// concrete *TuwunelMatrixOps or *SynapseMatrixOps via NewOps; this bridge is
+// test-only and preserves the pre-abstraction service-layer call shapes so
+// existing fakes keep working unchanged.
 type LegacyClientOps struct {
-	client Client
+	client legacyClient
 	config Config
 }
 
 // NewLegacyClientOps wraps client into a MatrixOps with Tuwunel semantics.
-func NewLegacyClientOps(client Client, config Config) *LegacyClientOps {
+// client must satisfy the composite legacyClient interface (Client plus the
+// Tuwunel-only admin methods); *TuwunelClient and the test fakes both do.
+func NewLegacyClientOps(client legacyClient, config Config) *LegacyClientOps {
 	return &LegacyClientOps{client: client, config: config}
 }
 
