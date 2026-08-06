@@ -85,12 +85,17 @@ The `RoomSpec` passed to `CreateRoom` SHALL describe WHAT the room is (name, top
 
 ### Requirement: AddMember SHALL succeed when the operator is not yet in the room
 
-When inviting a user would fail because the operator (the user whose token the implementation uses) is not joined to the room, the implementation SHALL recover transparently. On Synapse, recovery SHALL use `POST /_synapse/admin/v1/rooms/<roomID>/make_room_admin` (which grants the admin PL 100 and invites+joins them), then retry the CS API invite. On Tuwunel, recovery uses the admin bot's inherent cross-room privilege (no special step needed). The caller SHALL NOT see the recovery step — only the final success or failure.
+When inviting a user would fail because the operator (the user whose token the implementation uses) is not joined to the room or lacks the power to invite, the implementation SHALL recover transparently. On Synapse, recovery SHALL classify the sender-side rejection (`classifySynapseSenderError`): a not-in-room error (`"... not in room ..."`, `event_auth.py:687`) triggers force-join via `POST /_synapse/admin/v1/join/{roomID}` (the native membership-restore endpoint: auto-invite + join), and an insufficient-power error (`"You don't have permission to invite users"`, `event_auth.py:703`) triggers `POST /_synapse/admin/v1/rooms/<roomID>/make_room_admin` (raises the sender to the room's highest admin power level); either recovery is followed by a retry of the CS API invite. On Tuwunel, recovery uses the admin bot's inherent cross-room privilege (no special step needed). The caller SHALL NOT see the recovery step — only the final success or failure.
 
-#### Scenario: Synapse AddMember recovers via make_room_admin
+#### Scenario: Synapse AddMember recovers via force-join when sender not in room
 
 - **WHEN** `AddMember(ctx, roomID, userID)` runs on SynapseMatrixOps and the first CS invite attempt fails with `403 M_FORBIDDEN "@admin:dom not in room !room:dom."` (per `event_auth.py:687`)
-- **THEN** the implementation issues `POST /_synapse/admin/v1/rooms/<roomID>/make_room_admin {"user_id":"@admin:dom"}`, waits for it to take effect, retries the CS invite, and returns nil on success
+- **THEN** the implementation issues `POST /_synapse/admin/v1/join/{roomID} {"user_id":"@admin:dom"}`, retries the CS invite, and returns nil on success
+
+#### Scenario: Synapse AddMember recovers via make_room_admin when sender lacks power
+
+- **WHEN** `AddMember(ctx, roomID, userID)` runs on SynapseMatrixOps and the first CS invite attempt fails with `403 M_FORBIDDEN "You don't have permission to invite users"` (per `event_auth.py:703`)
+- **THEN** the implementation issues `POST /_synapse/admin/v1/rooms/<roomID>/make_room_admin {"user_id":"@admin:dom"}`, retries the CS invite, and returns nil on success
 
 #### Scenario: Tuwunel AddMember relies on admin-bot privilege
 
@@ -106,7 +111,7 @@ When inviting a user would fail because the operator (the user whose token the i
 
 When kicking a user, the implementation SHALL return nil (idempotent success) ONLY when the error indicates the target is not in the room (Synapse 1.127 actual string: `"The target user is not in the room"`, per `synapse/handlers/room_member.py:1022,1039`). It SHALL NOT treat sender-not-in-room errors (`"@sender not in room"` per `event_auth.py:687`) or sender-PL-insufficient errors (`"You cannot kick user"` per `event_auth.py:717`) as idempotent.
 
-When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the implementation SHALL fall back. On Synapse, the fallback is `make_room_admin` + CS kick retry (same recovery as AddMember). On Tuwunel, the fallback is `!admin users force-leave-room <userID> <roomID>` via the admin bot. The fallback's error-matching SHALL be case-insensitive and SHALL recognize Synapse's actual error strings (`"cannot kick user"`, `"cannot unban user"`, `"not in room"`) in addition to Tuwunel's `"not have enough power"`.
+When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the implementation SHALL fall back using the same classified sender recovery as AddMember (force-join via `POST /_synapse/admin/v1/join/{roomID}` when the sender is not in the room, `make_room_admin` when the sender lacks power), then retry the CS kick. On Tuwunel, the fallback is `!admin users force-leave-room <userID> <roomID>` via the admin bot. The fallback's error-matching SHALL be case-insensitive and SHALL recognize Synapse's actual error strings (`"cannot kick user"`, `"cannot unban user"`, `"not in room"`) in addition to Tuwunel's `"not have enough power"`.
 
 #### Scenario: Target already left → idempotent success
 
@@ -116,7 +121,7 @@ When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the 
 #### Scenario: Sender not in room → fallback on Synapse
 
 - **WHEN** `RemoveMember` receives Synapse response `403 M_FORBIDDEN "@admin:dom not in room !room:dom."`
-- **THEN** the implementation invokes `make_room_admin` for the admin, retries the CS kick, and returns nil on success (NOT idempotent — the recovery step actually runs)
+- **THEN** the implementation force-joins the admin via `POST /_synapse/admin/v1/join/{roomID}`, retries the CS kick, and returns nil on success (NOT idempotent — the recovery step actually runs)
 
 #### Scenario: Sender PL insufficient → fallback on Tuwunel
 
@@ -131,7 +136,7 @@ When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the 
 #### Scenario: Force-kick endpoint not invoked on Synapse
 
 - **WHEN** any RemoveMember fallback path runs on SynapseMatrixOps
-- **THEN** no HTTP request is sent to `POST /_synapse/admin/v1/rooms/<roomID>/kick` (that endpoint does not exist — see contracts doc §3); `make_room_admin` is used instead
+- **THEN** no HTTP request is sent to `POST /_synapse/admin/v1/rooms/<roomID>/kick` (that endpoint does not exist — see contracts doc §3); the classified force-join / `make_room_admin` sender recovery is used instead
 
 ### Requirement: ReconcileMembers SHALL drive room membership to a desired set
 
@@ -145,7 +150,7 @@ When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the 
 #### Scenario: Reconcile removes extra members via RemoveMember fallback
 
 - **WHEN** `ReconcileMembers` finds a joined user not in `desired`
-- **THEN** `RemoveMember` is invoked for that user; if CS kick fails on Synapse, the make_room_admin fallback runs inside RemoveMember — ReconcileMembers itself does not reimplement fallback
+- **THEN** `RemoveMember` is invoked for that user; if CS kick fails on Synapse, the classified force-join / make_room_admin sender recovery runs inside RemoveMember — ReconcileMembers itself does not reimplement fallback
 
 ### Requirement: AppService operations SHALL adapt to declarative-vs-runtime model transparently
 
@@ -182,12 +187,12 @@ When the CS kick fails due to sender-not-in-room or sender-PL-insufficient, the 
 
 ### Requirement: Metadata and messaging methods SHALL recover from sender-not-in-room on Synapse
 
-`SetRoomMetadata`, `RenameRoom`, and `SendSystemMessage` SHALL use the same make_room_admin recovery as `AddMember` when CS API returns sender-not-in-room on Synapse. These methods take an optional business-level "actor" hint (e.g., "team-admin"); when no hint is given, the implementation uses the admin identity and the recovery path applies.
+`SetRoomMetadata`, `RenameRoom`, and `SendSystemMessage` SHALL use the same classified sender recovery as `AddMember` on Synapse — force-join via `POST /_synapse/admin/v1/join/{roomID}` when the CS API returns sender-not-in-room, `make_room_admin` when it returns an insufficient-power error — then retry the CS operation. These methods take an optional business-level "actor" hint (e.g., "team-admin"); when no hint is given, the implementation uses the admin identity and the recovery path applies.
 
-#### Scenario: SetRoomMetadata recovers via make_room_admin
+#### Scenario: SetRoomMetadata recovers via force-join when sender not in room
 
 - **WHEN** `SetRoomMetadata(ctx, roomID, meta)` runs on SynapseMatrixOps and the CS `PUT /rooms/<roomID>/state/room.meta` returns `403 M_FORBIDDEN "User @admin:dom not in room"`
-- **THEN** the implementation invokes `make_room_admin`, retries the state PUT, and returns nil on success
+- **THEN** the implementation force-joins the sender via `POST /_synapse/admin/v1/join/{roomID}`, retries the state PUT, and returns nil on success
 
 ### Requirement: Query methods SHALL work cross-room on both providers
 

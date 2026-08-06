@@ -225,8 +225,8 @@ client.AppServiceSmokeTest(ctx)
 |---|---|---|
 | **用户身份与凭证** | 8-10 | EnsureUser（Synapse 用 admin API PUT）、SetPassword（admin bot vs admin API）、Deactivate（admin bot 命令 vs admin API） |
 | **房间生命周期** | 5-6 | CreateRoom（防御性注入 creator）、DissolveRoom（admin bot delete-room vs DELETE v2）、ReleaseAlias（CS API 一致） |
-| **房间成员管理** | 8-10 | AddMember/RemoveMember（Synapse 需 make_room_admin fallback）、ForceLeave（admin bot vs 不存在）、ReconcileMembers（组合） |
-| **房间元数据与消息** | 3-4 | SetRoomState/SetRoomName/SendMessage（Synapse 需 in-room fallback） |
+| **房间成员管理** | 8-10 | AddMember/RemoveMember（Synapse 需分类 sender-recovery：sender 不在房 → `POST /_synapse/admin/v1/join/{roomID}` force-join；PL 不足 → make_room_admin）、ForceLeave（admin bot vs 不存在）、ReconcileMembers（组合） |
+| **房间元数据与消息** | 3-4 | SetRoomState/SetRoomName/SendMessage（Synapse 需分类 sender-recovery，与 AddMember 同款） |
 | **AppService 治理** | 3-4 | RegisterAppService（运行时 vs 声明式）、UnregisterAppService（运行时 vs 不支持）、RotateToken（运行时 vs helm upgrade） |
 | **查询** | 3-4 | 行为一致，但接口要统一 |
 
@@ -240,7 +240,7 @@ client.AppServiceSmokeTest(ctx)
 
 先抽 **CreateRoom / DissolveRoom / AddMember / RemoveMember** 到 `matrix.MatrixOps` 接口，Tuwunel 和 Synapse 各一个实现。Provisioner 对应调用点切换。
 
-**验证点**：抽象边界是否正确、Synapse 的 make_room_admin fallback 是否工作。
+**验证点**：抽象边界是否正确、Synapse 的分类 sender-recovery（force-join / make_room_admin）是否工作。
 
 ### Phase 2：扩展到全部成员管理 + 房间生命周期
 

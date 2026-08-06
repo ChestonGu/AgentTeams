@@ -4,8 +4,9 @@ package matrix
 // TuwunelMatrixOps and SynapseMatrixOps. It proves that every MatrixOps method
 // produces the same business outcome under both implementations when the
 // underlying homeserver is wired equivalently, and it pins the documented
-// wire divergences (admin-bot chat on Tuwunel vs Synapse REST, plus the
-// make_room_admin fallback on Synapse).
+// wire divergences (admin-bot chat on Tuwunel vs Synapse REST, plus
+// Synapse's classified sender-recovery fallbacks — force-join when the sender
+// is not joined, make_room_admin when it lacks power).
 //
 // The matrix package already has focused per-implementation tests in
 // tuwunel_ops_test.go and synapse_ops_test.go. This file is additive: it runs
@@ -459,9 +460,12 @@ func TestEquiv_AddMember_AlreadyInRoom(t *testing.T) {
 	errT := tuwunelEquivOps(server).AddMember(context.Background(), roomID, target)
 	errS := synapseEquivOps(server).AddMember(context.Background(), roomID, target)
 	assertEquivNil(t, "AddMember already-in", errT, errS)
-	// No make_room_admin / admin-bot fallback should have fired.
+	// No force-join / make_room_admin / admin-bot fallback should have fired.
 	if log.countByPath("/_synapse/admin/v1/rooms/!room:"+equivDomain+"/make_room_admin") != 0 {
 		t.Error("Synapse escalated an idempotent already-in-room case")
+	}
+	if log.countByPath("/_synapse/admin/v1/join/!room:"+equivDomain) != 0 {
+		t.Error("Synapse force-joined an idempotent already-in-room case")
 	}
 	if adminBotMessageCount(log) != 0 {
 		t.Error("Tuwunel delivered an admin-bot message for an idempotent case")
@@ -491,6 +495,9 @@ func TestEquiv_RemoveMember_TargetNotInRoom(t *testing.T) {
 	assertEquivNil(t, "RemoveMember target-not-in", errT, errS)
 	if log.countByPath("/_synapse/admin/v1/rooms/!room:"+equivDomain+"/make_room_admin") != 0 {
 		t.Error("Synapse escalated an idempotent target-not-in-room case")
+	}
+	if log.countByPath("/_synapse/admin/v1/join/!room:"+equivDomain) != 0 {
+		t.Error("Synapse force-joined an idempotent target-not-in-room case")
 	}
 	if adminBotMessageCount(log) != 0 {
 		t.Error("Tuwunel delivered an admin-bot message for an idempotent case")
@@ -1432,18 +1439,46 @@ func TestEquiv_RemoveMember_FallbackFailure(t *testing.T) {
 			t.Errorf("error = %q, want wrap containing 'make_room_admin failed'", err)
 		}
 	})
+
+	t.Run("Synapse_ForceJoinFailure", func(t *testing.T) {
+		joinPath := "/_synapse/admin/v1/join/" + roomID
+		log := &requestLog{}
+		server := equivServer(t, log, func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case kickPath:
+				writeMatrixError(w, http.StatusForbidden, "M_FORBIDDEN",
+					"@admin:"+equivDomain+" not in room "+roomID+".")
+			case joinPath:
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"errcode":"M_FORBIDDEN","error":"not a server admin"}`))
+			default:
+				t.Errorf("unexpected path: %s", r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+		defer server.Close()
+
+		err := synapseEquivOps(server).RemoveMember(context.Background(), roomID, target, "")
+		if err == nil {
+			t.Fatal("expected wrapped error, got nil")
+		}
+		if !strings.Contains(err.Error(), "force-join failed") {
+			t.Errorf("error = %q, want wrap containing 'force-join failed'", err)
+		}
+	})
 }
 
 // TestEquiv_AddMember_FallbackDivergence pins the documented divergence in
 // the invite-failure escalation path:
 //   - Tuwunel: there is NO fallback — a forbidden invite is returned as-is.
-//   - Synapse: a sender-not-joined / insufficient-power invite fails over to
-//     make_room_admin + invite retry.
+//   - Synapse: a sender-not-joined invite fails over to the admin force-join
+//     (POST /_synapse/admin/v1/join/{roomID}) + invite retry.
 func TestEquiv_AddMember_FallbackDivergence(t *testing.T) {
 	roomID := "!room:" + equivDomain
 	target := "@alice:" + equivDomain
 	invitePath := "/_matrix/client/v3/rooms/" + roomID + "/invite"
 	makeAdminPath := "/_synapse/admin/v1/rooms/" + roomID + "/make_room_admin"
+	joinPath := "/_synapse/admin/v1/join/" + roomID
 
 	t.Run("Tuwunel_NoFallback", func(t *testing.T) {
 		log := &requestLog{}
@@ -1467,8 +1502,8 @@ func TestEquiv_AddMember_FallbackDivergence(t *testing.T) {
 		}
 	})
 
-	t.Run("Synapse_MakeRoomAdminRetry", func(t *testing.T) {
-		var inviteCalls int
+	t.Run("Synapse_ForceJoinRetry", func(t *testing.T) {
+		var inviteCalls, joinCalls int
 		log := &requestLog{}
 		server := equivServer(t, log, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
@@ -1481,7 +1516,12 @@ func TestEquiv_AddMember_FallbackDivergence(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("{}"))
-			case makeAdminPath:
+			case joinPath:
+				joinCalls++
+				body := unmarshalBody(t, lastRecordedBody(log, joinPath))
+				if body["user_id"] != "@admin:"+equivDomain {
+					t.Errorf("force-join user_id = %v, want @admin:%s", body["user_id"], equivDomain)
+				}
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("{}"))
 			default:
@@ -1497,19 +1537,23 @@ func TestEquiv_AddMember_FallbackDivergence(t *testing.T) {
 		if inviteCalls != 2 {
 			t.Errorf("invite calls = %d, want 2", inviteCalls)
 		}
-		if log.countByPath(makeAdminPath) != 1 {
-			t.Errorf("make_room_admin calls = %d, want 1", log.countByPath(makeAdminPath))
+		if joinCalls != 1 {
+			t.Errorf("force-join calls = %d, want 1", joinCalls)
+		}
+		if log.countByPath(makeAdminPath) != 0 {
+			t.Error("Synapse must not call make_room_admin for sender-not-joined")
 		}
 	})
 }
 
 // TestEquiv_SetRoomMetadata_FallbackDivergence pins that Synapse escalates a
-// sender-not-joined room.meta write to make_room_admin on the actor, while
-// Tuwunel returns the CS error directly.
+// sender-not-joined room.meta write to an admin force-join of the actor,
+// while Tuwunel returns the CS error directly.
 func TestEquiv_SetRoomMetadata_FallbackDivergence(t *testing.T) {
 	roomID := "!room:" + equivDomain
 	metaPath := "/_matrix/client/v3/rooms/" + roomID + "/state/room.meta/"
 	makeAdminPath := "/_synapse/admin/v1/rooms/" + roomID + "/make_room_admin"
+	joinPath := "/_synapse/admin/v1/join/" + roomID
 	forbiddenErr := "User @team-admin:" + equivDomain + " not in room " + roomID + " (None)"
 
 	t.Run("Tuwunel_NoFallback", func(t *testing.T) {
@@ -1535,8 +1579,8 @@ func TestEquiv_SetRoomMetadata_FallbackDivergence(t *testing.T) {
 		}
 	})
 
-	t.Run("Synapse_MakeRoomAdminOnActor", func(t *testing.T) {
-		var metaCalls int
+	t.Run("Synapse_ForceJoinOnActor", func(t *testing.T) {
+		var metaCalls, joinCalls int
 		log := &requestLog{}
 		server := equivServer(t, log, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
@@ -1548,10 +1592,11 @@ func TestEquiv_SetRoomMetadata_FallbackDivergence(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("{}"))
-			case makeAdminPath:
-				body := unmarshalBody(t, lastRecordedBody(log, makeAdminPath))
+			case joinPath:
+				joinCalls++
+				body := unmarshalBody(t, lastRecordedBody(log, joinPath))
 				if body["user_id"] != "@team-admin:"+equivDomain {
-					t.Errorf("make_room_admin user_id = %v, want the actor @team-admin:%s",
+					t.Errorf("force-join user_id = %v, want the actor @team-admin:%s",
 						body["user_id"], equivDomain)
 				}
 				w.WriteHeader(http.StatusOK)
@@ -1572,15 +1617,22 @@ func TestEquiv_SetRoomMetadata_FallbackDivergence(t *testing.T) {
 		if metaCalls != 2 {
 			t.Errorf("room.meta writes = %d, want 2", metaCalls)
 		}
+		if joinCalls != 1 {
+			t.Errorf("force-join calls = %d, want 1", joinCalls)
+		}
+		if log.countByPath(makeAdminPath) != 0 {
+			t.Error("Synapse must not call make_room_admin for sender-not-joined")
+		}
 	})
 }
 
 // TestEquiv_SendSystemMessage_FallbackDivergence pins that Synapse escalates a
-// sender-not-joined system message (admin identity) to make_room_admin on the
-// admin, while Tuwunel returns the CS error directly.
+// sender-not-joined system message (admin identity) to an admin force-join of
+// the admin, while Tuwunel returns the CS error directly.
 func TestEquiv_SendSystemMessage_FallbackDivergence(t *testing.T) {
 	roomID := "!room:" + equivDomain
 	makeAdminPath := "/_synapse/admin/v1/rooms/" + roomID + "/make_room_admin"
+	joinPath := "/_synapse/admin/v1/join/" + roomID
 	sendPrefix := "/_matrix/client/v3/rooms/" + roomID + "/send/m.room.message/"
 	forbiddenErr := "User @admin:" + equivDomain + " not in room " + roomID + " (None)"
 
@@ -1605,8 +1657,8 @@ func TestEquiv_SendSystemMessage_FallbackDivergence(t *testing.T) {
 		}
 	})
 
-	t.Run("Synapse_MakeRoomAdminOnAdmin", func(t *testing.T) {
-		var sendCalls int
+	t.Run("Synapse_ForceJoinOnAdmin", func(t *testing.T) {
+		var sendCalls, joinCalls int
 		log := &requestLog{}
 		server := equivServer(t, log, func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -1618,10 +1670,11 @@ func TestEquiv_SendSystemMessage_FallbackDivergence(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("{}"))
-			case r.URL.Path == makeAdminPath:
-				body := unmarshalBody(t, lastRecordedBody(log, makeAdminPath))
+			case r.URL.Path == joinPath:
+				joinCalls++
+				body := unmarshalBody(t, lastRecordedBody(log, joinPath))
 				if body["user_id"] != "@admin:"+equivDomain {
-					t.Errorf("make_room_admin user_id = %v, want @admin:%s", body["user_id"], equivDomain)
+					t.Errorf("force-join user_id = %v, want @admin:%s", body["user_id"], equivDomain)
 				}
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("{}"))
@@ -1637,6 +1690,12 @@ func TestEquiv_SendSystemMessage_FallbackDivergence(t *testing.T) {
 		}
 		if sendCalls != 2 {
 			t.Errorf("send calls = %d, want 2", sendCalls)
+		}
+		if joinCalls != 1 {
+			t.Errorf("force-join calls = %d, want 1", joinCalls)
+		}
+		if log.countByPath(makeAdminPath) != 0 {
+			t.Error("Synapse must not call make_room_admin for sender-not-joined")
 		}
 	})
 }

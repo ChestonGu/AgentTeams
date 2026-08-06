@@ -87,18 +87,23 @@ Controller 现有架构：业务层（Provisioner / Initializer / HTTP handlers�
 
 **注意**：`UserRef` 不含 Password——但 Provisioner 当前需要 Password 写入 creds。**折中**：`ProvisionUser` 返回 `UserRef` + 凭证通过 out-parameter 或单独方法（`UserCredentials()`）暴露。**待 tasks 阶段 finalize**。
 
-### Decision 4: Synapse 的 make_room_admin fallback 策略
+### Decision 4: Synapse 的 sender-recovery 策略（按错误类型分流）
 
-**选择**：`SynapseMatrixOps` 的 `AddMember` / `RemoveMember` / `SetRoomMetadata` / `RenameRoom` / `SendSystemMessage` 在收到 sender-not-in-room 或 PL-insufficient 错误时，调 `POST /_synapse/admin/v1/rooms/{id}/make_room_admin {"user_id":"<admin>"}` 让 admin 接管房间（Synapse admin API 会：grant PL 100 + invite admin + admin 自动 join），然后重试 CS API 操作。
+**选择**：`SynapseMatrixOps` 的 `AddMember` / `RemoveMember` / `SetRoomMetadata` / `RenameRoom` / `SendSystemMessage` 在收到 sender 侧拒绝错误时，由 `classifySynapseSenderError` 分流：
+- **sender 不在房**（`"... not in room ..."`，`event_auth.py:687`）→ 调 `POST /_synapse/admin/v1/join/{roomID} {"user_id":"<sender>"}` **force-join**（Synapse 原生 membership 恢复端点：自动 invite + join，不改 power_levels），再重试 CS API 操作
+- **sender PL 不足**（`"permission to invite"` / `"permission to post"` / `"cannot kick user"`）→ 调 `POST /_synapse/admin/v1/rooms/{id}/make_room_admin {"user_id":"<sender>"}`（grant PL 100），再重试 CS API 操作
+
+force-join 重试后若仍失败且错误被分类为 PL 不足，会继续落到 make_room_admin（两级 fallthrough）；否则直接返回错误。
 
 **Rationale**（基于源码核对）：
 - Synapse 1.127 admin API 没有 kick 端点（`synapse/rest/admin/` 无 servlet）
-- `make_room_admin`（`rooms.py:568-`）是 Synapse 官方提供的"admin 接管房间"机制，副作用是改 power_levels——但在 controller-managed 房间里 admin 本应 PL=100，所以夺权不会引入非预期变化
-- 夺权后 admin 永久在房——后续操作无需再 fallback
+- `POST /v1/join/{room}`（`synapse/rest/admin/rooms.py`）能把**任意本地用户**强制 join 进房间（自动 invite + join）——正好修复"sender 不在房"，且不改 power_levels
+- `make_room_admin`（`rooms.py:568-`）是 Synapse 官方提供的"admin 接管房间"机制（grant PL 100）——正好修复"PL 不足"，副作用是改 power_levels，但在 controller-managed 房间里 sender 本应 PL=100，所以夺权不会引入非预期变化
+- 按错误类型分流，避免对"仅不在房"场景做无谓夺权
 
 **Alternatives**：
 - OperatorResolver（已废弃）：解决的是 admin 偶尔不在房的问题，但 admin 默认在房（CreateRoom 时 invite），实际触发少
-- 用 `POST /v1/join/{room}` admin 强制 join：这个端点 join 的是任意用户，不是 admin 自己，且需要 admin 已被 invite——循环依赖
+- 统一用 make_room_admin（初期方案，已细化）：对"sender 不在房"场景也有效（夺权带 invite+join），但会无谓改 power_levels；force-join 更轻量且语义精准
 - 不做 fallback，让业务层处理：违反抽象层目标
 
 ### Decision 5: ForceLeaveRoom 不进 MatrixOps 接口
@@ -106,7 +111,7 @@ Controller 现有架构：业务层（Provisioner / Initializer / HTTP handlers�
 **选择**：MatrixOps 不暴露 `ForceLeaveRoom`——它作为 `RemoveMember` 实现内部的 fallback 存在。业务层（Provisioner）通过 `RemoveMember` 触发，不直接调强踢。
 
 **Rationale**：
-- 现有 `Provisioner.ForceLeaveRoom` 接口向 controller 暴露（`interfaces.go:62`）——保留这个接口方法，但内部实现改为调 `matrixOps.RemoveMember`（Synapse 下走 make_room_admin；Tuwunel 下走 admin bot force-leave-room）
+- 现有 `Provisioner.ForceLeaveRoom` 接口向 controller 暴露（`interfaces.go:62`）——保留这个接口方法，但内部实现改为调 `matrixOps.RemoveMember`（Synapse 下走分类 sender-recovery：force-join / make_room_admin；Tuwunel 下走 admin bot force-leave-room）
 - 业务语义上 ForceLeaveRoom = "确保用户不在房"，与 RemoveMember 相同
 - 减少接口方法数
 
@@ -143,8 +148,8 @@ Controller 现有架构：业务层（Provisioner / Initializer / HTTP handlers�
 **[Risk] 大接口方法多，迁移期可能漏迁移某些调用点** → 迁移期 `matrix.Client` 和 `MatrixOps` 并存
 - **Mitigation**：Phase 5 用 grep 确认 `internal/service/`、`internal/initializer/`、`internal/server/` 里不再有 `matrix.Client` / `matrix.TuwunelClient` / `!admin` 引用；CI 加 lint 规则
 
-**[Risk] make_room_admin 改 power_levels 引入副作用** → 在 controller-managed 房间里 admin 本应 PL=100
-- **Mitigation**：fallback 仅在 admin 不在房/PL 不足时触发；正常路径（admin 默认在房）不触发；fallback 后 admin 永久在房，后续操作稳定
+**[Risk] make_room_admin 改 power_levels 引入副作用** → 在 controller-managed 房间里 sender 本应 PL=100
+- **Mitigation**：分类恢复只在 sender 不在房（force-join，不改 PL）或 PL 不足（make_room_admin）时触发；正常路径（sender 默认在房）不触发；恢复后 sender 永久在房，后续操作稳定
 
 **[Risk] 业务类型转换层增加代码量** → RoomSpec ↔ CreateRoomRequest 等
 - **Acceptable because**：转换集中在 `*_ops.go` 实现里，业务层变薄；类型安全提升
@@ -155,7 +160,7 @@ Controller 现有架构：业务层（Provisioner / Initializer / HTTP handlers�
 **[Trade-off] UserRef 不含 Password，但 Provisioner 需要写 creds** → 凭证获取方式变化
 - **Mitigation**：Decision 3 的折中——ProvisionUser 返回 UserRef，凭证通过单独方法或在实现内部直接更新 creds store；tasks 阶段 finalize
 
-**[Trade-off] Synapse 路径比 Tuwunel 复杂（make_room_admin fallback）** → SynapseMatrixOps 代码量更多
+**[Trade-off] Synapse 路径比 Tuwunel 复杂（分类 sender-recovery：force-join / make_room_admin）** → SynapseMatrixOps 代码量更多
 - **Acceptable because**：复杂度封装在一个文件里，业务层不感知
 
 ## Migration Plan

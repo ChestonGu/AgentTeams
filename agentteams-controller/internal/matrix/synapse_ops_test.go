@@ -13,9 +13,11 @@ import (
 // These tests exercise SynapseMatrixOps through a mocked Synapse homeserver
 // (httptest). They verify the Synapse-specific behaviors documented in
 // design/synapse-interface-contracts.md: creator auto-injection on
-// CreateRoom (§4 修复 4), make_room_admin fallback on invite/kick
-// (event_auth.py:687/:703/:717), precise kick idempotency (room_member.py:1022),
-// and v2 admin room deletion (§3).
+// CreateRoom (§4 修复 4), the classified sender-recovery fallbacks (sender
+// not joined → admin force-join via POST /_synapse/admin/v1/join/{roomID};
+// insufficient power → make_room_admin; event_auth.py:687/:703/:717),
+// precise kick idempotency (room_member.py:1022), and v2 admin room
+// deletion (§3).
 
 func TestSynapseOps_CreateRoom_AutoInjectsCreator(t *testing.T) {
 	var captured map[string]interface{}
@@ -129,10 +131,13 @@ func TestSynapseOps_CreateRoom_ActorPLInjection(t *testing.T) {
 	}
 }
 
-func TestSynapseOps_AddMember_FallbackViaMakeRoomAdmin(t *testing.T) {
+// TestSynapseOps_AddMember_ForceJoinRetry verifies the sender-not-joined
+// invite failure (event_auth.py:687) recovers via the admin force-join
+// (POST /_synapse/admin/v1/join/{roomID}) and retries the CS invite.
+func TestSynapseOps_AddMember_ForceJoinRetry(t *testing.T) {
 	var (
-		inviteCalls    int
-		makeAdminCalls int
+		inviteCalls int
+		joinCalls   int
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -146,6 +151,64 @@ func TestSynapseOps_AddMember_FallbackViaMakeRoomAdmin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]string{
 					"errcode": "M_FORBIDDEN",
 					"error":   "@admin:d not in room !room:d.",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		case "/_synapse/admin/v1/join/!room:d":
+			joinCalls++
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode force-join body: %v", err)
+			}
+			if body["user_id"] != "@admin:d" {
+				t.Errorf("force-join user_id = %q, want @admin:d", body["user_id"])
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if err := ops.AddMember(context.Background(), "!room:d", "@alice:d"); err != nil {
+		t.Fatalf("AddMember with force-join fallback: %v", err)
+	}
+	if inviteCalls != 2 {
+		t.Errorf("invite calls = %d, want 2 (initial + retry)", inviteCalls)
+	}
+	if joinCalls != 1 {
+		t.Errorf("force-join calls = %d, want 1", joinCalls)
+	}
+}
+
+// TestSynapseOps_AddMember_MakeRoomAdminOnPermission verifies the
+// insufficient-power invite failure (event_auth.py:703 — "permission to
+// invite") recovers via make_room_admin on the sender and retries the invite.
+func TestSynapseOps_AddMember_MakeRoomAdminOnPermission(t *testing.T) {
+	var (
+		inviteCalls    int
+		makeAdminCalls int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/invite":
+			inviteCalls++
+			if inviteCalls == 1 {
+				// Synapse 1.127 event_auth.py:703 — insufficient power to invite.
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{
+					"errcode": "M_FORBIDDEN",
+					"error":   "You don't have permission to invite users to the room.",
 				})
 				return
 			}
@@ -174,13 +237,175 @@ func TestSynapseOps_AddMember_FallbackViaMakeRoomAdmin(t *testing.T) {
 	}, server.Client())
 
 	if err := ops.AddMember(context.Background(), "!room:d", "@alice:d"); err != nil {
-		t.Fatalf("AddMember with fallback: %v", err)
+		t.Fatalf("AddMember with make_room_admin fallback: %v", err)
 	}
 	if inviteCalls != 2 {
 		t.Errorf("invite calls = %d, want 2 (initial + retry)", inviteCalls)
 	}
 	if makeAdminCalls != 1 {
 		t.Errorf("make_room_admin calls = %d, want 1", makeAdminCalls)
+	}
+}
+
+// TestSynapseOps_AddMember_ForceJoinThenPowerFallthrough verifies the
+// two-stage chain: a sender-not-joined invite recovers via force-join, but
+// when the retry then fails with insufficient power (force-join restored
+// membership, not power), the failure falls through to make_room_admin and
+// the second retry succeeds.
+func TestSynapseOps_AddMember_ForceJoinThenPowerFallthrough(t *testing.T) {
+	var (
+		inviteCalls    int
+		joinCalls      int
+		makeAdminCalls int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/invite":
+			inviteCalls++
+			switch inviteCalls {
+			case 1:
+				// event_auth.py:687 — sender not joined.
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{
+					"errcode": "M_FORBIDDEN",
+					"error":   "@admin:d not in room !room:d.",
+				})
+			case 2:
+				// Force-join restored membership but not power.
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{
+					"errcode": "M_FORBIDDEN",
+					"error":   "You don't have permission to invite users to the room.",
+				})
+			default:
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("{}"))
+			}
+		case "/_synapse/admin/v1/join/!room:d":
+			joinCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		case "/_synapse/admin/v1/rooms/!room:d/make_room_admin":
+			makeAdminCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if err := ops.AddMember(context.Background(), "!room:d", "@alice:d"); err != nil {
+		t.Fatalf("AddMember force-join → make_room_admin chain: %v", err)
+	}
+	if inviteCalls != 3 {
+		t.Errorf("invite calls = %d, want 3 (initial + after join + after make_room_admin)", inviteCalls)
+	}
+	if joinCalls != 1 {
+		t.Errorf("force-join calls = %d, want 1", joinCalls)
+	}
+	if makeAdminCalls != 1 {
+		t.Errorf("make_room_admin calls = %d, want 1", makeAdminCalls)
+	}
+}
+
+// TestSynapseOps_AddMember_ForceJoinFailureWrap verifies that a failed
+// force-join surfaces as a wrapped error naming both the original CS failure
+// and the recovery step.
+func TestSynapseOps_AddMember_ForceJoinFailureWrap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/invite":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "@admin:d not in room !room:d.",
+			})
+		case "/_synapse/admin/v1/join/!room:d":
+			// Force-join itself is rejected (e.g. not a server admin).
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"errcode":"M_FORBIDDEN","error":"not a server admin"}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	err := ops.AddMember(context.Background(), "!room:d", "@alice:d")
+	if err == nil {
+		t.Fatal("AddMember: expected wrapped error, got nil")
+	}
+	if !strings.Contains(err.Error(), "force-join failed") {
+		t.Errorf("error = %q, want wrap containing 'force-join failed'", err)
+	}
+	if !strings.Contains(err.Error(), "invite @alice:d to") {
+		t.Errorf("error = %q, want wrap containing the failed op name", err)
+	}
+}
+
+// TestSynapseOps_RemoveMember_ForceJoinRetry verifies the sender-not-joined
+// kick failure recovers via the admin force-join and retries the CS kick
+// (Synapse 1.127 has no admin kick endpoint, so the kick always goes through
+// the CS API).
+func TestSynapseOps_RemoveMember_ForceJoinRetry(t *testing.T) {
+	var (
+		kickCalls int
+		joinCalls int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/kick":
+			kickCalls++
+			if kickCalls == 1 {
+				// Synapse 1.127 event_auth.py:687 — sender (admin) not joined.
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{
+					"errcode": "M_FORBIDDEN",
+					"error":   "@admin:d not in room !room:d.",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		case "/_synapse/admin/v1/join/!room:d":
+			joinCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if err := ops.RemoveMember(context.Background(), "!room:d", "@alice:d", ""); err != nil {
+		t.Fatalf("RemoveMember with force-join fallback: %v", err)
+	}
+	if kickCalls != 2 {
+		t.Errorf("kick calls = %d, want 2 (initial + retry)", kickCalls)
+	}
+	if joinCalls != 1 {
+		t.Errorf("force-join calls = %d, want 1", joinCalls)
 	}
 }
 
@@ -309,14 +534,13 @@ func TestSynapseOps_DissolveRoom_UsesV2Delete(t *testing.T) {
 
 // === Phase 3: Room Metadata & Messaging fallback + queries + HealthCheck ===
 
-// TestSynapseOps_SetRoomMetadata_FallbackViaMakeRoomAdmin verifies that a
-// room.meta write failing with sender-not-joined (event_auth.py:731) escalates
-// to make_room_admin on the actor and retries the CS write with the same
-// token.
-func TestSynapseOps_SetRoomMetadata_FallbackViaMakeRoomAdmin(t *testing.T) {
+// TestSynapseOps_SetRoomMetadata_ForceJoinOnActor verifies that a room.meta
+// write failing with sender-not-joined (event_auth.py:731) escalates to an
+// admin force-join of the actor and retries the CS write with the same token.
+func TestSynapseOps_SetRoomMetadata_ForceJoinOnActor(t *testing.T) {
 	var (
-		stateCalls     int
-		makeAdminCalls int
+		stateCalls int
+		joinCalls  int
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -345,14 +569,14 @@ func TestSynapseOps_SetRoomMetadata_FallbackViaMakeRoomAdmin(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("{}"))
-		case "/_synapse/admin/v1/rooms/!room:d/make_room_admin":
-			makeAdminCalls++
+		case "/_synapse/admin/v1/join/!room:d":
+			joinCalls++
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode make_room_admin body: %v", err)
+				t.Fatalf("decode force-join body: %v", err)
 			}
 			if body["user_id"] != "@team-admin:d" {
-				t.Errorf("make_room_admin user_id = %q, want @team-admin:d (the actor)", body["user_id"])
+				t.Errorf("force-join user_id = %q, want @team-admin:d (the actor)", body["user_id"])
 			}
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("{}"))
@@ -370,13 +594,13 @@ func TestSynapseOps_SetRoomMetadata_FallbackViaMakeRoomAdmin(t *testing.T) {
 	err := ops.SetRoomMetadata(context.Background(), "!room:d", map[string]interface{}{"roomKind": "team_room"},
 		MemberSpec{ActorUserID: "@team-admin:d", ActorToken: "team-admin-token"})
 	if err != nil {
-		t.Fatalf("SetRoomMetadata with fallback: %v", err)
+		t.Fatalf("SetRoomMetadata with force-join fallback: %v", err)
 	}
 	if stateCalls != 2 {
 		t.Errorf("room.meta state calls = %d, want 2 (initial + retry)", stateCalls)
 	}
-	if makeAdminCalls != 1 {
-		t.Errorf("make_room_admin calls = %d, want 1", makeAdminCalls)
+	if joinCalls != 1 {
+		t.Errorf("force-join calls = %d, want 1", joinCalls)
 	}
 }
 
@@ -439,13 +663,13 @@ func TestSynapseOps_RenameRoom_FallbackViaMakeRoomAdmin(t *testing.T) {
 	}
 }
 
-// TestSynapseOps_SendSystemMessage_FallbackViaMakeRoomAdmin verifies the
-// system-message path (admin identity) escalates to make_room_admin when the
-// admin is not joined, then retries the send.
-func TestSynapseOps_SendSystemMessage_FallbackViaMakeRoomAdmin(t *testing.T) {
+// TestSynapseOps_SendSystemMessage_ForceJoinOnAdmin verifies the
+// system-message path (admin identity) escalates to an admin force-join when
+// the admin is not joined, then retries the send.
+func TestSynapseOps_SendSystemMessage_ForceJoinOnAdmin(t *testing.T) {
 	var (
-		sendCalls      int
-		makeAdminCalls int
+		sendCalls int
+		joinCalls int
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -464,14 +688,14 @@ func TestSynapseOps_SendSystemMessage_FallbackViaMakeRoomAdmin(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("{}"))
-		case r.URL.Path == "/_synapse/admin/v1/rooms/!room:d/make_room_admin":
-			makeAdminCalls++
+		case r.URL.Path == "/_synapse/admin/v1/join/!room:d":
+			joinCalls++
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode make_room_admin body: %v", err)
+				t.Fatalf("decode force-join body: %v", err)
 			}
 			if body["user_id"] != "@admin:d" {
-				t.Errorf("make_room_admin user_id = %q, want @admin:d", body["user_id"])
+				t.Errorf("force-join user_id = %q, want @admin:d", body["user_id"])
 			}
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("{}"))
@@ -487,13 +711,13 @@ func TestSynapseOps_SendSystemMessage_FallbackViaMakeRoomAdmin(t *testing.T) {
 	}, server.Client())
 
 	if err := ops.SendSystemMessage(context.Background(), "!room:d", "hello"); err != nil {
-		t.Fatalf("SendSystemMessage with fallback: %v", err)
+		t.Fatalf("SendSystemMessage with force-join fallback: %v", err)
 	}
 	if sendCalls != 2 {
 		t.Errorf("send calls = %d, want 2 (initial + retry)", sendCalls)
 	}
-	if makeAdminCalls != 1 {
-		t.Errorf("make_room_admin calls = %d, want 1", makeAdminCalls)
+	if joinCalls != 1 {
+		t.Errorf("force-join calls = %d, want 1", joinCalls)
 	}
 }
 

@@ -8,7 +8,7 @@ AgentTeams 控制器目前**直接依赖 Matrix 协议层**（`matrix.Client` �
 2. **Tuwunel 特有概念（admin bot 命令）散落在业务代码里** — 6 处 `!admin ...` 命令字符串硬编码在 `provisioner.go` / `provisioner_human.go`，Synapse 完全无对应。
 3. **业务代码硬编码底层 client 构造** — `appservice_mgmt_handler.go:54` 直接 `matrix.NewTuwunelClient(...)`，Synapse 下完全失效。
 4. **Synapse 1.127 的真实约束（已逐条源码核对，见 `design/synapse-interface-contracts.md`）无法在现有架构里封装**：
-   - CS API invite/kick/state/send 都要求操作者 in-room + 充分 PL，失败时需要 `make_room_admin` admin API 夺权 + 自邀请 + 重试（Synapse 特有 fallback）
+   - CS API invite/kick/state/send 都要求操作者 in-room + 充分 PL，失败时需要按错误类型恢复（sender 不在房 → `POST /_synapse/admin/v1/join/{room}` 强制加入；PL 不足 → `make_room_admin` admin API 夺权）+ 重试（Synapse 特有 fallback）
    - admin API 没有 kick 端点（源码核对：`synapse/rest/admin/` 无此 servlet）
    - AppService 只能声明式加载（无运行时注册 API）
 
@@ -33,7 +33,7 @@ AgentTeams 控制器目前**直接依赖 Matrix 协议层**（`matrix.Client` �
 
 - **`TuwunelMatrixOps`**：现有逻辑搬迁——直接转发 CS API；kick 失败 fallback 到 `!admin users force-leave-room`；AS 走 `!admin appservices register`；DissolveRoom 走 `!admin rooms delete-room`。**零行为变化**。
 - **`SynapseMatrixOps`**：基于源码核对实现 Synapse 1.127 真实约束——
-  - `AddMember`/`RemoveMember`/`SetRoomMetadata`/`RenameRoom`/`SendSystemMessage` 失败时，若错误是 sender 不在房/PL 不足（`event_auth.py:687,717`），调 `POST /_synapse/admin/v1/rooms/{id}/make_room_admin` 让 admin 接管房间（夺权 + 自动 invite + join），再重试 CS API
+  - `AddMember`/`RemoveMember`/`SetRoomMetadata`/`RenameRoom`/`SendSystemMessage` 失败时，按错误类型分流恢复（`classifySynapseSenderError`）：sender 不在房（`event_auth.py:687`）→ 调 `POST /_synapse/admin/v1/join/{roomID}` 强制 join 再重试 CS API；PL 不足（`event_auth.py:703,717`）→ 调 `POST /_synapse/admin/v1/rooms/{id}/make_room_admin` 让 admin 接管房间（夺权 + 自动 invite + join）再重试 CS API
   - `RemoveMember` 的幂等匹配精确到 Synapse 实际字符串（`"The target user is not in the room"` vs `"@x not in room"` vs `"You cannot kick user"`）
   - `DissolveRoom` 走 `DELETE /_synapse/admin/v2/rooms/{id}`（异步 fire-and-forget）
   - `RegisterAppService` 仅做 smoke test（声明式，由 Helm 渲染 YAML 加载）
@@ -68,7 +68,7 @@ AgentTeams 控制器目前**直接依赖 Matrix 协议层**（`matrix.Client` �
 
 - `KickFromRoomWithToken` 幂等匹配过宽（`"not in"` 误匹配 sender 不在房，`"cannot kick"` 误匹配 PL 不足）
 - `shouldForceLeaveAfterKickError` 不识别 Synapse 字符串
-- `synKick` 调用不存在的端点（改为 `make_room_admin` + CS kick 重试）
+- `synKick` 调用不存在的端点（改为分类 sender-recovery：force-join / `make_room_admin` + CS kick 重试）
 - `CreateRoom` 不保证 creator 在 `power_level_content_override.users` 里（防御性自动注入）
 - `LeaveRoom` 不幂等（"user not in room" 应为 nil）
 
@@ -93,8 +93,8 @@ AgentTeams 控制器目前**直接依赖 Matrix 协议层**（`matrix.Client` �
 **新增**：
 - `agentteams-controller/internal/matrix/ops.go`（新）— `MatrixOps` 接口 + 业务类型定义（RoomSpec / RoomRef / UserSpec / MemberSpec / RoomMetadata / AppServiceRegistration 等）
 - `agentteams-controller/internal/matrix/tuwunel_ops.go`（新）— `TuwunelMatrixOps` 实现（现有逻辑搬迁）
-- `agentteams-controller/internal/matrix/synapse_ops.go`（新）— `SynapseMatrixOps` 实现（含 make_room_admin fallback）
-- `agentteams-controller/internal/matrix/synapse_admin.go`（新）— Synapse admin API 客户端（make_room_admin / delete_room / deactivate / reset_password 等）
+- `agentteams-controller/internal/matrix/synapse_ops.go`（新）— `SynapseMatrixOps` 实现（含分类 sender-recovery：force-join / make_room_admin）
+- `agentteams-controller/internal/matrix/synapse_admin.go`（新）— Synapse admin API 客户端（join / make_room_admin / delete_room / deactivate / reset_password 等）
 
 **修改**（按 Phase 渐进）：
 - `agentteams-controller/internal/service/provisioner.go` — `matrix matrix.Client` 字段改为 `matrixOps matrix.MatrixOps`；50+ 调用点迁移

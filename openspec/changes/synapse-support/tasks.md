@@ -9,7 +9,7 @@
 
 ## 1. Phase 1 — 4 核心操作（验证抽象边界）
 
-目标：抽 `CreateRoom` / `DissolveRoom` / `AddMember` / `RemoveMember` 到 MatrixOps；两个实现；Provisioner 对应调用点切换；验证 Tuwunel 零回归 + Synapse make_room_admin fallback 工作。
+目标：抽 `CreateRoom` / `DissolveRoom` / `AddMember` / `RemoveMember` 到 MatrixOps；两个实现；Provisioner 对应调用点切换；验证 Tuwunel 零回归 + Synapse 分类 sender-recovery（force-join / make_room_admin）工作。
 
 ### TuwunelMatrixOps 实现（搬迁现有逻辑）
 
@@ -21,12 +21,12 @@
 
 ### SynapseMatrixOps 实现（基于源码核对）
 
-- [x] 1.6 新增 `agentteams-controller/internal/matrix/synapse_admin.go`：实现 Synapse admin API 客户端方法 `MakeRoomAdmin(ctx, roomID, userID)` → `POST /_synapse/admin/v1/rooms/{id}/make_room_admin`；`DeleteRoom(ctx, roomID)` → `DELETE /_synapse/admin/v2/rooms/{id}`（fire-and-forget）；基于 `synAdminCall` 模式
+- [x] 1.6 新增 `agentteams-controller/internal/matrix/synapse_admin.go`：实现 Synapse admin API 客户端方法 `ForceJoinRoom(ctx, roomID, userID)` → `POST /_synapse/admin/v1/join/{roomID}`；`MakeRoomAdmin(ctx, roomID, userID)` → `POST /_synapse/admin/v1/rooms/{id}/make_room_admin`；`DeleteRoom(ctx, roomID)` → `DELETE /_synapse/admin/v2/rooms/{id}`（fire-and-forget）；基于 `synAdminCall` 模式
 - [x] 1.7 新增 `agentteams-controller/internal/matrix/synapse_ops.go`：实现 `SynapseMatrixOps` 结构体 + 构造函数；持有 `*TuwunelClient`（复用 CS API 方法）+ `synapseAdmin` + `Config`
 - [x] 1.8 `SynapseMatrixOps.CreateRoom`：复用 `TuwunelClient.CreateRoom`，但**自动注入 creator**（contracts §4 修复 4）：解析 creator user_id（admin），若不在 `RoomSpec.PowerLevels` 中则注入 PL=100
 - [x] 1.9 `SynapseMatrixOps.DissolveRoom`：调用 `synapseAdmin.DeleteRoom`（fire-and-forget）
-- [x] 1.10 `SynapseMatrixOps.AddMember`：先 `InviteToRoom`（admin token）；若错误是 sender 不在房（`"@x not in room"`，contracts §2 I1）或 PL 不足（`"You don't have permission to invite"`），调 `MakeRoomAdmin(roomID, adminUserID)` → 重试 `InviteToRoom`；保留 `"is already in the room"` 幂等
-- [x] 1.11 `SynapseMatrixOps.RemoveMember`：先 `KickFromRoom`；精确幂等匹配（`"target user is not in"` → nil）；若错误是 sender 不在房或 PL 不足（`"cannot kick user"`/`"@x not in room"`），调 `MakeRoomAdmin` → 重试 `KickFromRoom`；**不**调用不存在的 `/_synapse/admin/v1/rooms/.../kick`（contracts §3）
+- [x] 1.10 `SynapseMatrixOps.AddMember`：先 `InviteToRoom`（admin token）；错误经 `classifySynapseSenderError` 分流：sender 不在房（`"@x not in room"`，contracts §2 I1）→ `ForceJoinRoom(roomID, adminUserID)` 重试；PL 不足（`"You don't have permission to invite"`）→ `MakeRoomAdmin(roomID, adminUserID)` 重试；force-join 重试后仍失败且分类为 PL 不足 → 继续落到 MakeRoomAdmin（fallthrough）；保留 `"is already in the room"` 幂等
+- [x] 1.11 `SynapseMatrixOps.RemoveMember`：先 `KickFromRoom`；精确幂等匹配（`"target user is not in"` → nil）；错误经 `classifySynapseSenderError` 分流：sender 不在房（`"@x not in room"`）→ `ForceJoinRoom` → 重试；PL 不足（`"cannot kick user"`/`"cannot unban user"`）→ `MakeRoomAdmin` → 重试；**不**调用不存在的 `/_synapse/admin/v1/rooms/.../kick`（contracts §3）
 
 ### 业务层迁移（Phase 1 调用点）
 
@@ -45,9 +45,9 @@
 
 - [x] 1.21 新增 `agentteams-controller/internal/matrix/tuwunel_ops_test.go::TestTuwunelOps_CreateRoom` / `_DissolveRoom` / `_AddMember` / `_RemoveMember`：用 httptest.Server mock Tuwunel，断言 CS API 调用 + admin bot 命令字符串与现有 provisioner_test 期望一致
 - [x] 1.22 新增 `synapse_ops_test.go::TestSynapseOps_CreateRoom_AutoInjectsCreator`：RoomSpec.PowerLevels 不含 admin → 请求体 users 含 admin=100
-- [x] 1.23 新增 `TestSynapseOps_AddMember_FallbackViaMakeRoomAdmin`：mock 首次 invite 返回 403 `"@admin not in room"`，断言调用 make_room_admin 后重试成功
+- [x] 1.23 新增 `TestSynapseOps_AddMember_ForceJoinRetry`（mock 首次 invite 返回 403 `"@admin not in room"`，断言调用 force-join 后重试成功）+ `TestSynapseOps_AddMember_MakeRoomAdminOnPermission`（返回 `"You don't have permission to invite"` → 调 make_room_admin → 重试）+ `TestSynapseOps_AddMember_ForceJoinThenPowerFallthrough`（force-join 后仍失败且分类为 PL 不足 → 落到 make_room_admin）+ `TestSynapseOps_AddMember_ForceJoinFailureWrap`（force-join 失败 → 返回 `force-join failed` 包装错误）
 - [x] 1.24 新增 `TestSynapseOps_RemoveMember_Idempotent_TargetNotInRoom`：返回 `"The target user is not in the room"` → nil
-- [x] 1.25 新增 `TestSynapseOps_RemoveMember_FallbackViaMakeRoomAdmin`：返回 `"You cannot kick user"` → 调 make_room_admin → 重试
+- [x] 1.25 新增 `TestSynapseOps_RemoveMember_ForceJoinRetry`（返回 `"@admin not in room"` → 调 force-join → 重试）；保留 `TestSynapseOps_RemoveMember_FallbackViaMakeRoomAdmin`（返回 `"You cannot kick user"` → 调 make_room_admin → 重试）
 - [x] 1.26 新增 `TestSynapseOps_DissolveRoom_UsesV2Delete`：断言 DELETE `/v2/rooms/{id}` 被调用
 - [x] 1.27 跑全量现有测试（`provisioner_team_test.go` / `client_test.go` / `appservice_test.go`）确认 Tuwunel 零回归；如有 break，修复转换层
 
@@ -66,7 +66,7 @@
 
 - [x] 3.1 MatrixOps 接口追加：`SetRoomMetadata` / `RenameRoom` / `SendSystemMessage` / `ListRoomMembers` / `ListJoinedRooms` / `IsUserInRoom` / `IsManagerJoinedDM` / `HealthCheck`
 - [x] 3.2 `TuwunelMatrixOps` 实现这 8 个方法（搬迁现有逻辑，包括 `SetRoomState` / `SetRoomName` / `SendMessageAsAdmin` / `ListRoomMembers*` / `ListJoinedRooms`）
-- [x] 3.3 `SynapseMatrixOps` 实现这 8 个方法；`SetRoomMetadata`/`RenameRoom`/`SendSystemMessage` 加 make_room_admin fallback（与 AddMember 同款）；查询方法直接转发（admin bypass in-room 检查）
+- [x] 3.3 `SynapseMatrixOps` 实现这 8 个方法；`SetRoomMetadata`/`RenameRoom`/`SendSystemMessage` 加分类 sender-recovery（与 AddMember 同款：sender 不在房 → force-join；PL 不足 → make_room_admin）；查询方法直接转发（admin bypass in-room 检查）
 - [x] 3.4 迁移 `Provisioner` 内的 `SetRoomState` 调用点（`provisioner.go:483, 871, 936, 1452`）→ `SetRoomMetadata`
 - [x] 3.5 迁移 `SetRoomName` 调用点（`provisioner.go:838, 1304, 1310`）→ `RenameRoom`
 - [x] 3.6 迁移 `SendManagerWelcomeMessage`（`provisioner.go:1652`）→ `SendSystemMessage`
@@ -119,7 +119,7 @@
 - [ ] 7.2 Synapse 1.127 dev 实例 + `provider=synapse + appservice.enabled=true`：controller 启动 smoke test 通过
 - [ ] 7.3 Synapse：验证 4 房型创建（worker / team / leader DM / manager DM）
 - [ ] 7.4 Synapse：验证 `ReconcileRoomMembership` 不再因 kick 幂等误匹配吞错
-- [ ] 7.5 Synapse：验证 AddMember/RemoveMember 的 make_room_admin fallback 在 admin 已离开 team 房间后能恢复
+- [ ] 7.5 Synapse：验证 AddMember/RemoveMember 的分类 sender-recovery（force-join / make_room_admin）在 sender 已离开 team 房间后能恢复
 - [ ] 7.6 Synapse：验证 `RotateToken` 返回 501
 - [ ] 7.7 Synapse：验证声明式 AS Secret + homeserver.yaml + StatefulSet 挂载协同工作
 - [ ] 7.8 切换 provider（`helm upgrade` tuwunel↔synapse）验证业务层零感知

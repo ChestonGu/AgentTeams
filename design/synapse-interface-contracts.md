@@ -10,6 +10,11 @@
 > [`synapse-support`](../openspec/changes/synapse-support/) 并落地实现。本文档作为
 > **历史依据**保留，记录 Synapse 1.127 源码核对的原始证据；后续契约以 openspec
 > proposal 与代码为准。面向运维的说明见 [`docs/synapse.md`](../docs/synapse.md)。
+>
+> **实施注记**：本文档 §3.4 方案 B 的 make_room_admin 已落地，但实现细化为**分类
+> sender-recovery**（见 openspec design.md Decision 4）：sender 不在房 → `POST
+> /_synapse/admin/v1/join/{roomID}` force-join；PL 不足 → make_room_admin。以 openspec
+> proposal 的 [spec.md](../openspec/changes/synapse-support/specs/matrix-ops/spec.md) 为准。
 
 ---
 

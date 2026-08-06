@@ -9,6 +9,11 @@
 > [`synapse-support`](../openspec/changes/synapse-support/) 并落地实现。本文档作为
 > **历史依据**保留，记录架构权衡过程；后续实施以 openspec proposal 与代码为准。
 > 面向运维的 Synapse 支持说明见 [`docs/synapse.md`](../docs/synapse.md)。
+>
+> **实施注记**：本文档 §8 / 附录 A 的 **OperatorResolver / JoinRoomAsAdmin 方案已废弃**——实现改在
+> `SynapseMatrixOps` 层做**分类 sender-recovery**（见 §8 表 Phase 1 行的"已废弃"注）：发送方不在房 →
+> `POST /_synapse/admin/v1/join/{roomID}` 强制加入；发送方 PL 不足 → `make_room_admin`。以 openspec
+> proposal 的 [design.md](../openspec/changes/synapse-support/design.md) Decision 4 为准。
 
 ---
 
@@ -564,7 +569,7 @@ func NewSynapseClient(cfg Config, httpClient *http.Client, resolver OperatorReso
 
 | Phase | 改哪个目录 | 具体做什么 | 解决什么问题 |
 |---|---|---|---|
-| **1** | `internal/matrix/` | 给 SynapseClient 加 fallback 链（admin 不在房间时自动找替代操作者）；新增 OperatorResolver 接口、JoinRoomAsAdmin 方法、isNotInRoomErr 辅助 | "admin is not in room" 类报错 |
+| **1** | `internal/matrix/` | ~~给 SynapseClient 加 fallback 链（admin 不在房间时自动找替代操作者）；新增 OperatorResolver 接口、JoinRoomAsAdmin 方法、isNotInRoomErr 辅助~~ **（已废弃）**——实现改为 `SynapseMatrixOps` 分类 sender-recovery：sender 不在房 → `POST /_synapse/admin/v1/join/{roomID}` force-join；PL 不足 → `make_room_admin` | "admin is not in room" 类报错 |
 | **2** | `internal/service/provisioner.go` | Provisioner 实现 OperatorResolver（ResolveInRoomOperator / EnsureAdminInRoom），构造 SynapseClient 时注入 self | Phase 1 接口落地——没有这步，Phase 1 找不到 token |
 | **3** | `internal/matrix/` + `helm/` | AppService 声明式：SynapseClient 覆盖 RegisterAppService 为 smoke-test-only；Helm 渲染声明式 AS YAML + homeserver.yaml 加 app_service_config_files | AS 注册/注销类报错（如果用 AS 模式） |
 | **4** | `internal/config/` + `internal/app/` + `docs/` | env 变量 MatrixProvider、按 provider 选 client、文档 | 收尾 |
@@ -668,4 +673,4 @@ Helm 侧：
 | IsManagerJoinedDM | ListRoomMembers 封装 | 否 |
 | RegisterAppService | RegisterAppService | 否（SynapseClient 覆盖为声明式） |
 
-**需要 OperatorResolver fallback 的方法**：`InviteToRoom` / `KickFromRoom` / `SetRoomName` / `SetRoomState` / `SendMessage` / `SendMessageAsAdmin`（共 6 个）。
+**需要 OperatorResolver fallback 的方法**：`InviteToRoom` / `KickFromRoom` / `SetRoomName` / `SetRoomState` / `SendMessage` / `SendMessageAsAdmin`（共 6 个）。**（已废弃，见顶部实施注记）**——实现改为 `SynapseMatrixOps` 对上述 6 个底层方法对应的 5 个业务方法（AddMember / RemoveMember / SetRoomMetadata / RenameRoom / SendSystemMessage）做分类 sender-recovery。
