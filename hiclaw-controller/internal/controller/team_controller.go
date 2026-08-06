@@ -506,7 +506,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		}
 		if err := r.reconcileMember(ctx, deps, m, ms); err != nil {
 			logger.Error(err, "team member reconcile failed", "name", m.Name)
-			perMemberErrors = append(perMemberErrors, fmt.Sprintf("%s: %v", m.Name, err))
+			perMemberErrors = append(perMemberErrors, fmt.Sprintf("%s: %s", m.Name, conciseStatusMessage(err)))
 			continue
 		}
 		// Record the hash only after a full reconcile success so a failed

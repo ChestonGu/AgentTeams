@@ -103,7 +103,7 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 			mgr.Status.ObservedGeneration = mgr.Generation
 			mgr.Status.Message = ""
 		} else {
-			mgr.Status.Message = reterr.Error()
+			mgr.Status.Message = conciseStatusMessage(reterr)
 		}
 		if mgr.Spec.Image != "" {
 			mgr.Status.Version = mgr.Spec.Image

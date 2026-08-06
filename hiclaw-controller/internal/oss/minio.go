@@ -106,7 +106,7 @@ func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error 
 		return err
 	}
 	_, err := c.runMC(ctx, "cp", localPath, c.fullPath(key))
-	return err
+	return wrapOp("putfile", key, err)
 }
 
 func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error) {
@@ -119,7 +119,7 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 			strings.Contains(err.Error(), "exit status") {
 			return nil, os.ErrNotExist
 		}
-		return nil, err
+		return nil, wrapOp("get", key, err)
 	}
 	return []byte(out), nil
 }
@@ -134,9 +134,40 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 			strings.Contains(err.Error(), "exit status") {
 			return os.ErrNotExist
 		}
-		return err
+		return wrapOp("stat", key, err)
 	}
 	return nil
+}
+
+func (c *MinIOClient) GetETag(ctx context.Context, key string) (string, error) {
+	if err := c.ensureAlias(ctx); err != nil {
+		return "", err
+	}
+	out, err := c.runMC(ctx, "stat", "--json", c.fullPath(key))
+	if err != nil {
+		if strings.Contains(err.Error(), "Object does not exist") ||
+			strings.Contains(err.Error(), "exit status") {
+			return "", os.ErrNotExist
+		}
+		return "", wrapOp("stat", key, err)
+	}
+	return extractMCETag(out), nil
+}
+
+// extractMCETag pulls the "etag" field out of `mc stat --json` output and
+// strips the multipart "-N" suffix.
+func extractMCETag(s string) string {
+	if idx := strings.Index(s, `"etag":"`); idx >= 0 {
+		rest := s[idx+8:]
+		if end := strings.Index(rest, `"`); end >= 0 {
+			etag := rest[:end]
+			etag = strings.ReplaceAll(etag, "-", "")
+			if etag != "" {
+				return etag
+			}
+		}
+	}
+	return ""
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {
@@ -144,7 +175,7 @@ func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {
 		return err
 	}
 	_, err := c.runMC(ctx, "rm", c.fullPath(key))
-	return err
+	return wrapOp("delete", key, err)
 }
 
 func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOptions) error {
@@ -167,7 +198,7 @@ func (c *MinIOClient) Mirror(ctx context.Context, src, dst string, opts MirrorOp
 		args = append(args, "--exclude", pattern)
 	}
 	_, err := c.runMC(ctx, args...)
-	return err
+	return wrapOp("mirror", dst, err)
 }
 
 func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
@@ -175,7 +206,7 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 		return err
 	}
 	_, err := c.runMC(ctx, "rm", "--recursive", "--force", c.fullPath(prefix))
-	return err
+	return wrapOp("deleteprefix", prefix, err)
 }
 
 func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
@@ -184,7 +215,7 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 	}
 	out, err := c.runMC(ctx, "ls", c.fullPath(prefix))
 	if err != nil {
-		return nil, err
+		return nil, wrapOp("list", prefix, err)
 	}
 
 	var names []string
@@ -209,7 +240,7 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 	}
 	target := c.config.Alias + "/" + c.config.Bucket
 	_, err := c.runMC(ctx, "mb", target, "--ignore-existing")
-	return err
+	return wrapOp("ensurebucket", c.config.Bucket, err)
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
@@ -242,15 +273,11 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 		return stdout.String(), nil
 	}
 
-	out, err := runOnce()
-	if err != nil && isNetworkError(err) {
-		// Transient dial/connect failures (the mc CLI's ~30s dial timeout on
-		// an unreachable endpoint) used to fail the whole reconcile pass.
-		// Retry once after a short backoff; deterministic 4xx/5xx object
-		// errors are never retried.
-		time.Sleep(mcRetryBackoff)
-		out, err = runOnce()
-	}
+	// Transient dial/connect failures (the mc CLI's own ~30s dial timeout on
+	// an unreachable endpoint) are retried within the shared storageRetryWindow
+	// so a short OSS blip does not fail the whole reconcile; deterministic
+	// object errors (4xx, missing keys) are never retried.
+	out, err := retryStorageOpValue(ctx, runOnce)
 
 	elapsed := time.Since(start)
 	metrics.StorageOpDuration.WithLabelValues(args[0], "mc").Observe(elapsed.Seconds())
@@ -273,10 +300,6 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 	}
 	return out, nil
 }
-
-// mcRetryBackoff is the pause before the single retry of a transport-level
-// failure in runMC.
-var mcRetryBackoff = time.Second
 
 // isNetworkError reports whether a failed mc invocation failed at the
 // transport layer (dial/connect/timeout) rather than on a deterministic

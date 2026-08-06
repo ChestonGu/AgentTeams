@@ -69,14 +69,17 @@ func (c *SDKClient) WithCredentialSource(src CredentialSource) *SDKClient {
 // sdkDialTimeout bounds a single TCP/TLS connection attempt. minio-go's
 // default transport dials with Go's 30s timeout; on a flaky storage endpoint
 // every retried request would stall 30s before failing, turning a reconcile
-// into minutes of hard waits. 5s fails fast while remaining generous for a
-// healthy endpoint.
-const sdkDialTimeout = 5 * time.Second
+// into minutes of hard waits. 2s fails fast while remaining generous for a
+// healthy endpoint. Connection pooling only reuses live connections — a pool
+// miss (concurrency pressure or stale idle conns dropped by the network)
+// dials anew, which is exactly when this bound matters.
+const sdkDialTimeout = 2 * time.Second
 
-// sdkMaxRetries bounds minio-go's automatic retries (default 10). Combined
-// with the short dial timeout this caps the worst-case stall of one SDK op
-// to roughly retries × (dial + backoff) ≈ 15-25s instead of 10 × 30s.
-const sdkMaxRetries = 3
+// sdkMaxRetries bounds minio-go's internal automatic retries. The outer
+// retryStorageOp wrapper (30s window) is the primary resilience layer; this
+// small internal budget covers immediate retries without waiting for the
+// wrapper's backoff.
+const sdkMaxRetries = 2
 
 // sdkTransport builds the shared HTTP transport for SDKClient: connection
 // pool for reuse (the whole point of the SDK over per-call mc forks) plus a
@@ -91,7 +94,7 @@ func sdkTransport() *http.Transport {
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   sdkDialTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		// Bounds waiting for a server response header; measured after the
@@ -204,10 +207,15 @@ func mapNotExist(err error) error {
 }
 
 // timedOp observes one storage operation for the stability metrics
-// (hiclaw_storage_op_duration_seconds / hiclaw_storage_op_errors_total).
-func (c *SDKClient) timedOp(ctx context.Context, op string, fn func() error) error {
+// (hiclaw_storage_op_duration_seconds / hiclaw_storage_op_errors_total),
+// retries transient failures within the storageRetryWindow, and wraps the
+// final error in a single-layer OpError for concise CR Status.Message text.
+func (c *SDKClient) timedOp(ctx context.Context, op, key string, fn func() error) error {
 	start := time.Now()
-	err := fn()
+	err := retryStorageOp(ctx, fn)
+	if err != nil {
+		err = &OpError{Op: op, Key: key, Cause: err}
+	}
 	metrics.StorageOpDuration.WithLabelValues(op, "sdk").Observe(time.Since(start).Seconds())
 	if err != nil {
 		metrics.StorageOpErrors.WithLabelValues(op, "sdk", classifyStorageError(err)).Inc()
@@ -216,7 +224,7 @@ func (c *SDKClient) timedOp(ctx context.Context, op string, fn func() error) err
 }
 
 func (c *SDKClient) PutObject(ctx context.Context, key string, data []byte) error {
-	return c.timedOp(ctx, "put", func() error {
+	return c.timedOp(ctx, "put", key, func() error {
 		bucket, obj := c.bucketAndKey(key)
 		_, err := c.client.PutObject(ctx, bucket, obj, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{})
 		return err
@@ -224,7 +232,7 @@ func (c *SDKClient) PutObject(ctx context.Context, key string, data []byte) erro
 }
 
 func (c *SDKClient) PutFile(ctx context.Context, localPath, key string) error {
-	return c.timedOp(ctx, "putfile", func() error {
+	return c.timedOp(ctx, "putfile", key, func() error {
 		bucket, obj := c.bucketAndKey(key)
 		_, err := c.client.FPutObject(ctx, bucket, obj, localPath, minio.PutObjectOptions{})
 		return err
@@ -233,7 +241,7 @@ func (c *SDKClient) PutFile(ctx context.Context, localPath, key string) error {
 
 func (c *SDKClient) GetObject(ctx context.Context, key string) ([]byte, error) {
 	var data []byte
-	err := c.timedOp(ctx, "get", func() error {
+	err := c.timedOp(ctx, "get", key, func() error {
 		bucket, obj := c.bucketAndKey(key)
 		rc, err := c.client.GetObject(ctx, bucket, obj, minio.GetObjectOptions{})
 		if err != nil {
@@ -246,8 +254,24 @@ func (c *SDKClient) GetObject(ctx context.Context, key string) ([]byte, error) {
 	return data, err
 }
 
+func (c *SDKClient) GetETag(ctx context.Context, key string) (string, error) {
+	var etag string
+	err := c.timedOp(ctx, "stat", key, func() error {
+		bucket, obj := c.bucketAndKey(key)
+		info, err := c.client.StatObject(ctx, bucket, obj, minio.StatObjectOptions{})
+		if err != nil {
+			return mapNotExist(err)
+		}
+		// Multipart uploads yield "<md5>-N"; strip the part suffix to match
+		// the mc stat --json extraction the package resolver relied on.
+		etag = strings.ReplaceAll(info.ETag, "-", "")
+		return nil
+	})
+	return etag, err
+}
+
 func (c *SDKClient) Stat(ctx context.Context, key string) error {
-	return c.timedOp(ctx, "stat", func() error {
+	return c.timedOp(ctx, "stat", key, func() error {
 		bucket, obj := c.bucketAndKey(key)
 		_, err := c.client.StatObject(ctx, bucket, obj, minio.StatObjectOptions{})
 		return mapNotExist(err)
@@ -255,14 +279,14 @@ func (c *SDKClient) Stat(ctx context.Context, key string) error {
 }
 
 func (c *SDKClient) DeleteObject(ctx context.Context, key string) error {
-	return c.timedOp(ctx, "delete", func() error {
+	return c.timedOp(ctx, "delete", key, func() error {
 		bucket, obj := c.bucketAndKey(key)
 		return c.client.RemoveObject(ctx, bucket, obj, minio.RemoveObjectOptions{})
 	})
 }
 
 func (c *SDKClient) DeletePrefix(ctx context.Context, prefix string) error {
-	return c.timedOp(ctx, "deleteprefix", func() error {
+	return c.timedOp(ctx, "deleteprefix", prefix, func() error {
 		bucket, objPrefix := c.bucketAndKey(prefix)
 		for obj := range c.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: objPrefix, Recursive: true}) {
 			if obj.Err != nil {
@@ -278,7 +302,7 @@ func (c *SDKClient) DeletePrefix(ctx context.Context, prefix string) error {
 
 func (c *SDKClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	var names []string
-	err := c.timedOp(ctx, "list", func() error {
+	err := c.timedOp(ctx, "list", prefix, func() error {
 		bucket, objPrefix := c.bucketAndKey(prefix)
 		for obj := range c.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: objPrefix, Recursive: false}) {
 			if obj.Err != nil {
@@ -296,7 +320,7 @@ func (c *SDKClient) ListObjects(ctx context.Context, prefix string) ([]string, e
 // production callers pass) or a remote prefix (src without a leading "/")
 // into the dst prefix. Overwrite semantics match the mc driver.
 func (c *SDKClient) Mirror(ctx context.Context, src, dst string, opts MirrorOptions) error {
-	return c.timedOp(ctx, "mirror", func() error {
+	return c.timedOp(ctx, "mirror", dst, func() error {
 		if strings.HasPrefix(src, "/") {
 			return c.mirrorLocalToRemote(ctx, src, dst, opts)
 		}
@@ -365,7 +389,7 @@ func (c *SDKClient) mirrorRemoteToRemote(ctx context.Context, src, dst string, o
 // EnsureBucket creates the configured bucket if it does not already exist
 // (mc mb --ignore-existing semantics).
 func (c *SDKClient) EnsureBucket(ctx context.Context) error {
-	return c.timedOp(ctx, "ensurebucket", func() error {
+	return c.timedOp(ctx, "ensurebucket", c.cfg.Bucket, func() error {
 		exists, err := c.client.BucketExists(ctx, c.cfg.Bucket)
 		if err != nil {
 			return err

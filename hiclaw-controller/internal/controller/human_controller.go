@@ -102,7 +102,7 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 			human.Status.ObservedGeneration = human.Generation
 			human.Status.ConsecutiveFailures = 0
 		} else {
-			human.Status.Message = reterr.Error()
+			human.Status.Message = conciseStatusMessage(reterr)
 		}
 
 		if err := r.Status().Patch(ctx, &human, patchBase); err != nil {

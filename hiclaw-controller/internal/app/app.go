@@ -326,6 +326,11 @@ func (a *App) initInfraClients(_ context.Context) error {
 			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
 		}
 	}
+	// Package downloads go through the same StorageClient (SDK driver) so
+	// they inherit the connect timeout, retry window, and connection pool
+	// instead of forking `mc` subprocesses (whose CLI-level 30s dial timeout
+	// caused "deploy package ... mc: unable to prepare URL" failures).
+	a.packages.Storage = a.oss
 	return nil
 }
 

@@ -473,10 +473,12 @@ func localSkillPushEnabled() bool {
 }
 
 // storageProbeTimeout bounds the reachability probe at the start of
-// DeployWorkerConfig. The mc CLI's HTTP client dials with Go's default 30s
-// timeout, so without a bound a dead endpoint stalls every OSS op; 10s is
-// generous for a healthy endpoint (even `mc stat` is ~1.5s on cloud OSS).
-const storageProbeTimeout = 10 * time.Second
+// DeployWorkerConfig. The storage layer already retries transient failures
+// within its 30s window (storageRetryWindow), so the probe budget is set to
+// match: a short OSS blip recovers inside the window and the config phase
+// proceeds instead of requeuing; a permanently dead endpoint still aborts
+// after the budget and the reconciler requeues with a concise status message.
+const storageProbeTimeout = 30 * time.Second
 
 // probeStorage verifies object storage is reachable before the config phase
 // runs its many OSS operations. The probe reads openclaw.json, a key the

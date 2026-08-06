@@ -85,7 +85,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 			worker.Status.ObservedGeneration = worker.Generation
 			worker.Status.Message = ""
 		} else {
-			worker.Status.Message = reterr.Error()
+			worker.Status.Message = conciseStatusMessage(reterr)
 		}
 		if err := r.Status().Patch(ctx, &worker, patchBase); err != nil {
 			logger.Error(err, "failed to patch worker status")
