@@ -115,7 +115,16 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 // member reconcile phases, and writes runtime state back to Worker.Status.
 // Legacy Manager groupAllowFrom is updated here only for standalone workers;
 // team leaders are handled by TeamReconciler.
-func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
+func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (res reconcile.Result, err error) {
+	start := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.MemberReconcileDuration.WithLabelValues("worker", result).Observe(time.Since(start).Seconds())
+	}()
+
 	deps := MemberDeps{
 		Provisioner:    r.Provisioner,
 		Deployer:       r.Deployer,
