@@ -50,6 +50,9 @@ type Config struct {
 	// Provider selection (driven by Helm values)
 	GatewayProvider string // "higress" | "ai-gateway"
 	StorageProvider string // "minio"   | "oss"
+	// StorageDriver selects the StorageClient implementation: "sdk" (default,
+	// minio-go S3 SDK, connection-pooled) or "mc" (legacy mc CLI subprocess).
+	StorageDriver string // HICLAW_STORAGE_DRIVER; "sdk" | "mc"
 
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
@@ -273,6 +276,7 @@ func LoadConfig() *Config {
 
 		GatewayProvider: envOrDefault("HICLAW_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("HICLAW_STORAGE_PROVIDER", "minio"),
+		StorageDriver:   envOrDefault("HICLAW_STORAGE_DRIVER", "sdk"),
 
 		CredentialProviderURL: os.Getenv("HICLAW_CREDENTIAL_PROVIDER_URL"),
 

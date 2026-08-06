@@ -3,6 +3,7 @@ package oss
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -212,39 +214,118 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 
+	var hostEnv string
 	if c.credSource != nil {
 		creds, err := c.credSource.Resolve(ctx)
 		if err != nil {
 			return "", fmt.Errorf("resolve oss credentials: %w", err)
 		}
-		hostEnv, herr := buildMCHostEnv(c.config.Alias, c.config.Endpoint, creds)
-		if herr != nil {
-			return "", herr
+		hostEnv, err = buildMCHostEnv(c.config.Alias, c.config.Endpoint, creds)
+		if err != nil {
+			return "", err
 		}
-		cmd.Env = append(os.Environ(), hostEnv)
 	}
 
-	err := cmd.Run()
+	runOnce := func() (string, error) {
+		cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if c.credSource != nil {
+			cmd.Env = append(os.Environ(), hostEnv)
+		}
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("mc %s: %w (stderr: %s)",
+				strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		}
+		return stdout.String(), nil
+	}
+
+	out, err := runOnce()
+	if err != nil && isNetworkError(err) {
+		// Transient dial/connect failures (the mc CLI's ~30s dial timeout on
+		// an unreachable endpoint) used to fail the whole reconcile pass.
+		// Retry once after a short backoff; deterministic 4xx/5xx object
+		// errors are never retried.
+		time.Sleep(mcRetryBackoff)
+		out, err = runOnce()
+	}
+
+	elapsed := time.Since(start)
+	metrics.StorageOpDuration.WithLabelValues(args[0], "mc").Observe(elapsed.Seconds())
+	if err != nil {
+		metrics.StorageOpErrors.WithLabelValues(args[0], "mc", classifyStorageError(err)).Inc()
+	}
+
 	// Slow-call telemetry: the oss layer is the suspected step-4 bottleneck
 	// (mc subprocess fork + TLS + no connection pool). Logging the outliers
 	// quantifies single-call latency and op distribution; the caller's ctx
 	// carries the team/member context injected by the reconcilers.
-	if elapsed := time.Since(start); elapsed > mcSlowCallThreshold {
+	if elapsed > mcSlowCallThreshold {
 		log.FromContext(ctx).Info("mc slow call",
 			"cmd", strings.Join(args, " "),
 			"op", args[0],
 			"elapsed", elapsed.Truncate(time.Millisecond).String())
 	}
 	if err != nil {
-		return "", fmt.Errorf("mc %s: %w (stderr: %s)",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return "", err
 	}
-	return stdout.String(), nil
+	return out, nil
+}
+
+// mcRetryBackoff is the pause before the single retry of a transport-level
+// failure in runMC.
+var mcRetryBackoff = time.Second
+
+// isNetworkError reports whether a failed mc invocation failed at the
+// transport layer (dial/connect/timeout) rather than on a deterministic
+// object error. The mc CLI's HTTP client dials with Go's default 30s
+// timeout, so an unreachable endpoint stalls every call for ~30s; retrying
+// once after a short backoff masks transient blips without turning 4xx/5xx
+// object errors into retries.
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, frag := range []string{
+		"i/o timeout",
+		"connection refused",
+		"connection reset",
+		"no such host",
+		"network is unreachable",
+		"context deadline exceeded",
+		"connection timed out",
+	} {
+		if strings.Contains(msg, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyStorageError buckets a storage error for the stability metrics:
+// "not_found" (deterministic 404 — normal for seed probes), "network"
+// (dial/connect failures — the unstable-endpoint alarm), "timeout"
+// (operation-level timeouts), and "other".
+func classifyStorageError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "not_found"
+	}
+	if isNetworkError(err) {
+		return "network"
+	}
+	msg := strings.ToLower(err.Error())
+	for _, frag := range []string{"timeout", "timed out", "context deadline"} {
+		if strings.Contains(msg, frag) {
+			return "timeout"
+		}
+	}
+	return "other"
 }
 
 // buildMCHostEnv renders a single MC_HOST_<alias>=<scheme>://<ak>:<sk>[:<token>]@<host>
