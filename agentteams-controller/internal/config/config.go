@@ -146,6 +146,7 @@ type Config struct {
 	MatrixAdminUser         string
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
+	MatrixProvider          string // "tuwunel" (default) or "synapse" — selects the matrix.Client implementation
 
 	// Matrix AppService mode
 	MatrixAppServiceEnabled            bool
@@ -208,6 +209,8 @@ type WorkerEnvDefaults struct {
 	FSEndpoint           string
 	FSBucket             string
 	StoragePrefix        string
+	FSAccessKey          string // shared static S3 access key (external-OSS static-credential mode); empty in embedded/per-worker mode
+	FSSecretKey          string // shared static S3 secret key (external-OSS static-credential mode); empty in embedded/per-worker mode
 	ControllerURL        string
 	AIGatewayURL         string
 	MatrixURL            string
@@ -368,6 +371,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("AGENTTEAMS_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("AGENTTEAMS_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "1" || os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "true",
+		MatrixProvider:          envOrDefault("AGENTTEAMS_MATRIX_PROVIDER", "tuwunel"),
 
 		MatrixAppServiceEnabled:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "false",
 		MatrixAppServiceID:                 envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_ID", "agentteams-controller"),
@@ -406,6 +410,8 @@ func LoadConfig() *Config {
 			FSEndpoint:           os.Getenv("AGENTTEAMS_FS_ENDPOINT"),
 			FSBucket:             envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
 			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
+			FSAccessKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_ACCESS_KEY"), os.Getenv("AGENTTEAMS_MINIO_USER")),
+			FSSecretKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_SECRET_KEY"), os.Getenv("AGENTTEAMS_MINIO_PASSWORD")),
 			ControllerURL:        os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
@@ -730,6 +736,12 @@ func (c *Config) MatrixConfig() matrix.Config {
 		AppServiceUserNamespaceRegex: c.MatrixAppServiceUserNamespaceRegex,
 		AppServicePushURL:            c.MatrixAppServicePushURL,
 	}
+}
+
+// UsesSynapse reports whether the Matrix homeserver is Synapse (vs the
+// default Tuwunel). Drives the matrix.Client factory selection in app.go.
+func (c *Config) UsesSynapse() bool {
+	return c.MatrixProvider == "synapse"
 }
 
 func appServicePushURL(controllerURL string) string {

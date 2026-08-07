@@ -281,6 +281,17 @@ func ValidateMemberDeployment(m MemberContext) error {
 	}
 }
 
+// isAlreadyInRoomError reports whether err represents a Matrix 403
+// "already in the room" response. Synapse returns M_FORBIDDEN with an
+// error string containing "already" when the user is already a member.
+func isAlreadyInRoomError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "403") && strings.Contains(msg, "already")
+}
+
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
 // and DM room are provisioned (or credentials refreshed). Writes MatrixUserID,
 // RoomID, and ProvResult into state.
@@ -312,6 +323,28 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		Role:           m.Role.String(),
 	})
 	if err != nil {
+		// Idempotent: Synapse may return 403 M_FORBIDDEN when the admin
+		// user (room creator) is already joined. Treat it as a no-op and
+		// fall through to credential refresh.
+		if isAlreadyInRoomError(err) {
+			log.FromContext(ctx).Info("member already provisioned (403 already-in-room), refreshing credentials",
+				"name", m.Name, "runtimeName", m.RuntimeName)
+			refreshResult, refreshErr := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+			if refreshErr != nil {
+				return reconcile.Result{}, fmt.Errorf("refresh credentials after already-in-room: %w", refreshErr)
+			}
+			state.MatrixUserID = d.Provisioner.MatrixUserID(m.RuntimeName)
+			state.RoomID = m.ExistingRoomID
+			state.ProvResult = &service.WorkerProvisionResult{
+				MatrixUserID:   d.Provisioner.MatrixUserID(m.RuntimeName),
+				MatrixToken:    refreshResult.MatrixToken,
+				RoomID:         m.ExistingRoomID,
+				GatewayKey:     refreshResult.GatewayKey,
+				MinIOPassword:  refreshResult.MinIOPassword,
+				MatrixPassword: refreshResult.MatrixPassword,
+			}
+			return reconcile.Result{}, nil
+		}
 		if errors.Is(err, matrix.ErrAppServiceNotReady) {
 			log.FromContext(ctx).Info("Matrix AppService not active yet; requeueing member provisioning",
 				"name", m.Name, "runtimeName", m.RuntimeName)

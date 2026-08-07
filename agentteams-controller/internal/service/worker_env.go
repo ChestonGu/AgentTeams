@@ -19,13 +19,19 @@ func NewWorkerEnvBuilder(defaults config.WorkerEnvDefaults) *WorkerEnvBuilder {
 // Build returns the env map for a worker container, merging per-worker
 // credentials with cluster-wide defaults.
 func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult) map[string]string {
+	// External-OSS static-credential mode: all workers share one appkey/secret.
+	// Embedded/per-worker mode: each worker gets its own MinIO user (workerName + MinIOPassword).
+	fsAccessKey, fsSecretKey := workerName, prov.MinIOPassword
+	if b.defaults.FSAccessKey != "" {
+		fsAccessKey, fsSecretKey = b.defaults.FSAccessKey, b.defaults.FSSecretKey
+	}
 	env := map[string]string{
 		"AGENTTEAMS_WORKER_NAME":         workerName,
 		"AGENTTEAMS_WORKER_GATEWAY_KEY":  prov.GatewayKey,
 		"AGENTTEAMS_WORKER_MATRIX_TOKEN": prov.MatrixToken,
 		"AGENTTEAMS_WORKER_ROOM_ID":      prov.RoomID,
-		"AGENTTEAMS_FS_ACCESS_KEY":       workerName,
-		"AGENTTEAMS_FS_SECRET_KEY":       prov.MinIOPassword,
+		"AGENTTEAMS_FS_ACCESS_KEY":       fsAccessKey,
+		"AGENTTEAMS_FS_SECRET_KEY":       fsSecretKey,
 		"OPENCLAW_DISABLE_BONJOUR":       "1",
 		"OPENCLAW_MDNS_HOSTNAME":         "agentteams-w-" + workerName,
 		"AGENTTEAMS_CONSOLE_PORT":        "8088",
@@ -43,6 +49,13 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 		runtime = "k8s"
 	}
 
+	// External-OSS static-credential mode: manager shares the cluster appkey/secret.
+	// Embedded/per-worker mode: manager gets its own MinIO user (managerName + MinIOPassword).
+	fsAccessKey, fsSecretKey := managerName, prov.MinIOPassword
+	if b.defaults.FSAccessKey != "" {
+		fsAccessKey, fsSecretKey = b.defaults.FSAccessKey, b.defaults.FSSecretKey
+	}
+
 	env := map[string]string{
 		"AGENTTEAMS_MANAGER_NAME":        managerName,
 		"AGENTTEAMS_MANAGER_GATEWAY_KEY": prov.GatewayKey,
@@ -54,8 +67,8 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 		// skip password-based login. Required in AppService mode (no password)
 		// and beneficial in legacy mode (avoids a redundant login round-trip).
 		"AGENTTEAMS_MANAGER_MATRIX_TOKEN": prov.MatrixToken,
-		"AGENTTEAMS_FS_ACCESS_KEY":        managerName,
-		"AGENTTEAMS_FS_SECRET_KEY":        prov.MinIOPassword,
+		"AGENTTEAMS_FS_ACCESS_KEY":        fsAccessKey,
+		"AGENTTEAMS_FS_SECRET_KEY":        fsSecretKey,
 		"OPENCLAW_DISABLE_BONJOUR":        "1",
 		"OPENCLAW_MDNS_HOSTNAME":          "agentteams-manager",
 		"HOME":                            "/root/manager-workspace",
