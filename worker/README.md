@@ -1,4 +1,4 @@
-# hiclaw-worker-agent
+# agentteams-worker-agent
 
 Lightweight Worker Agent container. Includes:
 
@@ -15,7 +15,7 @@ Workers are **stateless** -- all configuration and memory is stored in the centr
 make build-worker
 
 # Or directly
-docker build -t hiclaw/worker-agent:latest .
+docker build -t agentteams/worker-agent:latest .
 ```
 
 ## Run
@@ -23,7 +23,7 @@ docker build -t hiclaw/worker-agent:latest .
 Workers are created by the Manager Agent. The Manager provides the installation command:
 
 ```bash
-../install/hiclaw-install.sh worker \
+../install/agentteams-install.sh worker \
   --name alice \
   --fs http://<MANAGER_IP>:9000 \
   --fs-key <ACCESS_KEY> \
@@ -42,7 +42,7 @@ worker/
         ├── file-sync/
         │   ├── SKILL.md             # File sync skill (config, credentials, collaboration)
         │   └── scripts/
-        │       └── hiclaw-sync.sh   # Pull files from centralized storage
+        │       └── agentteams-sync.sh   # Pull files from centralized storage
         └── github-operations/
             └── SKILL.md             # GitHub MCP operations skill
 ```
@@ -51,12 +51,12 @@ worker/
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `HICLAW_WORKER_NAME` | Yes | Worker name (e.g., `alice`) |
-| `HICLAW_MATRIX_URL` | No | Matrix Homeserver URL injected by controller-managed deployments |
-| `HICLAW_AI_GATEWAY_URL` | No | AI Gateway URL injected by controller-managed deployments |
-| `HICLAW_FS_ENDPOINT` | Yes | MinIO/HTTP file system URL |
-| `HICLAW_FS_BUCKET` | No | Bucket name for CoPaw or non-default storage layouts |
-| `HICLAW_FS_ACCESS_KEY` | Yes | MinIO access key |
-| `HICLAW_FS_SECRET_KEY` | Yes | MinIO secret key |
+| `AGENTTEAMS_WORKER_NAME` | Yes | Worker name (e.g., `alice`) |
+| `AGENTTEAMS_MATRIX_URL` | No | Matrix Homeserver URL injected by controller-managed deployments |
+| `AGENTTEAMS_AI_GATEWAY_URL` | No | AI Gateway URL injected by controller-managed deployments |
+| `AGENTTEAMS_FS_ENDPOINT` | Yes | MinIO/HTTP file system URL |
+| `AGENTTEAMS_FS_BUCKET` | No | Bucket name for CoPaw or non-default storage layouts |
+| `AGENTTEAMS_FS_ACCESS_KEY` | Yes | MinIO access key |
+| `AGENTTEAMS_FS_SECRET_KEY` | Yes | MinIO secret key |
 
-Runtime scripts now consume `HICLAW_MATRIX_URL` and `HICLAW_AI_GATEWAY_URL` directly; legacy aliases are no longer part of the main contract.
+Runtime scripts use the `AGENTTEAMS_*` variables above as their only platform environment contract.

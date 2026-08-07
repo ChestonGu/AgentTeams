@@ -11,8 +11,8 @@ source "${SCRIPT_DIR}/lib/agent-metrics.sh"
 test_setup "13-git-delegation"
 
 # Check prerequisites
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
-    log_info "SKIP: No GitHub token configured (set HICLAW_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+    log_info "SKIP: No GitHub token configured (set AGENTTEAMS_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
     test_teardown "13-git-delegation"
     test_summary
     exit 0
@@ -45,7 +45,13 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 # Ensure Alice worker exists
 METRICS_BASELINE=$(snapshot_baseline "alice")
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Create a worker named alice if it doesn't exist yet. Give her the github-operations and git-delegation skills."
+    "Create a worker named alice if she doesn't exist yet. If you do create her, use these exact values — do not ask me to confirm any of them:
+- name: alice
+- runtime: use the install default (do not ask, just pick whatever the env says)
+- SOUL/role: Backend developer who works on shared repos using git-delegation workflows
+- skills: github-operations, git-delegation
+
+If she already exists, reuse her. Proceed immediately."
 
 log_info "Waiting for Worker creation/setup..."
 REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 120 \

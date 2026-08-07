@@ -7,6 +7,8 @@ description: Use before any Leader taskflow call or task-level workflow involvin
 
 You manage individual Worker task delegation and result checks. Use this skill as the task execution layer. Use `team-coordination` for work organization strategy and `project-management` for Project state, DAG, Loop, lifecycle, and ready-node operations.
 
+Task state is tool-owned. Do not create, edit, delete, or repair `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Use `taskflow` actions only. If `taskflow` fails or returns inconsistent state, stop and report the blocker instead of manually patching files.
+
 ## Scope
 
 Use this skill for:
@@ -52,6 +54,8 @@ Use `taskflow` for Leader task actions:
 - `delegate_task`
 - `check_task`
 
+`taskflow` is a QwenPaw/CoPaw MCP tool exposed in your tool list. It is not a shell command, CLI binary, Python module, or HTTP endpoint. Call the tool directly; do not search for a binary or manually edit task files if the tool is unavailable.
+
 Worker runtimes use their own task actions:
 
 - `ack_task`
@@ -72,6 +76,10 @@ Use `project-management` for:
 Do not call `check_active_tasks` from heartbeat or routine recovery checks for now; Kubernetes Team Workers do not expose per-Worker `/api/chats` Services, so runtime probes can misreport healthy Workers as unreachable.
 
 `taskflow` handles file sync internally: `delegate_task` auto-pushes the task directory, `check_task` auto-pulls the task directory. Use `filesync` separately only for project-level files or non-task shared files.
+
+delegate_task does not send Matrix messages. A task is not actually assigned to the Worker until you send a visible Team Room message that @mentions the assigned Worker's full Matrix ID. Do not start polling the task, tell the requester that the Worker is working, or wait for results before this Team Room notification has been sent.
+
+Mandatory next action after `delegate_task`: use `communication`, then send the Team Room assignment with the `message` tool. Do not output a same-room sentence describing your intent to delegate, such as "I need to delegate the first ready node" or "I will assign this to the dev worker". That text is not a Worker notification and leaves the task unassigned from the Worker's perspective.
 
 ## Task Spec Language
 
@@ -100,6 +108,38 @@ Keep machine-facing identifiers and protocol tokens unchanged:
 - `REVISION_NEEDED`
 - `BLOCKED`
 - `INTERRUPTED`
+
+## Worker Name Canonicality
+
+`assigned_to`, Matrix @mention, and all task tracking fields must use the Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract it mechanically — never guess, strip, or transform.
+
+### Lookup (mandatory before assigning any task)
+
+```bash
+# 1. Resolve team CR name
+TEAM_CR="$(agt get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
+
+# 2. Get all team workers
+agt get workers --team "$TEAM_CR" -o json
+
+# 3. Extract localpart from matrixUserID for each worker
+#    @worker-issue-resolver:domain → worker-issue-resolver
+```
+
+Use the extracted localpart verbatim everywhere:
+
+- `manage-team-state.sh --assigned-to <localpart>`
+- Matrix @mention: `@<localpart>:<domain>`
+- `meta.json` `assigned_to` field
+
+### Common mistake
+
+CLI `.name` may include a deployment prefix (e.g. `magic-cn-x0a4t4pr201-worker-issue-resolver`). **Do NOT use `.name` directly and do NOT manually strip prefixes.** Always extract the localpart from `.matrixUserID` instead.
+
+| CLI `.name` | `matrixUserID` | ✅ `assigned_to` | ❌ Wrong |
+|---|---|---|---|
+| `magic-cn-...-worker-issue-resolver` | `@worker-issue-resolver:domain` | `worker-issue-resolver` | `issue-resolver` |
+| `magic-cn-...-dev-worker` | `@dev-worker:domain` | `dev-worker` | `worker` |
 
 ## Delegate A Ready Node
 
@@ -147,7 +187,7 @@ After delegation:
 
 1. `delegate_task` auto-pushes `shared/tasks/{task-id}/`. Do not call `filesync push` for the task directory.
 2. Publish `shared/projects/{project-id}/`, because the plan marker changed.
-3. @mention the assigned Worker in the assignment room.
+3. Use `communication`, then call `message` to @mention the assigned Worker in the assignment room. For Team work, this must be the Team Room, not the Leader DM and not the Worker's private room.
 4. Include only the task ID, title, and instruction to start.
 
 Do not prescribe Worker-internal acknowledgement, push, submit, or planning steps.

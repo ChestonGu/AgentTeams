@@ -1,131 +1,83 @@
 # Changelog (Unreleased)
 
-Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, `hiclaw-controller/`, and release-facing install/chart changes here before the next release.
+Target release: `v1.2.0`
+
+Comparison baseline: `v1.2.0-beta.1`
+
+Record release-facing changes here before the next release.
 
 ---
+
+**Breaking Changes / Migration Notes**
+
+- **AgentTeams naming is now the only active runtime contract**: Installer and Helm entrypoints, controller packages, the `agt` CLI, environment variables, runtime paths, resource names, and storage prefixes use the AgentTeams contract end to end. Retired HiClaw wrappers and active-source compatibility branches have been removed; deployments upgrading from older manifests or scripts must move to the AgentTeams names. ([#1063](https://github.com/agentscope-ai/AgentTeams/pull/1063), [#1065](https://github.com/agentscope-ai/AgentTeams/pull/1065))
+- **Team and Worker resources use the final v1.2 contract**: Team resources reference independently managed Worker CRs through `spec.workerMembers`. Inline Worker members, registry migration paths, and dependent legacy scripts are no longer supported. ([#1072](https://github.com/agentscope-ai/AgentTeams/pull/1072))
 
 **What's New**
 
-- **QwenPaw-first local install flow**: The installer now presents QwenPaw as the default worker runtime, supports keep-all upgrades with enter-to-keep prompts for existing parameters, and improves non-interactive guardrails for scripted installs.
-
-- **Team human coordinators**: Team resources can include human coordinator members, with team-admin-owned Matrix rooms and updated Team Leader / Worker prompts so coordination stays inside the Team Room.
-
-- **Team Leader coordination refresh**: Team Leader built-ins were refreshed for project planning, DAG task execution, file sharing, communication, organization, mcporter usage, and worker lifecycle coordination. Worker-style anti-loop reply rules were mirrored for Team Leader, and legacy Team Leader skill aliases were removed after migration.
-
-- **CoPaw runtime coordination tools**: CoPaw workers now include runtime hooks and tools for task flow, project flow, messaging, file sync, output sanitizing, credential guarding, health probes, richer readiness handling, and configurable ReAct iteration limits.
-
-- **Nacos remote skills and credentials**: The controller can pass skills API defaults and per-package Nacos authentication to workers, including `authType=nacos|sts-hiclaw|none` and `ai-registry` STS access scope.
-
-- **Worker identity separation**: Controller resource names are separated from runtime worker names across identity, credentials, storage defaults, and readiness reporting, making CR naming and agent-facing names less tightly coupled.
-
-- **Controller observability**: Controller-side reconcile metrics, graceful HTTP/background goroutine shutdown, and test diagnostics were added to make runtime and CI failures easier to inspect.
+- **Optional AgentTeams Dashboard**: Local installation can deploy the AgentTeams Dashboard for visual Worker, Team, Human, Manager, and Matrix management. Dashboard versioning remains independent from the AgentTeams release. ([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
 
 **Bug Fixes**
 
-- **Installer robustness**: Rootless Podman socket detection, retry behavior for too-short admin passwords, multi-line error output, GitHub repository URL defaults, stable fallback version handling, and Windows stream-idle-timeout propagation were corrected.
-
-- **Helm cleanup and Matrix display names**: Helm uninstall now cleans up Manager/Worker pods, and Tuwunel's default display-name suffix is disabled in the chart.
-
-- **Manager worker lifecycle API**: Manager local container operations now use the controller's `/api/v1` paths, and `groupAllowFrom` is hot-reloaded when Workers are created.
-
-- **Agent-facing docs and safeguards**: Agent prompts and skills now use `roomID` for `hiclaw get workers` / `hiclaw create worker` JSON, quote colon-containing frontmatter descriptions, and explicitly prohibit direct credential file access in CoPaw worker and Team Leader prompts.
-
-- **CoPaw message handling**: CoPaw workers avoid swallowing fresh Matrix messages during startup, handle targeted readiness probes directly, stop typing indicators on empty/cancelled runs, require slash-prefixed control commands, normalize Element double-slash commands, and use display names in mention bodies.
-
-- **CoPaw storage and context sync**: CoPaw workers align the install directory with the HOME-backed workspace path, seed the heartbeat interval at 10 minutes, skip static `mc` alias setup for k8s wrapper credentials, exclude inbound Matrix thread messages from room-history context, and suppress noisy warnings for optional missing MinIO objects.
-
-- **Controller config preservation**: Reconcile now preserves runtime-mutated package files, default object-storage access entries, and user plugin customizations while still applying controller-managed defaults.
-
-- **Gateway and auth stability**: The configured AI stream idle timeout is applied to the self-hosted Higress gateway, observability/stream-timeout env is propagated during bootstrap, and TokenReview cache entries are capped and swept.
+- **Worker storage sync I/O amplification**: Upload changed workspace files once per successful watermark, keep jq 1.7 fallback pulls alive, and limit embedded Controller mirrors to control-plane configuration. Concurrent Worker creation and large unknown workspace paths retain their existing persistence semantics without repeated whole-workspace mirrors. ([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **CoPaw Team routing and workspace projection**: Route Team Leader assignments to the Team Room, including localpart mentions, and project Worker prompts, skills, tool configuration, and Matrix settings into CoPaw's default workspace. ([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
+- **Team room and Worker lifecycle convergence**: Keep referenced Worker CRs protected, enforce required Team roles, remove Manager from regular Team Worker personal rooms, and restore standalone membership when a Worker leaves a Team. ([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
+- **Pre-v1.2 installer compatibility**: Select the legacy environment contract and storage prefix for v1.1.2 images while keeping the canonical AgentTeams contract for v1.2.0 and newer images. Custom version input such as `1.2.0.beta.1` is normalized to the published tag form. ([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
+- **Dashboard installation reliability**: Preserve quick-start and keep-all behavior, restore Worker credentials during upgrade, improve gateway probing and verification, and clean up Dashboard data on uninstall. ([#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **Tooling and diagnostics safety**: Reject unsafe plugin archive links, redact complete Matrix events in debug bundles, generate runnable Worker ZIP import commands, analyze current OpenClaw cron files, capture immediate replay replies, and persist containerized skopeo authentication. ([#1043](https://github.com/agentscope-ai/AgentTeams/pull/1043), [#1045](https://github.com/agentscope-ai/AgentTeams/pull/1045), [#1047](https://github.com/agentscope-ai/AgentTeams/pull/1047), [#1048](https://github.com/agentscope-ai/AgentTeams/pull/1048), [#1049](https://github.com/agentscope-ai/AgentTeams/pull/1049), [#1050](https://github.com/agentscope-ai/AgentTeams/pull/1050))
 
 ---
+
+**破坏性变更 / 升级说明**
+
+- **AgentTeams 命名成为唯一生效的运行时契约**：安装器与 Helm 入口、Controller 包、`agt` CLI、环境变量、运行时路径、资源名称和存储前缀已端到端统一为 AgentTeams。旧 HiClaw wrapper 和活跃源码中的兼容分支已移除；从旧清单或脚本升级时必须切换到 AgentTeams 命名。([#1063](https://github.com/agentscope-ai/AgentTeams/pull/1063), [#1065](https://github.com/agentscope-ai/AgentTeams/pull/1065))
+- **Team 与 Worker 资源使用 v1.2 最终契约**：Team 通过 `spec.workerMembers` 引用独立管理的 Worker CR；不再支持内联 Worker 成员、registry 迁移路径及其依赖的旧脚本。([#1072](https://github.com/agentscope-ai/AgentTeams/pull/1072))
 
 **新增功能**
 
-- **本地安装默认优先 QwenPaw**: 安装脚本现在优先展示 QwenPaw 作为默认 Worker 运行时，升级时支持 keep-all 和回车保留已有参数，并强化了非交互模式下的防误执行保护。
-
-- **Team 支持人类协调员**: Team 资源支持声明人类协调员成员，Team Room 由 team-admin 归属，并同步更新 Team Leader / Worker 提示词，确保协作收敛在 Team Room 中。
-
-- **Team Leader 协作能力刷新**: Team Leader 内置能力围绕项目规划、DAG 任务执行、文件共享、沟通、组织、mcporter 使用和 Worker 生命周期协作重新整理；同步 Worker 的 anti-loop 回复规则；迁移完成后移除了旧的 Team Leader 技能别名。
-
-- **CoPaw 运行时协作工具**: CoPaw Worker 新增任务流、项目流、消息、文件同步、输出清洗、凭据保护、健康探针、更完整的就绪检查相关 hooks / tools，并支持配置 ReAct 最大迭代次数。
-
-- **Nacos 远程技能与凭据**: 控制器可向 Worker 传递 skills API 默认值和每个包的 Nacos 认证配置，支持 `authType=nacos|sts-hiclaw|none` 以及 `ai-registry` STS 权限范围。
-
-- **Worker 身份解耦**: 控制器资源名与运行时 Worker 名称在身份、凭据、存储默认值和就绪状态中解耦，降低 CR 名称与 Agent 对外名称的耦合。
-
-- **控制器可观测性**: 增加控制器 reconcile 指标、HTTP 服务与后台 goroutine 的优雅退出，以及测试失败诊断信息，便于排查运行时和 CI 问题。
+- **可选 AgentTeams Dashboard**：本地安装可部署 AgentTeams Dashboard，用于可视化管理 Worker、Team、Human、Manager 和 Matrix；Dashboard 版本继续与 AgentTeams 版本独立。([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
 
 **Bug 修复**
 
-- **安装脚本稳健性**: 修复 rootless Podman socket 检测、管理员密码过短时的重试、多行错误输出、GitHub 仓库 URL 默认值、稳定版本 fallback，以及 Windows 下 stream idle timeout 的传递。
-
-- **Helm 清理与 Matrix 显示名**: Helm 卸载时会清理 Manager/Worker Pod；Chart 中关闭 Tuwunel 默认 display-name suffix。
-
-- **Manager Worker 生命周期 API**: Manager 本地容器操作改为使用控制器 `/api/v1` 路径，并在 Worker 创建后热更新 `groupAllowFrom`。
-
-- **Agent 文档与安全边界**: Agent 提示词和技能统一使用 `roomID` 解析 `hiclaw get workers` / `hiclaw create worker` JSON，修复含冒号 frontmatter 描述的引用，并在 CoPaw Worker 与 Team Leader 提示词中加入不可覆盖的凭据文件直接访问禁令。
-
-- **CoPaw 消息处理**: CoPaw Worker 避免启动时吞掉新 Matrix 消息，直接处理定向就绪探针，空回复或取消运行时停止 typing indicator，要求运行时控制命令以 slash 开头，兼容 Element 双 slash，并在 mention 文本中使用显示名。
-
-- **CoPaw 存储与上下文同步**: CoPaw Worker 安装目录与 HOME 工作区对齐，默认心跳间隔设为 10 分钟；在 k8s wrapper 凭据场景跳过静态 `mc` alias；房间历史上下文排除入站 Matrix thread 消息；缺失可选 MinIO 对象时不再输出噪声警告。
-
-- **控制器配置保留**: Reconcile 过程保留运行时已变更的包文件、默认对象存储访问项和用户插件自定义配置，同时继续下发控制器托管默认值。
-
-- **网关与认证稳定性**: 自托管 Higress 网关应用配置的 AI stream idle timeout；启动时传递 observability / stream-timeout 环境变量；TokenReview 缓存增加容量上限和清理机制。
+- **Worker 存储同步 I/O 放大**：基于成功 watermark 只上传变化文件，保持 jq 1.7 fallback pull 存活，并将 embedded Controller mirror 限定为控制面配置。并发创建 Worker 和未知工作目录仍保持原有持久化语义，不再反复执行全量 workspace mirror。([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **CoPaw Team 路由与 workspace 投影**：将 Team Leader 分配（包括 localpart mention）路由到 Team Room，并把 Worker prompt、skills、工具配置和 Matrix 设置投影到 CoPaw 默认 workspace。([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
+- **Team Room 与 Worker 生命周期收敛**：保护被引用的 Worker CR，强制校验 Team 必填角色，将 Manager 移出普通 Team Worker 的个人房间，并在 Worker 离开 Team 后恢复 standalone 成员关系。([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
+- **v1.2 之前镜像的安装兼容**：v1.1.2 镜像使用旧环境变量契约和存储前缀，v1.2.0 及更新镜像使用 AgentTeams 契约；`1.2.0.beta.1` 等自定义输入会规范化为已发布的 Tag 格式。([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
+- **Dashboard 安装可靠性**：保留 quick-start 与 keep-all 行为，升级时恢复 Worker 凭据，改进网关探测与安装验证，并在卸载时清理 Dashboard 数据。([#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **工具与诊断安全性**：拒绝不安全的插件归档链接，完整脱敏调试包中的 Matrix 事件，生成可直接运行的 Worker ZIP 导入命令，识别当前 OpenClaw cron 格式，捕获即时 replay 回复，并持久化容器化 skopeo 的认证信息。([#1043](https://github.com/agentscope-ai/AgentTeams/pull/1043), [#1045](https://github.com/agentscope-ai/AgentTeams/pull/1045), [#1047](https://github.com/agentscope-ai/AgentTeams/pull/1047), [#1048](https://github.com/agentscope-ai/AgentTeams/pull/1048), [#1049](https://github.com/agentscope-ai/AgentTeams/pull/1049), [#1050](https://github.com/agentscope-ai/AgentTeams/pull/1050))
 
 ---
 
-- fix(install): add non-interactive deep-defense guards to step functions ([6cbec18](https://github.com/agentscope-ai/HiClaw/commit/6cbec18))
-- chore(helm): bump chart to 1.1.1 and update repo URLs ([fd09d98](https://github.com/agentscope-ai/HiClaw/commit/fd09d98))
-- fix(install): update GitHub repo URL to agentscope-ai/HiClaw and bump stable fallback to v1.1.1 ([f39601a](https://github.com/agentscope-ai/HiClaw/commit/f39601a))
-- fix(helm): clean up Manager/Worker pods on helm uninstall ([6570402](https://github.com/agentscope-ai/HiClaw/commit/6570402))
-- fix(manager): align container-api.sh paths with controller /api/v1 ([5c9a653](https://github.com/agentscope-ai/HiClaw/commit/5c9a653))
-- feat(install): swap runtime selection order to make QwenPaw the default ([d3e33e8](https://github.com/agentscope-ai/HiClaw/commit/d3e33e8))
-- feat(install): support keep-all upgrade mode and enter-to-keep for all params ([c9ab98f](https://github.com/agentscope-ai/HiClaw/commit/c9ab98f))
-- fix(agent): use roomID when parsing hiclaw get workers JSON output ([efcb544](https://github.com/agentscope-ai/HiClaw/commit/efcb544))
-- fix(install): make error() multi-line safe by splitting exit into die() ([e21ac83](https://github.com/agentscope-ai/HiClaw/commit/e21ac83))
-- fix(install): retry on too-short admin password instead of exiting ([19777eb](https://github.com/agentscope-ai/HiClaw/commit/19777eb))
-- fix(auth): cap and sweep TokenReview cache ([2991d06](https://github.com/agentscope-ai/HiClaw/commit/2991d06))
-- chore(controller): graceful shutdown for HTTP server and background goroutines ([fc99788](https://github.com/agentscope-ai/HiClaw/commit/fc99788))
-- feat(controller): export per-CRD reconcile metrics ([5d7e721](https://github.com/agentscope-ai/HiClaw/commit/5d7e721))
-- fix(legacy): preserve user plugin customizations on Manager config push ([f07a32f](https://github.com/agentscope-ai/HiClaw/commit/f07a32f))
-- fix(helm): disable Tuwunel default displayname suffix ([ab5cdcf](https://github.com/agentscope-ai/HiClaw/commit/ab5cdcf))
-- feat(controller): support Nacos remote skills with STS auth ([fb01fe6](https://github.com/agentscope-ai/HiClaw/commit/fb01fe6))
-- fix(bootstrap): propagate observability and stream timeout env ([df98989](https://github.com/agentscope-ai/HiClaw/commit/df98989))
-- fix(agent): quote coding CLI skill frontmatter ([bd11844](https://github.com/agentscope-ai/HiClaw/commit/bd11844))
-- feat(install): optimize container runtime socket detection for rootless podman ([b1f103b](https://github.com/agentscope-ai/HiClaw/commit/b1f103b))
-- fix(copaw): stop typing indicator on empty completion ([78418b5](https://github.com/agentscope-ai/HiClaw/commit/78418b5))
-- fix(copaw): use display name instead of MXID in mention body ([02ff138](https://github.com/agentscope-ai/HiClaw/commit/02ff138))
-- fix(controller): preserve runtime package files on reconcile ([8cb9f46](https://github.com/agentscope-ai/HiClaw/commit/8cb9f46))
-- feat(copaw): make ReAct max iterations configurable ([933a600](https://github.com/agentscope-ai/HiClaw/commit/933a600))
-- feat(controller): separate CR names from runtime worker names ([12da1ce](https://github.com/agentscope-ai/HiClaw/commit/12da1ce))
-- fix(copaw): require slash-prefixed control commands ([e94aceb](https://github.com/agentscope-ai/HiClaw/commit/e94aceb))
-- feat(agent): prohibit direct credential file access ([046537b](https://github.com/agentscope-ai/HiClaw/commit/046537b))
-- fix(manager): hot-reload groupAllowFrom when Workers are created ([94bde15](https://github.com/agentscope-ai/HiClaw/commit/94bde15))
-- fix(copaw): seed worker heartbeat interval ([ec0f57d](https://github.com/agentscope-ai/HiClaw/commit/ec0f57d))
-- fix(copaw): align install dir with worker home ([c0bca77](https://github.com/agentscope-ai/HiClaw/commit/c0bca77))
-- fix(copaw): exclude inbound thread messages from room history ([8d6a852](https://github.com/agentscope-ai/HiClaw/commit/8d6a852))
-- fix(copaw): skip mc alias setup in k8s mode ([fc1b934](https://github.com/agentscope-ai/HiClaw/commit/fc1b934))
-- fix(controller): preserve default object-storage access entries ([a940d94](https://github.com/agentscope-ai/HiClaw/commit/a940d94))
-- fix(copaw): suppress missing MinIO object warnings ([53d270e](https://github.com/agentscope-ai/HiClaw/commit/53d270e))
-- feat(controller): propagate skills API defaults to workers ([e4a3506](https://github.com/agentscope-ai/HiClaw/commit/e4a3506))
-- feat(team-leader): refresh coordination builtins ([bfd99cd](https://github.com/agentscope-ai/HiClaw/commit/bfd99cd))
-- fix(controller): apply Higress stream idle timeout ([8d81c9f](https://github.com/agentscope-ai/HiClaw/commit/8d81c9f))
-- feat(controller): support team human coordinators ([16e87c2](https://github.com/agentscope-ai/HiClaw/commit/16e87c2))
-- feat(copaw): add runtime coordination tools ([4a2ced6](https://github.com/agentscope-ai/HiClaw/commit/4a2ced6))
-- fix(install): pass stream idle timeout on Windows ([fece949](https://github.com/agentscope-ai/HiClaw/commit/fece949))
-- refactor(team-leader): remove legacy skill aliases ([67a6daf](https://github.com/agentscope-ai/HiClaw/commit/67a6daf))
-- fix(team-leader): mirror worker's anti-loop reply rules ([2a7cd17](https://github.com/agentscope-ai/HiClaw/commit/2a7cd17))
+**Change list / 变更列表**
 
-**Also in this window (docs / repo metadata / tests; not image-facing)**
+- `688ec362` fix(cli): reject unsafe plugin archive links (#1043)
+- `dc4aafb4` fix(scripts): redact complete Matrix events (#1047)
+- `31d89998` fix(migrate): analyze current cron job format (#1049)
+- `ced0f183` fix(migrate): print runnable ZIP import command (#1048)
+- `47b4d07a` fix(replay): capture immediate manager replies (#1045)
+- `bdc4f640` fix(hack): persist containerized skopeo auth (#1050)
+- `ad941d26` chore: archive changelog for v1.2.0-beta.1 (#1058)
+- `82ef6d24` fix(copaw): route Team Leader assignments to Team Room (#1060)
+- `e84c67ad` fix(install): allow selecting the docker.sock mounted by the installer (#553)
+- `c6249864` docs: clarify Element homeserver port (#978)
+- `ad3f661c` docs: clarify Higress AI route matching (#980)
+- `f301d4d2` docs: clarify OpenAI-compatible provider setup (#1013)
+- `e6fa64c0` refactor: complete AgentTeams runtime rename (#1063)
+- `687b6d94` refactor: complete the AgentTeams hard-cut rename (#1065)
+- `2540c968` docs: add v1.2.0-beta.1 release news (#1066)
+- `0ff89f07` ci: make integration tests safe for fork PRs (#1073)
+- `37c31b77` refactor: hard cut Team and Worker CR contracts (#1072)
+- `82cbd5fe` feat(install): integrate AgentTeams Dashboard as an optional component (#1075)
+- `785c2db5` fix(install): support pre-v1.2 image environment contract (#1079)
+- `8de237da` fix(dashboard): quick-start, Worker credential, and verification follow-ups (#1081)
+- `c789b706` docs: update Chinese README with new features and releases (#1092)
+- `be1f0481` docs: add AgentLoop integration to README (#1093)
+- `fcd4297e` fix(install): use legacy storage prefix for pre-v1.2 images (#1100)
+- `7ba2efba` docs: update AgentLoop link in Chinese README (#1108)
+- `5aec8d96` docs: update AgentLoop link in English README (#1109)
+- `45fd4db2` fix: remove Worker storage sync I/O amplification (#1110)
 
-- chore: archive changelog for v1.1.1 ([d62aecb](https://github.com/agentscope-ai/HiClaw/commit/d62aecb))
-- Revert "chore: archive changelog for v1.1.1" ([c78b469](https://github.com/agentscope-ai/HiClaw/commit/c78b469))
-- chore: remove duplicate CLAUDE.md entry from .gitignore ([8c262f7](https://github.com/agentscope-ai/HiClaw/commit/8c262f7))
-- feat(test): add CoPaw metrics collection via token_usage.json ([724d80b](https://github.com/agentscope-ai/HiClaw/commit/724d80b))
-- docs(copaw): add CredAgent config reference ([9bae51d](https://github.com/agentscope-ai/HiClaw/commit/9bae51d))
-- test(controller): cover team leader ready auth ([41ac30b](https://github.com/agentscope-ai/HiClaw/commit/41ac30b))
-- docs(controller): note Nacos auth type example ([d522966](https://github.com/agentscope-ai/HiClaw/commit/d522966))
-- docs: sync zh-CN architecture docs ([58cdded](https://github.com/agentscope-ai/HiClaw/commit/58cdded))
-- test: dump diagnostics on wait/probe failures ([e07feb8](https://github.com/agentscope-ai/HiClaw/commit/e07feb8))
+**Also in this window / 同期其他变更**
+
+- Documentation clarifies Element homeserver ports, Higress AI route matching, OpenAI-compatible provider setup, AgentLoop integration, and the v1.2.0-beta.1 release experience. ([#978](https://github.com/agentscope-ai/AgentTeams/pull/978), [#980](https://github.com/agentscope-ai/AgentTeams/pull/980), [#1013](https://github.com/agentscope-ai/AgentTeams/pull/1013), [#1066](https://github.com/agentscope-ai/AgentTeams/pull/1066), [#1092](https://github.com/agentscope-ai/AgentTeams/pull/1092), [#1093](https://github.com/agentscope-ai/AgentTeams/pull/1093))
+- Integration Tests now use the unprivileged `pull_request` context for fork and Dependabot changes while preserving the complete trusted-branch matrix. ([#1073](https://github.com/agentscope-ai/AgentTeams/pull/1073))

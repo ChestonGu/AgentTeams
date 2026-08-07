@@ -1,5 +1,5 @@
 # ============================================================
-# OpenClaw Base Image - Shared base for Manager and Worker
+# AgentTeams OpenClaw Base Image - Shared base for Manager and Worker
 # ============================================================
 # Based on a plain Ubuntu 24.04 image (mirrored from the higress
 # registry for in-China pull speed). The previous all-in-one base
@@ -64,17 +64,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone, build, and optimize OpenClaw
-# 1. Clone OPENCLAW_BRANCH (default: hiclaw-2026.4.14-custom). If OPENCLAW_COMMIT
-#    is set, pin to that commit; otherwise use the branch tip (latest).
+# 1. Fetch only the pinned commit to minimize .git size
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
-RUN git clone --depth 1 --single-branch -b "${OPENCLAW_BRANCH}" \
-        ${OPENCLAW_REPO_URL} /opt/openclaw && \
+RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
-    if [ -n "${OPENCLAW_COMMIT}" ]; then \
-        git fetch --depth 1 origin "${OPENCLAW_COMMIT}" && \
-        git checkout "${OPENCLAW_COMMIT}"; \
-    fi && \
+    git remote add origin ${OPENCLAW_REPO_URL} && \
+    git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
+    git checkout --detach FETCH_HEAD && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && \
     pnpm build && \

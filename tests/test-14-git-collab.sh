@@ -42,7 +42,7 @@ docker exec "${TEST_CONTROLLER_CONTAINER}" bash -c "
     git -C \"\$tmpdir\" remote add origin '${REPO_PATH}.git'
     echo '# Collab Test Project' > \"\$tmpdir/README.md\"
     git -C \"\$tmpdir\" add .
-    git -C \"\$tmpdir\" -c user.email='setup@hiclaw.io' -c user.name='Setup' -c core.hooksPath=/dev/null commit -m 'Initial commit'
+    git -C \"\$tmpdir\" -c user.email='setup@agentteams.io' -c user.name='Setup' -c core.hooksPath=/dev/null commit -m 'Initial commit'
     git -C \"\$tmpdir\" push origin HEAD:main
     rm -rf \"\$tmpdir\"
 " || {
@@ -99,7 +99,11 @@ DO NOT assign any phase to a different worker. DO NOT give alice phase 2 or phas
 IMPORTANT: You MUST use the EXACT branch names and file paths specified below. Do not rename, substitute, or simplify them. The verification system checks these exact names.
 
 Before starting any phase:
-1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially.
+1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially. When creating any missing worker, use these exact values — do NOT ask me to confirm any of them:
+   - runtime: install default
+   - skills: github-operations, git-delegation
+   - SOUL/role: 'Developer working on a shared git repo using git-delegation workflows'
+   If a worker already exists, reuse it.
 2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
 
 Run the phases strictly in order, waiting for each phase's report before starting the next.

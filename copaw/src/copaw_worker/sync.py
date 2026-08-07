@@ -35,8 +35,18 @@ from copaw_worker.bridge import bridge_runtime_to_standard
 
 logger = logging.getLogger(__name__)
 
+def _storage_alias() -> str:
+    explicit = os.environ.get("AGENTTEAMS_STORAGE_ALIAS")
+    if explicit:
+        return explicit
+    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX") or ""
+    if "/" in prefix:
+        return prefix.split("/", 1)[0]
+    return "agentteams"
+
+
 # mc alias name used for this worker session
-_MC_ALIAS = "hiclaw"
+_MC_ALIAS = _storage_alias()
 
 
 class HealthStateProtocol(Protocol):
@@ -164,8 +174,8 @@ def _team_storage_name_from_worker_team(bucket: str, team_ref: str) -> str:
     team_name = team_ref.strip()
     bucket_name = (bucket or "").strip()
     prefixes = [bucket_name]
-    if bucket_name.startswith("hiclaw-"):
-        prefixes.append(bucket_name.removeprefix("hiclaw-"))
+    if bucket_name.startswith("agentteams-"):
+        prefixes.append(bucket_name.removeprefix("agentteams-"))
 
     for prefix in prefixes:
         if prefix and team_name.startswith(f"{prefix}-"):
@@ -192,11 +202,11 @@ def _mc(
         exc.cmd = redacted_cmd
         log = logger.warning if warn_on_error else logger.debug
         log(
-            "mc command failed returncode=%s cmd=%s stdout=%s stderr=%s",
+            "mc command failed returncode=%s cmd=%s stdout=%r stderr=%r",
             exc.returncode,
             " ".join(redacted_cmd),
-            exc.stdout,
-            exc.stderr,
+            _preview_text(exc.stdout),
+            _preview_text(exc.stderr),
         )
         raise
     if log_output:
@@ -209,6 +219,16 @@ def _mc(
 def _looks_like_missing_object_error(stderr: str | None) -> bool:
     text = stderr or ""
     return "Object does not exist" in text or "The specified key does not exist" in text
+
+
+_STARTUP_SYNC_FILES = (
+    "openclaw.json",
+    "AGENTS.md",
+    "SOUL.md",
+    "HEARTBEAT.md",
+    "config/mcporter.json",
+    "mcporter-servers.json",
+)
 
 
 class FileSync:
@@ -234,14 +254,21 @@ class FileSync:
         self.worker_name = worker_name
         self.worker_cr_name = worker_cr_name or worker_name
         self._secure = secure
-        self.local_dir = local_dir or Path.home() / ".copaw-worker" / worker_name
+        configured_working_dir = os.environ.get("COPAW_WORKING_DIR")
+        if local_dir is not None:
+            self.local_dir = local_dir
+        elif configured_working_dir:
+            self.local_dir = Path(configured_working_dir).parent
+        else:
+            self.local_dir = Path.home() / ".copaw-worker" / worker_name
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.shared_dir = shared_dir or self.local_dir / "shared"
         self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
-        self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
-        self._k8s_mode = os.environ.get("HICLAW_RUNTIME") == "k8s"
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME")
+        self._cloud_mode = runtime == "aliyun"
+        self._k8s_mode = runtime == "k8s"
         self._worker_info: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
@@ -257,9 +284,10 @@ class FileSync:
         """
         result = subprocess.run(
             ["bash", "-c",
-             "source /opt/hiclaw/scripts/lib/oss-credentials.sh && "
+             "source /opt/agentteams/scripts/lib/agentteams-env.sh && "
              "ensure_mc_credentials && "
-             "echo $MC_HOST_hiclaw"],
+             f"_mc_host_var=MC_HOST_{_MC_ALIAS} && "
+             "printf '%s' \"${!_mc_host_var}\""],
             capture_output=True, text=True, check=True,
         )
         mc_host = result.stdout.strip()
@@ -275,9 +303,9 @@ class FileSync:
         via the shared shell function (lazy, no-op when token is valid).
         Local mode: set mc alias once with static credentials.
         """
-        runtime = os.environ.get("HICLAW_RUNTIME", "<unset>")
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME", "<unset>")
         mc_host_set = bool(os.environ.get(f"MC_HOST_{_MC_ALIAS}"))
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "<unset>")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "<unset>")
         logger.info(
             "_ensure_alias: runtime=%s cloud_mode=%s k8s_mode=%s endpoint=%s bucket=%s worker_name=%s access_key=%s alias_set=%s mc_host_set=%s controller_url=%s",
             runtime,
@@ -347,7 +375,7 @@ class FileSync:
         if result.returncode == 0:
             return result.stdout
         if _looks_like_missing_object_error(result.stderr):
-            logger.debug("mc cat missing object for %s: %s", key, result.stderr)
+            logger.info("mc cat missing object for %s: %s", key, _preview_text(result.stderr))
             return None
         logger.warning(
             "mc cat failed returncode=%s key=%s stderr=%r",
@@ -376,6 +404,19 @@ class FileSync:
             logger.debug("mc ls error for %s: %s", prefix, exc)
             return []
 
+    def _pull_startup_files(self) -> list[str]:
+        """Pull known startup files when mc mirror cannot stat the prefix."""
+        changed: list[str] = []
+        for rel_path in _STARTUP_SYNC_FILES:
+            content = self._cat(f"{self._prefix}/{rel_path}")
+            if content is None:
+                continue
+            local_path = self.local_dir / rel_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(content)
+            changed.append(rel_path)
+        return changed
+
     def mirror_all(self) -> None:
         """Full mirror of the worker's MinIO prefix to local_dir.
 
@@ -384,8 +425,8 @@ class FileSync:
         After this, runtime Remote -> Local pulls are explicit; background sync
         only pushes eligible local changes via ``push_local``.
         """
-        runtime = os.environ.get("HICLAW_RUNTIME", "<unset>")
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "<unset>")
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME", "<unset>")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "<unset>")
         logger.info(
             "mirror_all: preparing primary mirror runtime=%s cloud_mode=%s k8s_mode=%s endpoint=%s bucket=%s worker_name=%s access_key=%s alias_set=%s mc_host_set=%s controller_url=%s",
             runtime,
@@ -423,7 +464,23 @@ class FileSync:
                 controller_url,
                 exc.stderr,
             )
-            raise
+            error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}"
+            if not _looks_like_missing_object_error(error_text):
+                raise
+            logger.info(
+                "mirror_all: primary mirror prefix missing; trying direct startup file pulls",
+            )
+            startup_changed = self._pull_startup_files()
+            if startup_changed:
+                logger.info(
+                    "mirror_all: restored startup files after missing prefix: %s",
+                    ", ".join(startup_changed),
+                )
+
+        if not (self.local_dir / "openclaw.json").exists():
+            raise RuntimeError(
+                f"openclaw.json not found in MinIO for worker {self.worker_name}"
+            )
 
         # Mirror shared/ — team members use teams/{team}/shared/, others use global shared/
         shared_remote = self._get_shared_remote()
@@ -468,17 +525,17 @@ class FileSync:
     # ------------------------------------------------------------------
 
     def _get_worker_info(self) -> dict[str, Any]:
-        """Return authoritative worker metadata from the HiClaw controller."""
+        """Return authoritative worker metadata from the AgentTeams controller."""
         if self._worker_info is not None:
             return self._worker_info
 
-        hiclaw_bin = shutil.which("hiclaw")
-        if not hiclaw_bin:
-            raise RuntimeError("hiclaw CLI not found; cannot resolve worker storage scope")
+        agentteams_bin = shutil.which("agt")
+        if not agentteams_bin:
+            raise RuntimeError("AgentTeams CLI not found; cannot resolve worker storage scope")
 
         try:
             result = subprocess.run(
-                [hiclaw_bin, "get", "workers", self.worker_cr_name, "-o", "json"],
+                [agentteams_bin, "get", "workers", self.worker_cr_name, "-o", "json"],
                 capture_output=True,
                 text=True,
                 check=True,

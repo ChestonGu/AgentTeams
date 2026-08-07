@@ -290,78 +290,134 @@ _snapshot_hermes_sessions() {
     local container="$1"
     local state_db="$2"
 
-    docker exec -i -e HERMES_STATE_DB="$state_db" "$container" python3 - <<'PY'
+    local output status
+    output=$(docker exec -i \
+        -e HERMES_STATE_DB="$state_db" \
+        -e HERMES_METRICS_SCHEMA_WAIT_SECONDS="${HERMES_METRICS_SCHEMA_WAIT_SECONDS:-15}" \
+        "$container" python3 - <<'PY' 2>&1
 import datetime
 import json
 import os
 import sqlite3
+import time
+
+
+def emit_empty() -> None:
+    print(json.dumps({"sessions": {}}))
+
+
+def is_expected_operational_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return (
+        "no such table: sessions" in msg
+        or "no such table: messages" in msg
+        or "database is locked" in msg
+        or "unable to open database file" in msg
+    )
+
+
+def has_required_schema(cur: sqlite3.Cursor) -> bool:
+    rows = cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    tables = {row["name"] for row in rows}
+    return "sessions" in tables and "messages" in tables
 
 db_path = os.environ.get("HERMES_STATE_DB", "")
 if not db_path or not os.path.exists(db_path):
-    print(json.dumps({"sessions": {}}))
+    emit_empty()
     raise SystemExit(0)
 
-conn = sqlite3.connect(db_path)
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
-query = """
-SELECT
-    s.id,
-    s.started_at,
-    COALESCE(s.ended_at, MAX(m.timestamp), s.started_at) AS end_ts,
-    s.input_tokens,
-    s.output_tokens,
-    s.cache_read_tokens,
-    s.cache_write_tokens,
-    SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS llm_calls
-FROM sessions s
-LEFT JOIN messages m ON m.session_id = s.id
-GROUP BY
-    s.id,
-    s.started_at,
-    s.ended_at,
-    s.input_tokens,
-    s.output_tokens,
-    s.cache_read_tokens,
-    s.cache_write_tokens
-ORDER BY s.started_at DESC
-"""
+try:
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
 
-def iso(ts: float | None) -> str:
-    if ts is None:
-        return ""
-    return datetime.datetime.fromtimestamp(
-        float(ts), tz=datetime.timezone.utc
-    ).isoformat()
+    wait_seconds = float(os.environ.get("HERMES_METRICS_SCHEMA_WAIT_SECONDS", "15"))
+    deadline = time.time() + max(0, wait_seconds)
+    while True:
+        try:
+            if has_required_schema(cur):
+                break
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
 
-out = {"sessions": {}}
-for row in cur.execute(query):
-    start = float(row["started_at"] or 0)
-    end = float(row["end_ts"] or start)
-    input_tokens = int(row["input_tokens"] or 0)
-    output_tokens = int(row["output_tokens"] or 0)
-    cache_read = int(row["cache_read_tokens"] or 0)
-    cache_write = int(row["cache_write_tokens"] or 0)
-    out["sessions"][row["id"]] = {
-        "llm_calls": int(row["llm_calls"] or 0),
-        "tokens": {
-            "input": input_tokens,
-            "output": output_tokens,
-            "cache_read": cache_read,
-            "cache_write": cache_write,
-            "total": input_tokens + output_tokens,
-        },
-        "timing": {
-            "start_epoch": start,
-            "end_epoch": end,
-            "start": iso(start),
-            "end": iso(end),
-            "duration_seconds": max(0, int(end - start)),
-        },
-    }
+        if time.time() >= deadline:
+            emit_empty()
+            raise SystemExit(0)
+        time.sleep(1)
 
-print(json.dumps(out))
+    query = """
+    SELECT
+        s.id,
+        s.started_at,
+        COALESCE(s.ended_at, MAX(m.timestamp), s.started_at) AS end_ts,
+        s.input_tokens,
+        s.output_tokens,
+        s.cache_read_tokens,
+        s.cache_write_tokens,
+        SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS llm_calls
+    FROM sessions s
+    LEFT JOIN messages m ON m.session_id = s.id
+    GROUP BY
+        s.id,
+        s.started_at,
+        s.ended_at,
+        s.input_tokens,
+        s.output_tokens,
+        s.cache_read_tokens,
+        s.cache_write_tokens
+    ORDER BY s.started_at DESC
+    """
+
+    def iso(ts: float | None) -> str:
+        if ts is None:
+            return ""
+        return datetime.datetime.fromtimestamp(
+            float(ts), tz=datetime.timezone.utc
+        ).isoformat()
+
+    out = {"sessions": {}}
+    for row in cur.execute(query):
+        start = float(row["started_at"] or 0)
+        end = float(row["end_ts"] or start)
+        input_tokens = int(row["input_tokens"] or 0)
+        output_tokens = int(row["output_tokens"] or 0)
+        cache_read = int(row["cache_read_tokens"] or 0)
+        cache_write = int(row["cache_write_tokens"] or 0)
+        out["sessions"][row["id"]] = {
+            "llm_calls": int(row["llm_calls"] or 0),
+            "tokens": {
+                "input": input_tokens,
+                "output": output_tokens,
+                "cache_read": cache_read,
+                "cache_write": cache_write,
+                "total": input_tokens + output_tokens,
+            },
+            "timing": {
+                "start_epoch": start,
+                "end_epoch": end,
+                "start": iso(start),
+                "end": iso(end),
+                "duration_seconds": max(0, int(end - start)),
+            },
+        }
+
+    print(json.dumps(out))
+except sqlite3.OperationalError as exc:
+    if is_expected_operational_error(exc):
+        emit_empty()
+        raise SystemExit(0)
+    raise
 PY
+    )
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+    printf '%s\n' "$output"
 }
 
 # Collect metrics for the latest Hermes session from state.db.
@@ -513,11 +569,12 @@ wait_for_worker_session_stable() {
     local worker="$1"
     local stable_seconds="${2:-5}"
     local max_wait="${3:-120}"
-    local container="hiclaw-worker-${worker}"
+    local container
+    container="$(worker_container_name "${worker}")"
     local session_dir
-    session_dir=$(_detect_session_dir "$container" "/root/hiclaw-fs/agents/${worker}")
+    session_dir=$(_detect_session_dir "$container" "/root/agentteams-fs/agents/${worker}")
     local runtime
-    runtime=$(_detect_runtime "$container" "/root/hiclaw-fs/agents/${worker}")
+    runtime=$(_detect_runtime "$container" "/root/agentteams-fs/agents/${worker}")
 
     if [ "$runtime" = "hermes" ]; then
         log_info "Worker '${worker}' uses Hermes; SessionDB metrics are transaction-based, skipping jsonl stabilization wait" >&2
@@ -529,7 +586,7 @@ wait_for_worker_session_stable() {
         return 0
     fi
 
-    if ! _is_metrics_supported "$container" "/root/hiclaw-fs/agents/${worker}"; then
+    if ! _is_metrics_supported "$container" "/root/agentteams-fs/agents/${worker}"; then
         log_info "Worker '${worker}' runtime does not record session metrics, skipping session wait" >&2
         return 0
     fi
@@ -572,7 +629,7 @@ wait_for_worker_session_stable() {
 wait_for_session_stable() {
     local stable_seconds="${1:-5}"
     local max_wait="${2:-60}"
-    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}"
+    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
     local manager_session_dir
     manager_session_dir=$(_detect_session_dir "$manager_container" "/root/manager-workspace")
     local manager_runtime
@@ -632,7 +689,7 @@ wait_for_session_stable() {
 snapshot_baseline() {
     local workers=("$@")
 
-    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}"
+    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
     local manager_session_dir
     manager_session_dir=$(_detect_session_dir "$manager_container" "/root/manager-workspace")
     local manager_runtime
@@ -670,11 +727,12 @@ snapshot_baseline() {
 
     # Snapshot all Worker session files
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
-        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/agentteams-fs/agents/${worker}")
         local worker_runtime
-        worker_runtime=$(_detect_runtime "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_runtime=$(_detect_runtime "$worker_container" "/root/agentteams-fs/agents/${worker}")
 
         if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${worker_container}$"; then
             continue
@@ -682,15 +740,15 @@ snapshot_baseline() {
 
         if [ "$worker_runtime" = "hermes" ]; then
             local worker_db
-            worker_db=$(_detect_hermes_state_db "/root/hiclaw-fs/agents/${worker}")
+            worker_db=$(_detect_hermes_state_db "/root/agentteams-fs/agents/${worker}")
             local worker_snapshot
             worker_snapshot=$(_snapshot_hermes_sessions "$worker_container" "$worker_db")
             snapshot_result=$(echo "$snapshot_result" | jq --arg w "$worker" --argjson o "$worker_snapshot" '.offsets[$w] = $o')
         elif [ "$worker_runtime" = "copaw" ]; then
             local worker_copaw_totals
-            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/agentteams-fs/agents/${worker}")
             snapshot_result=$(echo "$snapshot_result" | jq --arg w "$worker" --argjson o "$worker_copaw_totals" '.offsets[$w] = $o')
-        elif ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
+        elif ! _is_metrics_supported "$worker_container" "/root/agentteams-fs/agents/${worker}"; then
             continue
         else
             local worker_files
@@ -801,7 +859,7 @@ collect_delta_metrics() {
     shift 2
     local workers=("$@")
 
-    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}"
+    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
     local manager_session_dir
     manager_session_dir=$(_detect_session_dir "$manager_container" "/root/manager-workspace")
     local manager_runtime
@@ -852,11 +910,12 @@ collect_delta_metrics() {
 
     # Collect Worker deltas
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
-        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/agentteams-fs/agents/${worker}")
         local worker_runtime
-        worker_runtime=$(_detect_runtime "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_runtime=$(_detect_runtime "$worker_container" "/root/agentteams-fs/agents/${worker}")
 
         log_info "Collecting Worker '${worker}' delta metrics..." >&2
 
@@ -867,7 +926,7 @@ collect_delta_metrics() {
 
         if [ "$worker_runtime" != "hermes" ] && \
            [ "$worker_runtime" != "copaw" ] && \
-           ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
+           ! _is_metrics_supported "$worker_container" "/root/agentteams-fs/agents/${worker}"; then
             log_info "Worker '${worker}' runtime '${worker_runtime}' does not record session metrics; emitting unsupported placeholder" >&2
             local worker_blob
             worker_blob=$(_emit_unsupported_metrics_blob "$worker_runtime")
@@ -880,12 +939,12 @@ collect_delta_metrics() {
         local worker_delta
         if [ "$worker_runtime" = "hermes" ]; then
             local worker_db
-            worker_db=$(_detect_hermes_state_db "/root/hiclaw-fs/agents/${worker}")
+            worker_db=$(_detect_hermes_state_db "/root/agentteams-fs/agents/${worker}")
             worker_delta=$(_collect_hermes_delta "$worker_container" "$worker_db" "$worker_offsets")
         elif [ "$worker_runtime" = "copaw" ]; then
             local worker_copaw_offsets
             worker_copaw_offsets=$(echo "$baseline" | jq -c --arg w "$worker" '.offsets[$w] // {}')
-            worker_delta=$(_collect_copaw_delta "$worker_container" "/root/hiclaw-fs/agents/${worker}" "$worker_copaw_offsets")
+            worker_delta=$(_collect_copaw_delta "$worker_container" "/root/agentteams-fs/agents/${worker}" "$worker_copaw_offsets")
         else
             worker_delta=$(_collect_agent_delta "$worker_container" "$worker_session_dir" "$worker_offsets")
         fi
@@ -923,7 +982,7 @@ collect_test_metrics() {
     shift
     local workers=("$@")
     
-    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}"
+    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
     local manager_session_dir
     manager_session_dir=$(_detect_session_dir "$manager_container" "/root/manager-workspace")
     local manager_runtime
@@ -977,11 +1036,12 @@ EOF
     
     # Collect Worker metrics
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
-        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_session_dir=$(_detect_session_dir "$worker_container" "/root/agentteams-fs/agents/${worker}")
         local worker_runtime
-        worker_runtime=$(_detect_runtime "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+        worker_runtime=$(_detect_runtime "$worker_container" "/root/agentteams-fs/agents/${worker}")
         
         log_info "Collecting Worker '${worker}' metrics..." >&2
         
@@ -993,7 +1053,7 @@ EOF
 
         if [ "$worker_runtime" != "hermes" ] && \
            [ "$worker_runtime" != "copaw" ] && \
-           ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
+           ! _is_metrics_supported "$worker_container" "/root/agentteams-fs/agents/${worker}"; then
             log_info "Worker '${worker}' runtime '${worker_runtime}' does not record session metrics; emitting unsupported placeholder" >&2
             local worker_blob
             worker_blob=$(_emit_unsupported_metrics_blob "$worker_runtime")
@@ -1004,11 +1064,11 @@ EOF
         local worker_metrics
         if [ "$worker_runtime" = "hermes" ]; then
             local worker_db
-            worker_db=$(_detect_hermes_state_db "/root/hiclaw-fs/agents/${worker}")
+            worker_db=$(_detect_hermes_state_db "/root/agentteams-fs/agents/${worker}")
             worker_metrics=$(_collect_hermes_latest_metrics "$worker_container" "$worker_db")
         elif [ "$worker_runtime" = "copaw" ]; then
             local worker_copaw_totals
-            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/agentteams-fs/agents/${worker}")
             local wc_calls wc_input wc_output
             wc_calls=$(echo "$worker_copaw_totals" | jq -r '.call_count // 0')
             wc_input=$(echo "$worker_copaw_totals" | jq -r '.prompt_tokens // 0')
@@ -1650,7 +1710,7 @@ generate_comparison_markdown() {
     fi
 
     echo "---"
-    echo "*Generated by HiClaw CI on $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
+    echo "*Generated by AgentTeams CI on $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
 }
 
 # Internal helper: render by-role table when no baseline comparison is available

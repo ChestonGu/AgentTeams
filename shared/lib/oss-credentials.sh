@@ -1,13 +1,11 @@
 #!/bin/bash
 # oss-credentials.sh - STS credential management for mc (MinIO Client)
 #
-# Two credential paths (checked in priority order):
-#
-# 1. Controller-mediated STS (cloud mode):
-#    HICLAW_CONTROLLER_URL + bearer token (HICLAW_AUTH_TOKEN or token file
-#    at HICLAW_AUTH_TOKEN_FILE, legacy fallback HICLAW_WORKER_API_KEY) →
+# Controller-mediated STS (cloud mode):
+#    AGENTTEAMS_CONTROLLER_URL + bearer token (AGENTTEAMS_AUTH_TOKEN or token
+#    file at AGENTTEAMS_AUTH_TOKEN_FILE) →
 #    call controller /api/v1/credentials/sts. The controller obtains STS
-#    tokens from its hiclaw-credential-provider sidecar.
+#    tokens from its credential-provider sidecar.
 #
 # 2. No controller creds configured → no-op (local mode, mc alias
 #    configured with static credentials against MinIO/self-hosted S3).
@@ -15,7 +13,7 @@
 # STS tokens expire after 1 hour. Credentials are cached and lazy-refreshed.
 #
 # Usage:
-#   source /opt/hiclaw/scripts/lib/oss-credentials.sh
+#   source /opt/agentteams/scripts/lib/oss-credentials.sh
 #   ensure_mc_credentials   # call before any mc command
 
 _OSS_CRED_FILE="/tmp/mc-oss-credentials.env"
@@ -26,22 +24,56 @@ _OSS_CRED_REFRESH_MARGIN=600  # refresh if less than 10 minutes remaining
 # --------------------------------------------------------------------------
 
 # Resolve the bearer token used to authenticate against the controller.
-# Priority: HICLAW_AUTH_TOKEN > HICLAW_AUTH_TOKEN_FILE > HICLAW_WORKER_API_KEY.
+# Priority: active contract AUTH_TOKEN > active contract AUTH_TOKEN_FILE.
 # Emits the token on stdout; empty string if none found.
 _oss_resolve_bearer() {
-    if [ -n "${HICLAW_AUTH_TOKEN:-}" ]; then
-        printf '%s' "${HICLAW_AUTH_TOKEN}"
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN:-}" ]; then
+        printf '%s' "${AGENTTEAMS_AUTH_TOKEN}"
         return 0
     fi
-    if [ -n "${HICLAW_AUTH_TOKEN_FILE:-}" ] && [ -f "${HICLAW_AUTH_TOKEN_FILE}" ]; then
-        cat "${HICLAW_AUTH_TOKEN_FILE}"
-        return 0
-    fi
-    if [ -n "${HICLAW_WORKER_API_KEY:-}" ]; then
-        printf '%s' "${HICLAW_WORKER_API_KEY}"
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ] && [ -f "${AGENTTEAMS_AUTH_TOKEN_FILE}" ]; then
+        cat "${AGENTTEAMS_AUTH_TOKEN_FILE}"
         return 0
     fi
     return 0
+}
+
+_oss_use_agentteams_env() {
+    [ -n "${AGENTTEAMS_WORKER_NAME:-}" ] || [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ] || \
+        [ -n "${AGENTTEAMS_AUTH_TOKEN:-}" ] || [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ]
+}
+
+_oss_controller_url() {
+    printf '%s' "${AGENTTEAMS_CONTROLLER_URL:-}"
+}
+
+_oss_storage_alias() {
+    local prefix
+    if [ -n "${AGENTTEAMS_STORAGE_ALIAS:-}" ]; then
+        printf '%s' "${AGENTTEAMS_STORAGE_ALIAS}"
+        return
+    fi
+    prefix="${AGENTTEAMS_STORAGE_PREFIX:-}"
+    case "${prefix}" in
+        */*) printf '%s' "${prefix%%/*}" ;;
+        *) printf '%s' "agentteams" ;;
+    esac
+}
+
+_oss_auth_error_vars() {
+    printf '%s' "AGENTTEAMS_AUTH_TOKEN / AGENTTEAMS_AUTH_TOKEN_FILE"
+}
+
+_oss_export_mc_host() {
+    export "MC_HOST_$(_oss_storage_alias)"
+}
+
+_oss_mc_host_var() {
+    printf 'MC_HOST_%s' "$(_oss_storage_alias)"
+}
+
+_oss_has_controller_url() {
+    [ -n "$(_oss_controller_url)" ]
 }
 
 # --------------------------------------------------------------------------
@@ -49,13 +81,13 @@ _oss_resolve_bearer() {
 # --------------------------------------------------------------------------
 
 _oss_refresh_sts_via_controller() {
-    local _controller_url="${HICLAW_CONTROLLER_URL:-}"
+    local _controller_url="$(_oss_controller_url)"
     local bearer resp http_code
-    local sts_ak sts_sk sts_token oss_endpoint mc_host_value
+    local sts_ak sts_sk sts_token oss_endpoint mc_host_value mc_host_var
 
     bearer=$(_oss_resolve_bearer)
     if [ -z "${bearer}" ]; then
-        echo "[oss-credentials] ERROR: no bearer token available (HICLAW_AUTH_TOKEN / HICLAW_AUTH_TOKEN_FILE / HICLAW_WORKER_API_KEY all empty)" >&2
+        echo "[oss-credentials] ERROR: no bearer token available ($(_oss_auth_error_vars) both empty)" >&2
         return 1
     fi
 
@@ -106,8 +138,9 @@ _oss_refresh_sts_via_controller() {
     local expires_at
     expires_at=$(( $(date +%s) + 3600 ))
 
+    mc_host_var="$(_oss_mc_host_var)"
     cat > "${_OSS_CRED_FILE}" <<EOF
-MC_HOST_hiclaw="${mc_host_value}"
+${mc_host_var}="${mc_host_value}"
 _OSS_CRED_EXPIRES_AT=${expires_at}
 EOF
     chmod 600 "${_OSS_CRED_FILE}"
@@ -121,7 +154,7 @@ EOF
 
 ensure_mc_credentials() {
     # Cloud mode: Controller URL + any resolvable bearer token → controller-mediated STS
-    if [ -n "${HICLAW_CONTROLLER_URL:-}" ]; then
+    if _oss_has_controller_url; then
         local bearer
         bearer=$(_oss_resolve_bearer)
         if [ -n "${bearer}" ]; then
@@ -154,5 +187,5 @@ _oss_ensure_refresh() {
         . "${_OSS_CRED_FILE}"
     fi
 
-    export MC_HOST_hiclaw
+    _oss_export_mc_host
 }

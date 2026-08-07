@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from copaw_worker.hooks.tools.filesync import filesync
+from copaw_worker.hooks.tools.filesync import create_sync, filesync
 from copaw_worker.sync import FileSync, _team_storage_name_from_worker_team
 
 
@@ -21,7 +21,7 @@ def _sync(tmp_path):
         endpoint="http://minio:9000",
         access_key="minio",
         secret_key="password",
-        bucket="hiclaw-storage",
+        bucket="agentteams-storage",
         worker_name="dag-team-dev",
         local_dir=local_dir,
         shared_dir=workspace_dir / "shared",
@@ -29,15 +29,15 @@ def _sync(tmp_path):
     )
 
 
-def _mock_hiclaw_worker(monkeypatch, payload, expected_name="dag-team-dev"):
+def _mock_agentteams_worker(monkeypatch, payload, expected_name="dag-team-dev"):
     original_which = shutil.which
     monkeypatch.setattr(
         "shutil.which",
-        lambda name: "/usr/local/bin/hiclaw" if name == "hiclaw" else original_which(name),
+        lambda name: "/usr/local/bin/agt" if name == "agt" else original_which(name),
     )
 
     def fake_run(cmd, **kwargs):
-        if cmd == ["/usr/local/bin/hiclaw", "get", "workers", expected_name, "-o", "json"]:
+        if cmd == ["/usr/local/bin/agt", "get", "workers", expected_name, "-o", "json"]:
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -49,16 +49,33 @@ def _mock_hiclaw_worker(monkeypatch, payload, expected_name="dag-team-dev"):
     monkeypatch.setattr(subprocess, "run", fake_run)
 
 
+def test_create_sync_accepts_agentteams_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "worker" / ".copaw"))
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_CR_NAME", "worker-cr")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
+    monkeypatch.setenv("AGENTTEAMS_FS_BUCKET", "agentteams-storage")
+
+    sync = create_sync()
+
+    assert sync.worker_name == "worker"
+    assert sync.worker_cr_name == "worker-cr"
+    assert sync.endpoint == "http://minio:9000"
+    assert sync.bucket == "agentteams-storage"
+
+
 def test_resolve_shared_path_strips_bucket_prefix_from_worker_team(tmp_path, monkeypatch):
     sync = FileSync(
         endpoint="http://minio:9000",
         access_key="minio",
         secret_key="password",
-        bucket="hiclaw-magic-cn-123",
+        bucket="agentteams-magic-cn-123",
         worker_name="dag-team-dev",
         local_dir=tmp_path / "worker",
     )
-    _mock_hiclaw_worker(
+    _mock_agentteams_worker(
         monkeypatch,
         {"name": "dag-team-dev", "team": "magic-cn-123-dag-team"},
     )
@@ -68,11 +85,11 @@ def test_resolve_shared_path_strips_bucket_prefix_from_worker_team(tmp_path, mon
     assert resolved.kind == "shared"
     assert resolved.subpath == "tasks/st-01/result.md"
     assert resolved.local == sync.shared_dir / "tasks" / "st-01" / "result.md"
-    assert resolved.remote == "hiclaw/hiclaw-magic-cn-123/teams/dag-team/shared/tasks/st-01/result.md"
+    assert resolved.remote == "agentteams/agentteams-magic-cn-123/teams/dag-team/shared/tasks/st-01/result.md"
 
 
 def test_team_storage_name_keeps_legacy_team_without_bucket_prefix():
-    assert _team_storage_name_from_worker_team("hiclaw-storage", "dag-team") == "dag-team"
+    assert _team_storage_name_from_worker_team("agentteams-storage", "dag-team") == "dag-team"
 
 
 def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_path, monkeypatch):
@@ -80,12 +97,12 @@ def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_
         endpoint="http://minio:9000",
         access_key="minio",
         secret_key="password",
-        bucket="hiclaw-storage",
+        bucket="agentteams-storage",
         worker_name="novworker02",
         worker_cr_name="nov-worker-cr",
         local_dir=tmp_path / "worker",
     )
-    _mock_hiclaw_worker(
+    _mock_agentteams_worker(
         monkeypatch,
         {"name": "nov-worker-cr", "workerName": "novworker02", "team": "dag-team"},
         expected_name="nov-worker-cr",
@@ -105,7 +122,7 @@ def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_
     assert sync._prefix == "agents/novworker02"
     assert commands[0] == (
         "mirror",
-        "hiclaw/hiclaw-storage/agents/novworker02/",
+        "agentteams/agentteams-storage/agents/novworker02/",
         f"{sync.local_dir}/",
         "--overwrite",
         "--exclude",
@@ -115,14 +132,14 @@ def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_
 
 def test_resolve_shared_path_uses_global_remote_for_standalone_worker(tmp_path, monkeypatch):
     sync = _sync(tmp_path)
-    _mock_hiclaw_worker(monkeypatch, {"name": "dag-team-dev", "team": "", "role": "worker"})
+    _mock_agentteams_worker(monkeypatch, {"name": "dag-team-dev", "team": "", "role": "worker"})
 
     resolved = sync.resolve_shared_path("shared/tasks/st-01/result.md")
 
-    assert resolved.remote == "hiclaw/hiclaw-storage/shared/tasks/st-01/result.md"
+    assert resolved.remote == "agentteams/agentteams-storage/shared/tasks/st-01/result.md"
 
 
-def test_resolve_shared_path_fails_closed_when_hiclaw_cli_is_missing(tmp_path, monkeypatch):
+def test_resolve_shared_path_fails_closed_when_agentteams_cli_is_missing(tmp_path, monkeypatch):
     sync = _sync(tmp_path)
     (sync.local_dir / "SOUL.md").write_text("You are the Team Leader of `wrong-team`.")
     monkeypatch.setattr("shutil.which", lambda name: None)
@@ -131,10 +148,10 @@ def test_resolve_shared_path_fails_closed_when_hiclaw_cli_is_missing(tmp_path, m
         sync.resolve_shared_path("shared/tasks/st-01/result.md")
 
 
-def test_is_team_leader_uses_hiclaw_role(tmp_path, monkeypatch):
+def test_is_team_leader_uses_agentteams_role(tmp_path, monkeypatch):
     sync = _sync(tmp_path)
     (sync.local_dir / "AGENTS.md").write_text("No prompt text should define role.")
-    _mock_hiclaw_worker(
+    _mock_agentteams_worker(
         monkeypatch,
         {"name": "dag-team-dev", "team": "dag-team", "role": "team_leader"},
     )
@@ -163,11 +180,11 @@ def test_push_shared_path_rejects_global_shared(tmp_path):
 async def test_filesync_dry_run_returns_resolved_local_path(tmp_path, monkeypatch):
     working_dir = tmp_path / "worker" / ".copaw"
     monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "dag-team-dev")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "minio")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "password")
-    _mock_hiclaw_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "dag-team-dev")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
+    _mock_agentteams_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
 
     response = await filesync(
         action="pull",
@@ -190,11 +207,11 @@ async def test_filesync_normalizes_project_directory_without_trailing_slash(
 ):
     working_dir = tmp_path / "worker" / ".copaw"
     monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "dag-team-dev")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "minio")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "password")
-    _mock_hiclaw_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "dag-team-dev")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
+    _mock_agentteams_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
 
     response = await filesync(
         action="pull",
@@ -214,11 +231,11 @@ async def test_filesync_normalizes_project_directory_without_trailing_slash(
 async def test_filesync_accepts_action_payload_and_json_string_exclude(tmp_path, monkeypatch):
     working_dir = tmp_path / "worker" / ".copaw"
     monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "dag-team-dev")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "minio")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "password")
-    _mock_hiclaw_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "dag-team-dev")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
+    _mock_agentteams_worker(monkeypatch, {"name": "dag-team-dev", "team": "dag-team"})
 
     response = await filesync(
         action="push",
@@ -238,10 +255,10 @@ async def test_filesync_accepts_action_payload_and_json_string_exclude(tmp_path,
 @pytest.mark.asyncio
 async def test_filesync_rejects_invalid_action(tmp_path, monkeypatch):
     monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "worker" / ".copaw"))
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "dag-team-dev")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "minio")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "password")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "dag-team-dev")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
 
     response = await filesync(action="complete_task", path="shared/tasks/st-01/")
     payload = _response_json(response)

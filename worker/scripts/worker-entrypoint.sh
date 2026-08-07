@@ -3,20 +3,21 @@
 # Pulls config from centralized file system, starts file sync, launches OpenClaw.
 #
 # HOME is set to the Worker workspace so all agent-generated files are synced to MinIO:
-#   ~/ = /root/hiclaw-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
-#   /root/hiclaw-fs/shared/                     = Shared tasks, knowledge, collaboration data
+#   ~/ = /root/agentteams-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
+#   /root/agentteams-fs/shared/                     = Shared tasks, knowledge, collaboration data
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/worker-file-sync.sh
 
-WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
-FS_ENDPOINT="${HICLAW_FS_ENDPOINT:-}"
-FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:-}"
-FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:-}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
+FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
+FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-}"
+FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-}"
 
 log() {
-    echo "[hiclaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[agentteams-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 # ============================================================
@@ -29,32 +30,44 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # Use absolute path because HOME is set to the workspace directory via docker run
-HICLAW_ROOT="/root/hiclaw-fs"
-WORKSPACE="${HICLAW_ROOT}/agents/${WORKER_NAME}"
+AGENTTEAMS_ROOT="/root/agentteams-fs"
+WORKSPACE="${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}"
 
 # ============================================================
 # Step 1: Configure mc alias for centralized file system
 # ============================================================
-if [ "${HICLAW_RUNTIME}" = "aliyun" ]; then
-    log "Configuring mc alias for cloud (RRSA OIDC)..."
-    ensure_mc_credentials
+if ensure_mc_credentials && agentteams_mc_host_configured; then
+    log "Configuring mc alias via controller-issued storage credentials (${AGENTTEAMS_STORAGE_ALIAS})..."
 else
-    log "Configuring mc alias for local MinIO..."
-    mc alias set hiclaw "${FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}" \
-        "${FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}" \
-        "${FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
+    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
+        log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
+        exit 1
+    fi
+    log "Configuring mc alias for static storage credentials (${AGENTTEAMS_STORAGE_ALIAS})..."
+    mc alias set "${AGENTTEAMS_STORAGE_ALIAS}" "${FS_ENDPOINT:?AGENTTEAMS_FS_ENDPOINT is required}" \
+        "${FS_ACCESS_KEY:?AGENTTEAMS_FS_ACCESS_KEY is required}" \
+        "${FS_SECRET_KEY:?AGENTTEAMS_FS_SECRET_KEY is required}"
 fi
 
 # ============================================================
 # Step 2: Pull Worker config and shared data from centralized storage
 # ============================================================
-mkdir -p "${WORKSPACE}" "${HICLAW_ROOT}/shared"
+mkdir -p "${WORKSPACE}" "${AGENTTEAMS_ROOT}/shared"
 
 log "Pulling Worker config from centralized storage..."
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
-    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**"
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${HICLAW_ROOT}/shared/" --overwrite 2>/dev/null || true
+RETRY=0
+until mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
+    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**"; do
+    RETRY=$((RETRY + 1))
+    if [ "${RETRY}" -gt 6 ]; then
+        log "ERROR: failed to pull Worker config from MinIO after retries"
+        exit 1
+    fi
+    log "Waiting for Worker config prefix in MinIO (attempt ${RETRY}/6)..."
+    sleep 5
+done
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite 2>/dev/null || true
 
 # Mark pull completion — the local→remote sync loop uses this marker to avoid
 # pushing back files that were just pulled (their mtime is fresh from the pull).
@@ -72,7 +85,7 @@ while [ ! -f "${WORKSPACE}/openclaw.json" ] || [ ! -f "${WORKSPACE}/SOUL.md" ] \
     fi
     log "Waiting for config files to appear in MinIO (attempt ${RETRY}/6)..."
     sleep 5
-    mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
+    mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
         --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**" 2>/dev/null || true
     touch "${PULL_MARKER}"
 done
@@ -109,10 +122,10 @@ if [ -f "${_diag_plugin_dir}/package.json" ] && \
         "${WORKSPACE}/openclaw.json" > /dev/null 2>&1; then
     if [ ! -d "${_diag_plugin_dir}/node_modules" ]; then
         log "diagnostics-otel: installing npm dependencies (required for metrics)..."
-        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/agentteams-diag-install.log 2>&1); then
             log "diagnostics-otel dependencies installed"
         else
-            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/hiclaw-diag-install.log)"
+            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/agentteams-diag-install.log)"
         fi
     else
         log "diagnostics-otel dependencies already present"
@@ -126,16 +139,16 @@ if [ -f "${WORKSPACE}/skills-lock.json" ] && [ -z "$(ls -A ${WORKSPACE}/skills 2
     cd "${WORKSPACE}" && skills experimental_install -y 2>/dev/null || log "Warning: skills restore failed, will need to reinstall"
 fi
 
-# Ensure hiclaw-sync wrapper is functional
+# Ensure agentteams-sync is functional
 # Use /bin/sh to invoke the script so it works even without +x permission
 # (MinIO object storage does not preserve Unix permission bits)
-printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
-    "${WORKSPACE}" > /usr/local/bin/hiclaw-sync
-chmod +x /usr/local/bin/hiclaw-sync
+printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
+    "${WORKSPACE}" > /usr/local/bin/agentteams-sync
+chmod +x /usr/local/bin/agentteams-sync
 
-# Defensive symlink: /opt/hiclaw/agent/skills -> actual skills directory
-mkdir -p /opt/hiclaw/agent
-ln -sfn "${WORKSPACE}/skills" /opt/hiclaw/agent/skills
+# Defensive symlink: /opt/agentteams/agent/skills -> actual skills directory
+mkdir -p /opt/agentteams/agent
+ln -sfn "${WORKSPACE}/skills" /opt/agentteams/agent/skills
 
 log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 
@@ -150,84 +163,29 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #     2. Notifying the other side via Matrix @mention so they can pull on demand
 #
 #   Local -> Remote: change-triggered push of Worker-managed content
-#     - Uses find to detect files modified after the last pull; only runs mc mirror when needed
-#     - Avoids mc mirror --watch TOCTOU bug (crashes on atomic ops like npm install)
-#     - The bulk mirror excludes openclaw.json (local-first field merge; see merge-openclaw-config.sh),
-#       SOUL.md/AGENTS.md/HEARTBEAT.md (handled by the per-file loop below
-#       with an mtime guard), and various caches.
-#     - The per-file `mc cp`-if-newer loop pushes SOUL.md/AGENTS.md/HEARTBEAT.md
-#       only when the local copy was modified after the last pull. This lets
-#       the agent persist its own self-edits (HEARTBEAT.md checklist tweaks,
-#       SOUL.md "personality evolution") without pushing back the unmodified
-#       package content that was just pulled. mc mirror is run before the
-#       touch ${PULL_MARKER} on every pull path, so package content always
-#       has mtime <= PULL_MARKER and the -nt check stays false until the
-#       agent itself writes.
+#     - Uses an independent successful-push marker; a successful cycle advances
+#       the marker so the same files do not trigger a full comparison every 5s.
+#     - Small change sets are copied by relative path. Large change sets collapse
+#       to one mc mirror operation instead of spawning one process per file.
+#     - The path policy preserves the existing Manager-owned and local-runtime
+#       exclusions, while unknown workspace paths remain synchronizable.
+#     - Avoids mc mirror --watch TOCTOU behavior on atomic file operations.
 #
 #   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
 #     + 5-minute fallback pull of Manager-managed paths as safety net
-#       The fallback refreshes ${PULL_MARKER} so the change-triggered loop
-#       does not misinterpret freshly-pulled openclaw.json/skills mtimes as
-#       agent edits and spin forever on no-op pushes.
+#       The fallback refreshes both pull and push markers so freshly-pulled
+#       Manager-managed files do not get pushed back as Worker edits.
 #
 # ────────────────────────────────────────────────────────────────────────────
-# Baseline the outputs-notify marker AFTER the initial pull so pre-existing
-# (pulled) outputs are not re-notified on every startup. The change-triggered
-# loop below notifies only on outputs created after this point.
-touch "${WORKSPACE}/.outputs-notify-marker" 2>/dev/null || true
+WORKER_SYNC_STATE_DIR="/tmp/agentteams-worker-sync"
+worker_sync_init "${WORKER_SYNC_STATE_DIR}" "${PULL_MARKER}"
 (
     while true; do
-        # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
-        CHANGED=$(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" 2>/dev/null | head -1)
-        if [ -n "${CHANGED}" ]; then
-            ensure_mc_credentials 2>/dev/null || true
-            if ! mc mirror "${WORKSPACE}/" "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
-                --exclude "openclaw.json" \
-                --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
-                --exclude "credentials/**" \
-                --exclude ".cache/**" --exclude ".npm/**" \
-                --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
-                --exclude ".last-pull" \
-                --exclude ".outputs-notify-marker" \
-                --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
-                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
-                log "WARNING: Local->Remote sync failed"
-            fi
-            # Per-file push for agent-self-modifiable files: only when locally
-            # modified after the last pull. See block comment above for design.
-            for _mf in SOUL.md AGENTS.md HEARTBEAT.md; do
-                if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
-                    mc cp "${WORKSPACE}/${_mf}" "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
-                fi
-            done
-
-            # Notify on new output files: if files appeared under outputs/ since
-            # the last notification, invoke the callback script. Opt-in and
-            # fire-and-forget (10s timeout) so a slow/dead endpoint never blocks
-            # the sync loop. The platform pulls artifacts from MinIO itself.
-            # Script resolution: prefer a workspace copy (editable via MinIO,
-            # no rebuild); fall back to the image-bundled default.
-            if [ -d "${WORKSPACE}/outputs" ]; then
-                NOTIFY_MARKER="${WORKSPACE}/.outputs-notify-marker"
-                NEW_OUTPUTS="$(find "${WORKSPACE}/outputs/" -type f -newer "${NOTIFY_MARKER}" 2>/dev/null)"
-                if [ -n "${NEW_OUTPUTS}" ]; then
-                    NOTIFY_SCRIPT="${WORKSPACE}/scripts/notify-platform.sh"
-                    if [ ! -f "${NOTIFY_SCRIPT}" ]; then
-                        NOTIFY_SCRIPT="/opt/hiclaw/scripts/notify-platform.sh"
-                    fi
-                    if [ -f "${NOTIFY_SCRIPT}" ]; then
-                        REL_OUTPUTS="$(printf '%s\n' "${NEW_OUTPUTS}" | sed "s|^${WORKSPACE}/||")"
-                        export HICLAW_NOTIFY_WORKER="${WORKER_NAME}"
-                        export HICLAW_NOTIFY_MINIO_PREFIX="${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}"
-                        export HICLAW_NOTIFY_ROOM="$(jq -r '.channels.matrix.homeRoomId // .channels.matrix.userId // empty' "${WORKSPACE}/openclaw.json" 2>/dev/null)"
-                        export HICLAW_NOTIFY_OUTPUTS="${REL_OUTPUTS}"
-                        log "outputs: new artifacts detected, invoking notify-platform.sh"
-                        timeout 10 /bin/sh "${NOTIFY_SCRIPT}" >>/tmp/notify-platform.log 2>&1 \
-                            || log "WARNING: notify-platform.sh exited non-zero (see /tmp/notify-platform.log)"
-                    fi
-                    touch "${NOTIFY_MARKER}"
-                fi
-            fi
+        if ! worker_sync_push_once \
+            "${WORKSPACE}" \
+            "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}" \
+            "${WORKER_SYNC_STATE_DIR}"; then
+            log "WARNING: Local->Remote incremental sync failed; changes will be retried"
         fi
         sleep 5
     done
@@ -242,17 +200,19 @@ log "Local->Remote change-triggered sync started (PID: $!)"
     while true; do
         sleep 300
         ensure_mc_credentials 2>/dev/null || true
-        mc cp "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-remote.json 2>/dev/null || true
-        merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"
+        mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-remote.json 2>/dev/null || true
+        if ! merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"; then
+            log "WARNING: failed to merge remote openclaw.json; keeping local config"
+        fi
         rm -f /tmp/openclaw-remote.json
-        mc cp "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
-        mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
+        mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
+        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${HICLAW_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
-        # Refresh PULL_MARKER so the change-triggered push loop doesn't
-        # re-trigger forever on freshly-pulled openclaw.json/skills mtimes,
-        # and so the per-file -nt guard correctly classifies post-pull edits.
+        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
+        # Refresh both watermarks so freshly-pulled Manager-managed files are
+        # not classified as Worker edits.
         touch "${PULL_MARKER}"
+        worker_sync_mark_remote_pull "${WORKER_SYNC_STATE_DIR}"
     done
 ) &
 log "Remote->Local fallback sync started (Manager-managed files only, every 5m, PID: $!)"
@@ -305,7 +265,7 @@ log "Cleaned Matrix crypto storage (will re-establish E2EE sessions)"
 # identity key (crypto storage was just wiped) causes other clients to
 # reject key distribution. Re-login creates a new device_id, matching
 # the Manager's behavior and allowing clean E2EE session establishment.
-MATRIX_PASSWORD_FILE="${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/credentials/matrix/password"
+MATRIX_PASSWORD_FILE="${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/credentials/matrix/password"
 MATRIX_PASSWORD=$(mc cat "${MATRIX_PASSWORD_FILE}" 2>/dev/null) || true
 if [ -n "${MATRIX_PASSWORD}" ]; then
     # Read homeserver URL from openclaw.json (already pulled from MinIO)
@@ -347,22 +307,22 @@ fi
 # Without this, config reload spawns a detached child and exits, killing the container.
 export OPENCLAW_NO_RESPAWN=1
 
-# Optional matrix-plugin trace logging — when HICLAW_MATRIX_DEBUG=1 is set in
+# Optional matrix-plugin trace logging — when AGENTTEAMS_MATRIX_DEBUG=1 is set in
 # the worker environment (propagated by the controller / install script), turn
 # on OPENCLAW_MATRIX_DEBUG so the matrix plugin emits structured INFO-level
 # lifecycle traces (sync.state transitions, room.invite/join, message handler
 # arrival + filter outcomes). Useful when diagnosing "worker never joined the
 # room" / "manager never replied" hangs without rebuilding the image.
-if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ] && [ -z "${OPENCLAW_MATRIX_DEBUG:-}" ]; then
+if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ] && [ -z "${OPENCLAW_MATRIX_DEBUG:-}" ]; then
     export OPENCLAW_MATRIX_DEBUG=1
-    log "HICLAW_MATRIX_DEBUG=1 detected; OPENCLAW_MATRIX_DEBUG=1 exported for matrix plugin tracing"
+    log "AGENTTEAMS_MATRIX_DEBUG=1 detected; OPENCLAW_MATRIX_DEBUG=1 exported for matrix plugin tracing"
 fi
 
 # ============================================================
 # Step 5c: Background readiness reporter
 # ============================================================
-# Wait for local gateway health, then report ready via hiclaw CLI.
-if [ -n "${HICLAW_CONTROLLER_URL:-}" ]; then
+# Wait for local gateway health, then report ready via agt CLI.
+if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
 (
         # Phase 1: Wait for gateway to be healthy (with timeout)
         TIMEOUT=120; ELAPSED=0
@@ -378,8 +338,8 @@ if [ -n "${HICLAW_CONTROLLER_URL:-}" ]; then
             exit 1
         fi
 
-        # Report ready to controller via hiclaw CLI
-        hiclaw worker report-ready --name "${HICLAW_WORKER_CR_NAME:-${WORKER_NAME}}"
+        # Report ready to controller via agt CLI
+        agt worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
     ) &
     log "Background readiness reporter started (PID: $!)"
 fi

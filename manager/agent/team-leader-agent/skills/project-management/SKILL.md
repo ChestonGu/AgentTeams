@@ -7,6 +7,8 @@ description: Use before any projectflow call or Team Leader workflow involving P
 
 You manage Project files, Project lifecycle, and Project execution plans. Use this skill as the Project state layer. Use `team-coordination` to decide the strategy, and use `task-management` to delegate or check individual Worker tasks.
 
+Project state is tool-owned. Do not create, edit, delete, or repair `shared/projects/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Use `projectflow` actions only. If `projectflow` fails or returns inconsistent state, stop and report the blocker instead of manually patching files.
+
 ## Scope
 
 Use this skill for:
@@ -134,7 +136,7 @@ Use DAG when `team-coordination` decided the work is finite and dependencies can
       {
         "taskId": "{project-id}-01",
         "title": "Short outcome title",
-        "assignedTo": "worker-runtime-short-name",
+        "assignedTo": "<matrix-localpart>",
         "dependsOn": []
       }
     ]
@@ -149,7 +151,21 @@ Each node uses:
 - `assignedTo`
 - `dependsOn`
 
-For `assignedTo`, use the Worker's runtime short name that matches its Matrix localpart. Do not use deployment-prefixed Worker CR names from CLI output. If organization data shows a name such as `magic-cn-plt4s29va0r-worker-dev-worker`, strip the deployment/resource prefix and use `dev-worker`. If you have a Matrix ID such as `@dev-worker:domain`, use `dev-worker`.
+For `assignedTo`, use the Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract it mechanically — never guess, strip, or transform.
+
+**Lookup steps (mandatory before every `plan_dag` / `plan_loop` call):**
+1. Run `agt get workers --team "$TEAM_CR" -o json`
+2. For each Worker, extract the localpart from `.matrixUserID`: e.g. `@worker-issue-resolver:domain` → `worker-issue-resolver`
+3. Use that localpart verbatim as `assignedTo`
+
+❌ Do NOT use CLI `.name` field directly (it may include deployment prefixes like `magic-cn-...-worker-issue-resolver`)
+❌ Do NOT strip prefixes yourself — you will incorrectly remove legitimate name components
+❌ Do NOT infer worker names from memory, AGENTS.md, or display names
+
+| CLI `.name` | `matrixUserID` | ✅ `assignedTo` | ❌ Wrong |
+|---|---|---|---|
+| `magic-cn-x0a4t4pr201-worker-issue-resolver` | `@worker-issue-resolver:domain` | `worker-issue-resolver` | `issue-resolver` |
+| `magic-cn-plt4s29va0r-worker-dev-worker` | `@dev-worker:domain` | `dev-worker` | `worker` |
 
 Do not use `worker`, `owner`, `dependencies`, or standalone short IDs.
 
@@ -185,7 +201,7 @@ Use Loop when `team-coordination` decided the work should repeat until a stop co
       {
         "taskId": "{project-id}-i001-01",
         "title": "Short outcome title",
-        "assignedTo": "worker-runtime-short-name",
+        "assignedTo": "<matrix-localpart>",
         "dependsOn": []
       }
     ]
@@ -206,7 +222,7 @@ Optional inputs:
 - `status`
 - `tasks`
 
-For every Loop task, `assignedTo` follows the same rule as DAG tasks: use the runtime short Worker name, not a deployment-prefixed Worker CR name.
+For every Loop task, `assignedTo` follows the same rule as DAG tasks: extract the Matrix localpart from `agt get workers` output. Never strip or transform.
 
 Use `ready_loop_nodes` to find pending nodes in the current iteration whose dependencies are satisfied by accepted `[x]` nodes. Delegate returned nodes with `task-management`.
 
@@ -333,7 +349,7 @@ Do not call `check_active_tasks` for now.
 
 Team Leader heartbeat is temporarily disabled. Follow `HEARTBEAT.md`: do not probe Worker runtime, inspect active tasks, or send anomaly reports from scheduled heartbeat runs.
 
-Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://hiclaw-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
+Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://agentteams-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
 
 For recovery, act only on explicit room messages, requester instructions, or Project files you were directly asked to inspect.
 

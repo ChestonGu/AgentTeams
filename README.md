@@ -1,20 +1,20 @@
 <h1 align="center">
-    <img src="https://img.alicdn.com/imgextra/i2/O1CN01hTYQMO28B3H9qP7RV_!!6000000007893-2-tps-1490-392.png" alt="HiClaw"  width="290" height="72.5">
+    <img src="https://img.alicdn.com/imgextra/i3/O1CN01hRhtys1Y3svmSnfhX_!!6000000003004-2-tps-478-472.png" alt="AgentTeams"  width="290" height="290">
   <br>
 </h1>
 
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
 <p align="center">
-  <a href="https://deepwiki.com/higress-group/hiclaw"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
+  <a href="https://deepwiki.com/agentscope-ai/AgentTeams"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
 </p>
 
-**HiClaw is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process..**
+**AgentTeams is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process.**
 
-Built on a **Manager-Workers architecture**, HiClaw features a Manager that centrally orchestrates multiple Workers, focusing on collaboration scenarios between humans and Agents, as well as among Agents within enterprise environments.
+Built on a **Manager-Workers architecture**, AgentTeams features a Manager that centrally orchestrates multiple Workers, focusing on collaboration scenarios between humans and Agents, as well as among Agents within enterprise environments.
 
-HiClaw does not compete with other xxClaw projects. Instead of implementing Agent logic itself, it orchestrates and manages multiple Agent containers (including the Manager and numerous Workers).
+AgentTeams does not compete with other Agent runtimes. Instead of implementing Agent logic itself, it orchestrates and manages multiple Agent containers (including the Manager and numerous Workers).
 
 ## Key Features
 
@@ -27,17 +27,21 @@ HiClaw does not compete with other xxClaw projects. Instead of implementing Agen
 - 🔐 **Higress AI Gateway**: Centralizes traffic management and mitigates credential-related risks, alleviating user concerns about security vulnerabilities in the native Lobster framework.
 
 - ☎️ **Element IM Client + Tuwunel IM Server (both Matrix protocol-based)**: Eliminating DingTalk/Lark integration overhead and enterprise approval workflows. Enables rapid user onboarding to experience the "delight" of model services within an IM environment, while maintaining compatibility with native OpenClaw IM integration.
+- 🧬 **Integrate** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：Provides capabilities such as full-stack Agent observability and auditing, Agent evaluation and experimentation, and Agent asset management and continuous optimization.
 
 ## News
 
-- **2026-04-24**: [English](blog/hiclaw-1.1.0-release.md) | [中文](blog/zh-cn/hiclaw-1.1.0-release.md) — HiClaw v1.1.0: Kubernetes-native control plane, Hermes autonomous coding agent runtime, 1.7 GB image shrink, hiclaw CLI replaces shell scripts.
-- **2026-04-14**: [English](blog/hiclaw-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/hiclaw-k8s-native-multi-agent-collaboration.zh-CN.md) — Deep dive: HiClaw as a Kubernetes-native multi-agent collaboration orchestration system.
-- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — HiClaw 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
-- **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — HiClaw 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
-- **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — HiClaw 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
-- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — HiClaw open sourced.
+- **2026-07-17**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) — AgentTeams v1.2.0-beta.1 (prerelease): completes the public rename from the retired predecessor across images, Kubernetes APIs, Helm, Matrix, storage, and runtime contracts; adds the plugin platform, TeamHarness and WorkerFlow integrations, Matrix AppService and Human SSO, model-provider routing and LLM preflight, plus richer controller observability. Beta installation requires explicit opt-in, while the stable default remains v1.1.2.
+- **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2: QwenPaw-first installer with keep-all upgrade flow, Team human coordinators and refreshed Team Leader coordination tools, Nacos remote skills with `sts-agentteams` / `ai-registry` STS scope, Worker CR-name decoupled from runtime name, controller reconcile metrics and graceful shutdown.
+- **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1: declarative MCP on Worker/Manager/Team CRDs (breaking) and on Team Leader, custom `spec.env` for CRs, Token Plan + Qwen Cloud international + `qwen3.6-plus`, namespace-scoped controller RBAC, optional `SOUL.md` in Worker packages.
+- **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0: Kubernetes-native control plane, Hermes autonomous coding agent runtime, 1.7 GB image shrink, agt CLI replaces shell scripts.
+- **2026-04-14**: [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — Deep dive: AgentTeams as a Kubernetes-native multi-agent collaboration orchestration system.
+- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
+- **2026-03-14**: [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
+- **2026-03-10**: [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
+- **2026-03-04**: [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams open sourced under its former name.
 
-## Why HiClaw
+## Why AgentTeams
 
 - **Enterprise-Grade Security**: Worker Agents operate with consumer tokens only. Real credentials (API keys, GitHub PATs) stay in the gateway — Workers can't see them, and neither can attackers.
 
@@ -61,12 +65,12 @@ HiClaw does not compete with other xxClaw projects. Instead of implementing Agen
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 **Windows (PowerShell 7+ recommended):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 The installer walks you through:
@@ -87,29 +91,29 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 
 ```bash
 # Upgrade to latest (preserves all data)
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
-This removes all HiClaw containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.
+This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.
 
 ## Install on Kubernetes (Helm)
 
-For shared / production deployments you can install HiClaw on any Kubernetes cluster via the official Helm chart. The default profile bundles the Higress AI gateway, Tuwunel (Matrix), MinIO and the HiClaw controller — no external dependencies required.
+For shared / production deployments you can install AgentTeams on any Kubernetes cluster via the official Helm chart. The default profile bundles the Higress AI gateway, Tuwunel (Matrix), MinIO and the AgentTeams controller — no external dependencies required.
 
 **Prerequisites**
 
@@ -123,8 +127,8 @@ For shared / production deployments you can install HiClaw on any Kubernetes clu
 helm repo add higress.io https://higress.io/helm-charts
 helm repo update
 
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.adminPassword=<your-admin-password> \
@@ -134,8 +138,8 @@ helm install hiclaw higress.io/hiclaw \
 For non-OpenAI providers that expose an OpenAI-compatible API, also set `llmBaseUrl`:
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -148,8 +152,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>Using Qwen (通义千问) instead</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-qwen-api-key> \
   --set credentials.llmProvider=qwen \
@@ -163,20 +167,37 @@ helm install hiclaw higress.io/hiclaw \
 | Value | Required | Description |
 |---|---|---|
 | `credentials.llmApiKey` | yes | API key for your LLM provider |
-| `gateway.publicURL` | yes | Public URL where users will reach Element Web (e.g. `http://localhost:18080` for port-forward, or `https://hiclaw.example.com` for an Ingress) |
+| `gateway.publicURL` | yes | Public URL where users will reach Element Web (e.g. `http://localhost:18080` for port-forward, or `https://agentteams.example.com` for an Ingress) |
 | `credentials.adminPassword` | recommended | Matrix admin password; auto-generated if left empty (you'll have to read it back from the Secret) |
 | `credentials.llmProvider` | no | LLM provider name, defaults to `openai-compat` |
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
 | `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
+| `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
+| `preflight.llm.strict` | no | Fail the Helm install/upgrade when the LLM preflight fails. Defaults to `true`; set to `false` to emit a warning and continue |
+| `preflight.llm.timeoutSeconds` | no | Per-request timeout for the LLM preflight HTTP probe. Defaults to `30` |
+| `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
+| `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
+| `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
 | `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
 | `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+
+Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --set credentials.llmApiKey=<your-api-key> \
+  --set credentials.adminPassword=<your-admin-password> \
+  --set gateway.publicURL=http://localhost:18080 \
+  --set preflight.llm.enabled=false
+```
 
 <details>
 <summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace --devel \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace --devel \
   --set manager.runtime=copaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
@@ -186,7 +207,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`hiclaw-manager` / `hiclaw-manager-copaw` for Manager; `hiclaw-worker` / `hiclaw-copaw-worker` / `hiclaw-hermes-worker` for Workers).
+The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-copaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
 
 </details>
 
@@ -202,8 +223,8 @@ The default `global.imageRegistry` points to the China region (`higress-registry
 
 ```bash
 # Example: deploy from the North America registry
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
   --set credentials.llmApiKey=<your-api-key> \
@@ -211,28 +232,88 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/hiclaw/values.yaml`](helm/hiclaw/values.yaml).
+For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml).
 
 **Access**
 
+For a temporary local admin session, forward the Higress Gateway:
+
 ```bash
-kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
+kubectl port-forward -n agentteams-system svc/higress-gateway 18080:80
 ```
 
-Then open http://localhost:18080 in your browser and log in to Element Web. For an actual cluster, configure an Ingress / LoadBalancer / DNS record pointing at `svc/higress-gateway` and set `gateway.publicURL` accordingly.
+Then open http://localhost:18080 and log in to Element Web. The port-forward
+ends when the command exits and is not suitable for shared access.
+
+For company or Internet access, expose only `svc/higress-gateway` through an
+HTTPS Ingress or LoadBalancer. `gateway.publicURL` is written into the Element
+Web configuration as its Matrix homeserver URL, so it must exactly match the
+public origin that users open (for example, `https://agentteams.example.com`).
+
+1. Point the public DNS name at your Ingress controller or load balancer.
+2. Provision a TLS certificate Secret in `agentteams-system`.
+3. Set the same origin on the Helm release:
+
+```bash
+helm upgrade agentteams higress.io/agentteams \
+  -n agentteams-system --reuse-values \
+  --set gateway.publicURL=https://agentteams.example.com
+```
+
+4. Route that host to the Higress Gateway. This generic example assumes an
+   NGINX IngressClass and an existing `agentteams-tls` Secret; replace both to
+   match your cluster:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentteams
+  namespace: agentteams-system
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentteams.example.com
+      secretName: agentteams-tls
+  rules:
+    - host: agentteams.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: higress-gateway
+                port:
+                  number: 80
+```
+
+Verify both the web entry point and Matrix routing after DNS and TLS are ready:
+
+```bash
+curl -fsSI https://agentteams.example.com/
+curl -fsS https://agentteams.example.com/_matrix/client/versions
+```
+
+Keep the controller API, Tuwunel, MinIO, and the Higress Console private unless
+you apply separate authentication and network policy. Use HTTPS for shared
+access because Matrix login credentials and access tokens pass through this
+endpoint. A `LoadBalancer` Service can replace the Ingress, but the DNS, TLS,
+and `gateway.publicURL` requirements remain the same.
 
 **Upgrade**
 
 ```bash
 helm repo update
-helm upgrade hiclaw higress.io/hiclaw -n hiclaw-system --reuse-values
+helm upgrade agentteams higress.io/agentteams -n agentteams-system --reuse-values
 ```
 
 **Uninstall**
 
 ```bash
-helm uninstall hiclaw -n hiclaw-system
-kubectl delete namespace hiclaw-system
+helm uninstall agentteams -n agentteams-system
+kubectl delete namespace agentteams-system
 ```
 
 For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md).
@@ -289,7 +370,7 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-HiClaw supports three Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams supports three Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
 - **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
@@ -299,19 +380,19 @@ Each runtime excels at different tasks. A common pattern: use deterministic agen
 
 ```bash
 # Switch any worker's runtime in place
-hiclaw update worker --runtime hermes
+agt update worker --runtime hermes
 ```
 
 ## Architecture
 
 ```
 ┌───────────────────────────────────────────────┐
-│            hiclaw-controller                  │
+│            agentteams-controller                  │
 │  Higress │ Tuwunel │ MinIO │ Element Web      │
 └──────────────────┬────────────────────────────┘
                    │ Matrix + HTTP Files
 ┌──────────────────┴──────────┐
-│     hiclaw-manager-agent     │
+│     agentteams-manager-agent     │
 │     Manager (OpenClaw/       │
 │       QwenPaw)               │
 └──────────────────┬──────────┘
@@ -325,15 +406,15 @@ Worker Alice    Worker Bob              Worker Charlie
 
 | Component | Role |
 |-----------|------|
-| hiclaw-controller | Kubernetes-native control plane, reconciles Worker/Team/Manager CRs |
+| agentteams-controller | Kubernetes-native control plane, reconciles Worker/Team/Manager CRs |
 | Higress AI Gateway | LLM proxy, MCP Server hosting, credential management |
 | Tuwunel (Matrix) | Self-hosted IM server for all Agent + Human communication |
 | Element Web | Browser client, zero setup |
 | MinIO | Centralized file storage, Workers are stateless |
 
-## HiClaw vs OpenClaw Native
+## AgentTeams vs OpenClaw Native
 
-| | OpenClaw Native | HiClaw |
+| | OpenClaw Native | AgentTeams |
 |---|---|---|
 | Deployment | Single process | Distributed containers |
 | Agent creation | Manual config + restart | Conversational |
@@ -355,7 +436,7 @@ Worker Alice    Worker Bob              Worker Charlie
 ## Troubleshooting
 
 ```bash
-docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
 See [docs/zh-cn/faq.md](docs/zh-cn/faq.md) for common issues.
@@ -369,11 +450,11 @@ Export your Matrix message logs and let an AI tool analyze them against the code
 python scripts/export-debug-log.py --range 1h
 ```
 
-Then open the HiClaw repo in Cursor, Claude Code, or similar AI tool and ask:
+Then open the AgentTeams repo in Cursor, Claude Code, or similar AI tool and ask:
 
-> "Read the JSONL files in debug-log/. Analyze the Matrix message logs and agent session logs together. Cross-reference with the HiClaw codebase to identify the root cause of [describe your bug]."
+> "Read the JSONL files in debug-log/. Analyze the Matrix message logs and agent session logs together. Cross-reference with the AgentTeams codebase to identify the root cause of [describe your bug]."
 
-Include the AI's analysis in your [bug report](https://github.com/alibaba/hiclaw/issues/new?template=bug_report.yml).
+Include the AI's analysis in your [bug report](https://github.com/agentscope-ai/AgentTeams/issues/new?template=bug_report.yml).
 
 You can also let the AI tool submit the issue or PR directly. Install [GitHub CLI](https://cli.github.com/), run `gh auth login` to authenticate in your browser, then add the [OpenClaw GitHub skill](https://github.com/openclaw/openclaw/blob/main/skills/github/SKILL.md) to your AI coding tool (Cursor, Claude Code, etc.). After that, just ask it to file the issue or open a PR based on its analysis.
 
@@ -396,7 +477,7 @@ make help
 ## Community
 
 - [Discord](https://discord.gg/NVjNA4BAVw)
-- [GitHub Issues](https://github.com/alibaba/hiclaw/issues)
+- [GitHub Issues](https://github.com/agentscope-ai/AgentTeams/issues)
 
 ## License
 
