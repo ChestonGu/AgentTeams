@@ -279,3 +279,13 @@ All technical assumptions have been verified in POC. See [design/poc-tech-verifi
 - MCP Server created via `PUT` (not `POST`)
 - Auth plugin takes ~40s to activate after first configuration
 - OpenClaw Skills auto-load from `workspace/skills/<name>/SKILL.md`
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs for this repo are tracked as markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
