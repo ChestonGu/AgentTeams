@@ -11,6 +11,7 @@ debug-log/
 # IDE / Kiro workspace files
 .kiro/
 .idea/
+.vscode/
 
 # Claude Code IDE
 .claude/
@@ -42,8 +43,11 @@ pnpm-lock.yaml
 .cursor/
 
 # Compiled binaries
-hiclaw-controller/controller
-hiclaw-controller/hiclaw
+hiclaw-controller/bin/
+
+# Go workspace (local dev: points gopls at the hiclaw-controller module)
+go.work
+go.work.sum
 
 # Build-time agent templates (copied from manager/agent/ during docker build)
 hiclaw-controller/agent/
