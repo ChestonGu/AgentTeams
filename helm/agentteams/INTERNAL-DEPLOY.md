@@ -18,33 +18,39 @@
 源镜像仓库均为阿里云 ACR 公共只读仓库：`higress-registry.cn-hangzhou.cr.aliyuncs.com`。
 内网部署需把下列镜像同步到你的私有 registry。
 
-### 1.0 镜像 tag 从哪来 / 版本确认（重要）
+### 1.0 镜像 tag 从哪来 / 版本确认（⚠️ 必读，避免 404）
 
-AgentTeams 自有镜像的 tag 解析顺序（见 [_helpers.tpl](templates/_helpers.tpl) 的 `agentteams.imageTag` / `agentteams.globalImageTag`）：
+AgentTeams 自有镜像（controller / manager / worker）的 tag 解析顺序（见 [_helpers.tpl](templates/_helpers.tpl)）：
 
 ```
 组件 image.tag  →  global.imageTag  →  printf "v%s" .Chart.AppVersion
 ```
 
-- 当前 [Chart.yaml](Chart.yaml) 第 6 行 `appVersion: "1.1.1"` → 默认 tag = **`v1.1.1`**。
-- ⚠️ 注意：**Helm chart 的版本与 AgentTeams 发行版独立**。即便在 git tag `v1.2.0` 处，
-  `helm/agentteams/Chart.yaml` 仍是 `1.1.1`（已核对 `git show v1.2.0:helm/agentteams/Chart.yaml`）。
-  也就是说**走 Helm 部署，镜像就是 `v1.1.1`**；`v1.2.0` 是嵌入式 Docker 安装脚本（`agentteams-install.sh`）那条线的版本。
-- 想换 tag：设 `global.imageTag: "v1.2.0"`（或其他）。**镜像同步前务必确认该 tag 在源仓库确实存在**：
+- [Chart.yaml](Chart.yaml) 第 6 行 `appVersion: "1.1.1"`，`global.imageTag` 默认空 → 会解析成 **`v1.1.1`**。
+- 🚨 **但 `v1.1.1` 这个 tag 在仓库里根本不存在！** 实测 `docker pull ...:v1.1.1` 报
+  `manifest unknown`。chart 的 `appVersion` 是**过时的**，从来没发布过 v1.1.1 镜像。
+- **必须显式设 `global.imageTag` 为一个真实存在的 tag**。已实测（2026-08）`agentteams/agentteams-controller`
+  的可用 tag：`latest`、`v1.1.2`、`v1.2.0`、`v1.2.0-beta.1`、`v1.2.0.hotfix1`、`v1.2.0.hotfix2`、`v1.2.1`。
+  manager / worker 同此列表。
+- **推荐用 `v1.2.0`**（与仓库当前发行版一致，稳定可复现）；想用最新可换 `v1.2.1`，追新用 `latest`（不可复现）。
+  本文示例统一用 `v1.2.0`。
+- Higress 子 chart 镜像 tag 取其 `appVersion` = `2.2.1`（已实测 gateway/higress/pilot/console:2.2.1 与 plugin-server:1.0.0 均存在）；
+  tuwunel/minio/element-web 用日期 tag `20260216`（已实测存在）。这些**不用改**。
+- 同步前自检任意 tag 是否存在：
   ```bash
-  skopeo inspect docker://higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller:v1.1.1
+  TOKEN=$(curl -sS "https://dockerauth.cn-hangzhou.aliyuncs.com/auth?service=registry.aliyuncs.com:cn-hangzhou:china:cri-r0xfyoxudmtseqq7&scope=repository:agentteams/agentteams-controller:pull" | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+  curl -sS -H "Authorization: Bearer $TOKEN" https://higress-registry.cn-hangzhou.cr.aliyuncs.com/v2/agentteams/agentteams-controller/tags/list
   ```
-- Higress 子 chart 镜像 tag 取其 `appVersion` = `2.2.1`（与 AgentTeams 版本无关）。
 
 ### 1.1 默认必装（install 后一定会拉取）
 
-**AgentTeams 自有组件**（tag 默认 `v1.1.1`，见 1.0）：
+**AgentTeams 自有组件**（tag **必须设 `global.imageTag`**，本文用 `v1.2.0`，见 1.0）：
 
 | # | 镜像 | 用途 |
 |---|------|------|
-| 1 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller:v1.1.1` | 控制器（必装；preflight/uninstall hook 也复用它） |
-| 2 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager:v1.1.1` | Manager Agent（manager.enabled=true） |
-| 3 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.1.1` | Worker，默认 openclaw runtime（按需创建） |
+| 1 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller:v1.2.0` | 控制器（必装；preflight/uninstall hook 也复用它） |
+| 2 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager:v1.2.0` | Manager Agent（manager.enabled=true） |
+| 3 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0` | Worker，默认 openclaw runtime（按需创建） |
 | 4 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel:20260216` | Matrix 主服务（默认 provider=tuwunel） |
 | 5 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio:20260216` | 对象存储（默认 provider=minio） |
 | 6 | `higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/element-web:20260216` | IM 前端（elementWeb.enabled=true） |
@@ -63,9 +69,9 @@ AgentTeams 自有镜像的 tag 解析顺序（见 [_helpers.tpl](templates/_help
 
 | 触发条件 | 镜像 |
 |----------|------|
-| Worker 用 copaw runtime | `.../agentteams/agentteams-copaw-worker:v1.1.1` |
-| Worker 用 hermes runtime | `.../agentteams/agentteams-hermes-worker:v1.1.1` |
-| Worker 用 openhuman | `.../higress/agentteams-openhuman-worker:v1.1.1` |
+| Worker 用 copaw runtime | `.../agentteams/agentteams-copaw-worker:v1.2.0` |
+| Worker 用 hermes runtime | `.../agentteams/agentteams-hermes-worker:v1.2.0` |
+| Worker 用 openhuman | `.../higress/agentteams-openhuman-worker:<tag>`（**实测该路径当前无 tag**，openhuman 较新，用前先按 1.0 方法确认） |
 | `matrix.provider=synapse` | `ghcr.io/element-hq/synapse:v1.127.0`、`postgres:16-alpine`（Docker Hub） |
 | `higress.global.enableRedis=true` | `.../higress/redis-stack-server:7.4.0-v3` |
 | `higress.global.enablePluginServer=true` | `.../higress/plugin-server:1.0.0` |
@@ -201,11 +207,11 @@ grep -E '^(name|version):' charts/higress/Chart.yaml   # name: higress, version:
 SRC=higress-registry.cn-hangzhou.cr.aliyuncs.com
 DST=harbor.corp.local      # 改成你的内网仓库
 
-# 默认必装（10 个）
+# 默认必装（10 个）—— AgentTeams 镜像用 v1.2.0（见 1.0，v1.1.1 不存在）
 IMAGES=(
-  agentteams/agentteams-controller:v1.1.1
-  agentteams/agentteams-manager:v1.1.1
-  agentteams/agentteams-worker:v1.1.1
+  agentteams/agentteams-controller:v1.2.0
+  agentteams/agentteams-manager:v1.2.0
+  agentteams/agentteams-worker:v1.2.0
   higress/tuwunel:20260216
   higress/minio:20260216
   higress/element-web:20260216
@@ -220,8 +226,10 @@ for img in "${IMAGES[@]}"; do
     docker://${DST}/${img}
 done
 
-# 如启用了可选项，按需追加（示例）
-# skopeo copy docker://${SRC}/agentteams/agentteams-copaw-worker:v1.1.1 docker://${DST}/agentteams/agentteams-copaw-worker:v1.1.1
+# 你需要 plugin-server → 追加
+# skopeo copy docker://${SRC}/higress/plugin-server:1.0.0 docker://${DST}/higress/plugin-server:1.0.0
+# 如启用其他 runtime，按需追加（示例）
+# skopeo copy docker://${SRC}/agentteams/agentteams-copaw-worker:v1.2.0 docker://${DST}/agentteams/agentteams-copaw-worker:v1.2.0
 # synapse 模式（来自 Docker Hub / ghcr，需跳板机能访问）
 # skopeo copy docker://ghcr.io/element-hq/synapse:v1.127.0 docker://${DST}/element-hq/synapse:v1.127.0
 # skopeo copy docker://docker.io/library/postgres:16-alpine   docker://${DST}/library/postgres:16-alpine
@@ -235,7 +243,7 @@ done
 
 ```yaml
 global:
-  imageTag: "v1.1.1"        # 显式指定；AgentTeams 自有镜像 tag 都取它
+  imageTag: "v1.2.0"        # ⚠️ 必填：v1.1.1 不存在！见 1.0。AgentTeams 自有镜像 tag 都取它
 
 # 内网仓库需要拉取凭证时（私有 registry）配这里；controller Pod 会用
 imagePullSecrets:
