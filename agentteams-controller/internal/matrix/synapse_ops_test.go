@@ -511,6 +511,17 @@ func TestSynapseOps_DissolveRoom_UsesV2Delete(t *testing.T) {
 			if r.Method != http.MethodDelete {
 				t.Errorf("method = %s, want DELETE", r.Method)
 			}
+			// Synapse 1.127 parses the DELETE body via
+			// parse_json_object_from_request (no allow_empty_body), so the
+			// request MUST carry a JSON object — an empty body returns
+			// HTTP 400 M_NOT_JSON "Content not JSON." (see synapse_admin.go).
+			if r.ContentLength == 0 {
+				t.Error("DELETE body is empty, want a JSON object body")
+			}
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode DELETE body: %v", err)
+			}
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("{}"))
 		default:
@@ -981,6 +992,11 @@ func TestSynapseOps_ProvisionUser_UsesAdminUsersEndpoint(t *testing.T) {
 	}
 	if putBody["displayname"] != "alice" {
 		t.Errorf("users body displayname = %v, want alice", putBody["displayname"])
+	}
+	// logout_devices must be false: re-provisioning an existing user (idempotent
+	// reconcile) must not invalidate the running worker/human device sessions.
+	if ld, ok := putBody["logout_devices"].(bool); !ok || ld {
+		t.Errorf("users body logout_devices = %v, want false", putBody["logout_devices"])
 	}
 	if ref.UserID != "@alice:d" || !ref.Created {
 		t.Errorf("UserRef = %+v, want UserID=@alice:d Created=true", ref)

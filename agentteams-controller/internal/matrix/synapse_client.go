@@ -107,10 +107,15 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	userID := s.UserID(req.Username)
 
 	// Create or update the user via the Synapse admin API.
+	// logout_devices=false keeps existing device sessions alive when this PUT
+	// re-applies to an already-provisioned user (idempotent reconcile). Synapse
+	// 1.127 defaults logout_devices to true on UserRestServletV2, which would
+	// silently kill running worker/human sessions on every re-provision.
 	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
 	body := map[string]interface{}{
-		"password":    password,
-		"displayname": req.Username,
+		"password":       password,
+		"displayname":    req.Username,
+		"logout_devices": false,
 	}
 	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
 		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)

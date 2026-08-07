@@ -53,7 +53,13 @@ func (s *SynapseClient) ForceJoinRoom(ctx context.Context, roomID, userID string
 // API returns a purge id and runs in the background).
 //
 //	DELETE /_synapse/admin/v2/rooms/{roomID}
+//
+// The request MUST carry a JSON object body: Synapse 1.127 parses the body
+// via parse_json_object_from_request without allow_empty_body
+// (synapse/rest/admin/rooms.py RoomRestV2Servlet.on_DELETE), so an empty body
+// returns HTTP 400 M_NOT_JSON "Content not JSON." The body is optional in
+// content (block/purge default false/true) but `{}` satisfies the parser.
 func (s *SynapseClient) DeleteRoom(ctx context.Context, roomID string) error {
 	path := "/_synapse/admin/v2/rooms/" + url.PathEscape(roomID)
-	return s.synAdminCall(ctx, http.MethodDelete, path, nil)
+	return s.synAdminCall(ctx, http.MethodDelete, path, map[string]interface{}{})
 }
