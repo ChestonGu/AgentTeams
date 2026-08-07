@@ -6,7 +6,7 @@ Enable the Application Service mode on Synapse 1.127 by loading the AS registrat
 
 ### Requirement: Helm chart SHALL render Application Service registration as a Secret when AppService mode is enabled for Synapse
 
-When `matrix.provider=synapse` AND `matrix.mode=managed` AND `matrix.appservice.enabled=true`, the Helm chart SHALL render a Secret named `<synapse-fullname>-appservice` containing the AS registration YAML at key `agentteams-controller.yaml`. The YAML SHALL include `id`, `as_token`, `hs_token`, `sender_localpart`, `namespaces` (users exclusive with regex covering `@<sender_localpart>:<server>`; aliases non-exclusive `#agentteams-.*:<server>`; rooms empty), `rate_limited: false`, and `url` (push URL or null).
+When `matrix.provider=synapse` AND `matrix.mode=managed` AND `matrix.appservice.enabled=true`, the Helm chart SHALL render a Secret named `<synapse-fullname>-appservice` containing the AS registration YAML at key `agentteams-controller.yaml`. The YAML SHALL include `id`, `as_token`, `hs_token`, `sender_localpart`, `namespaces` (users NON-exclusive with regex covering the provisioned localparts, default `@.*:<server>`; aliases non-exclusive `#agentteams-.*:<server>`; rooms empty), `rate_limited: false`, and `url` (push URL or null). The users namespace MUST NOT be marked exclusive: Synapse 1.127 rejects all other user creation for an exclusively-claimed ID (including the shared-secret admin bootstrap and `PUT /_synapse/admin/v2/users/{id}`) with HTTP 400 `M_EXCLUSIVE`, which would make the admin user and every admin-provisioned user uncreatable.
 
 #### Scenario: AS Secret rendered with required fields
 

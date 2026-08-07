@@ -79,7 +79,9 @@ The runtime-rotation endpoint on the AppService management handler returns HTTP 
 
 ## Namespace security model
 
-By default the AppService registration claims the **exclusive** `@.*:<domain>` user namespace. That regex means the `as_token` can impersonate **every** local user on the homeserver. This is only safe when the homeserver is exclusively AgentTeams-managed — i.e. AgentTeams provisions the homeserver and every local user on it. That is the only mode the embedded Tuwunel install and Helm's `matrix.mode=managed` setting permit.
+By default the AppService registration matches the broad `@.*:<domain>` user namespace. That regex means the `as_token` can impersonate **every** local user on the homeserver. This is only safe when the homeserver is exclusively AgentTeams-managed — i.e. AgentTeams provisions the homeserver and every local user on it. That is the only mode the embedded Tuwunel install and Helm's `matrix.mode=managed` setting permit.
+
+> **The users namespace is intentionally NOT marked `exclusive`.** An exclusive namespace makes Synapse reject *any other* creation of a matching user ID with HTTP 400 `M_EXCLUSIVE` "This user ID is reserved by an application service." — enforced in `RegistrationHandler.check_user_id_not_appservice_exclusive` for **all** paths, including the shared-secret admin bootstrap (`register_new_matrix_user -a`) and the admin API `PUT /_synapse/admin/v2/users/{id}` (verified against Synapse v1.127.0 source). With the default `@.*:<domain>` regex that would make the admin user and every admin-provisioned user uncreatable. AS register/login only need the regex to match (`ApplicationService.is_interested_in_user` does not consult `exclusive`), so a non-exclusive namespace keeps passwordless provisioning fully functional.
 
 If you point AgentTeams at a **shared or pre-existing** Synapse cluster that also hosts non-AgentTeams users (for example, your company's corporate Matrix deployment), the broad namespace would let the `as_token` impersonate those users. The escape hatch is `AGENTTEAMS_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX`, which narrows the namespace so the `as_token` can only act on AgentTeams-managed localparts:
 
@@ -91,7 +93,7 @@ helm upgrade agentteams higress.io/agentteams \
   --set matrix.appservice.userNamespaceRegex='@agentteams-.*:your-server-name'
 ```
 
-Then provision every AgentTeams-managed user (Workers, Humans, the Manager) under that prefix so the regex covers them. Helm's `00-validate.yaml` hook fails the install if `matrix.mode` is not `managed` and the namespace regex is empty, so this configuration mistake cannot slip through silently.
+Then provision every AgentTeams-managed user (Workers, Humans, the Manager) under that prefix so the regex covers them. **This is a hard precondition of AppService mode:** AS registration (`/register` with `m.login.application_service`) and AS login both fail with `M_EXCLUSIVE` / 403 when the target localpart does not match the regex, so a narrowed regex must cover every localpart the controller provisions (Worker/Human/Manager usernames). Helm's `00-validate.yaml` hook fails the install if `matrix.mode` is not `managed` and the namespace regex is empty, so this configuration mistake cannot slip through silently.
 
 ## Token rotation
 

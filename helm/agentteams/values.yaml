@@ -57,7 +57,7 @@ matrix:
     senderLocalpart: "agentteams-controller" # localpart of the AS bot user the controller logs in as
     asToken: "change-me-as-token"          # Matrix AppService as_token — OVERRIDE in production
     hsToken: "change-me-hs-token"          # Matrix AppService hs_token — OVERRIDE in production
-    userNamespaceRegex: ""  # narrow the exclusive user namespace claimed by the AS (empty = "@.*:<domain>"; REQUIRED when matrix.mode != managed on a shared homeserver)
+    userNamespaceRegex: ""  # narrow the user namespace matched by the AS registration (empty = "@.*:<domain>"; REQUIRED when matrix.mode != managed on a shared homeserver). The namespace is intentionally NOT exclusive — exclusivity would block the shared-secret admin bootstrap and admin-API user creation with M_EXCLUSIVE on Synapse.
     pushURL: ""             # controller HTTP endpoint for homeserver→AS transaction push (empty = passwordless-only, no push)
   tuwunel:
     image:
