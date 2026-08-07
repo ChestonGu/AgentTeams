@@ -10,6 +10,10 @@
 > [`synapse-support`](../openspec/changes/synapse-support/) 并落地实现
 >（34 个调用点全部迁移到 `MatrixOps` 抽象层，见 proposal tasks.md Phase 1–4）。
 > 本文档作为**历史依据**保留，记录抽象层设计的原始依据。
+>
+> **取代（2026-08-07）**：抽象层落地后的**当前**调用点与双实现对照见
+> [`design/matrix-ops-capabilities.md`](matrix-ops-capabilities.md)（以 `MatrixOps`
+> 接口为准，含每个方法在 Tuwunel / Synapse 下的端点级实现）。
 
 ---
 

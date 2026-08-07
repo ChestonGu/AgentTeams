@@ -157,4 +157,5 @@ The equivalence suite pins both the Tuwunel escalation (admin-bot command) and t
 - [Architecture overview](architecture.md) — system-level view of the Manager / Worker / Matrix / Gateway / Storage split.
 - [`design/synapse-support.md`](../design/synapse-support.md) — internal design rationale, including why the `MatrixOps` abstraction looks the way it does.
 - [`design/synapse-interface-contracts.md`](../design/synapse-interface-contracts.md) — per-method Synapse 1.127 behavior contracts with exact error strings and source-line references.
+- [`design/matrix-ops-capabilities.md`](../design/matrix-ops-capabilities.md) — current capability inventory: which of the 33 `MatrixOps` methods the reconciliation layer actually calls, and the endpoint-level Tuwunel vs Synapse implementation for each.
 - `agentteams-controller/internal/matrix/ops_exhaustive_test.go` — the cross-implementation equivalence suite that pins behavior parity.
