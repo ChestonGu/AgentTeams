@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
@@ -533,6 +534,12 @@ func (d *Deployer) seedLocalAgentFiles(ctx context.Context, localAgentDir, agent
 		}
 
 		key := agentPrefix + "/" + rel
+		// S3 object keys must be valid UTF-8; skip files with non-UTF-8
+		// names so a single bad file does not abort the whole seed.
+		if !utf8.ValidString(key) {
+			logger.Info("skipping seed file with non-UTF-8 name", "path", path)
+			return nil
+		}
 		if _, err := d.oss.GetObject(ctx, key); err == nil {
 			return nil
 		} else if !os.IsNotExist(err) {

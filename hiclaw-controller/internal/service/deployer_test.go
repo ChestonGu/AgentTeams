@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,48 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 )
+
+// seedLocalAgentFiles must skip files with non-UTF-8 names (S3 keys must be
+// valid UTF-8) instead of failing the whole seed — a single bad file name
+// would otherwise abort first-create initialization.
+func TestSeedLocalAgentFilesSkipsNonUTF8Names(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot create non-UTF-8 file names on Windows")
+	}
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	workerDir := filepath.Join(agentFSDir, "alice")
+	if err := os.MkdirAll(workerDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "ok.md"), []byte("fine"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid UTF-8 byte sequence in the file name.
+	if err := os.WriteFile(workerDir+"/bad\xff\xfe.md", []byte("bad"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	if err := deployer.seedLocalAgentFiles(ctx, workerDir, "agents/alice", map[string]struct{}{}); err != nil {
+		t.Fatalf("seedLocalAgentFiles failed: %v", err)
+	}
+	if _, err := store.GetObject(ctx, "agents/alice/ok.md"); err != nil {
+		t.Errorf("ok.md was not seeded: %v", err)
+	}
+	names, err := store.ListObjects(ctx, "agents/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.Contains(n, "\xff") {
+			t.Errorf("non-UTF-8 file was pushed: %q", n)
+		}
+	}
+}
 
 func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *testing.T) {
 	ctx := context.Background()

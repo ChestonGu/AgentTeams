@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/minio/minio-go/v7"
@@ -217,10 +218,17 @@ func mapNotExist(err error) error {
 // (hiclaw_storage_op_duration_seconds / hiclaw_storage_op_errors_total),
 // retries transient failures within the storageRetryWindow, and wraps the
 // final error in a single-layer OpError for concise CR Status.Message text.
+//
+// os.ErrNotExist is passed through unwrapped: service-layer callers use
+// os.IsNotExist to distinguish "object missing (first create)" from real
+// storage failures, and os.IsNotExist only peels *PathError/*LinkError/
+// *SyscallError — it does NOT recurse Unwrap — so wrapping ErrNotExist in
+// an OpError makes every first-create check fail and aborts deploys that
+// should generate-and-inject instead.
 func (c *SDKClient) timedOp(ctx context.Context, op, key string, fn func() error) error {
 	start := time.Now()
 	err := retryStorageOp(ctx, fn)
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		err = &OpError{Op: op, Key: key, Cause: err}
 	}
 	metrics.StorageOpDuration.WithLabelValues(op, "sdk").Observe(time.Since(start).Seconds())
@@ -349,6 +357,11 @@ func (c *SDKClient) mirrorLocalToRemote(ctx context.Context, srcDir, dst string,
 			return err
 		}
 		obj := dstPrefix + "/" + filepath.ToSlash(rel)
+		// S3 object keys must be valid UTF-8; skip files with non-UTF-8
+		// names so a single bad file does not fail the whole mirror.
+		if !utf8.ValidString(obj) {
+			return nil
+		}
 		if !opts.Overwrite {
 			if _, err := c.client.StatObject(ctx, bucket, obj, minio.StatObjectOptions{}); err == nil {
 				return nil
