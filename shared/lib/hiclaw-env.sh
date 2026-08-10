@@ -16,12 +16,13 @@
 #   source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 # ── Optional dependencies ─────────────────────────────────────────────────────
-# base.sh provides log(), waitForService(), generateKey() — Manager-only.
-# Worker images don't ship base.sh; the silent fallback is intentional.
+# base.sh provides log(), waitForService(), generateKey(). It ships in every
+# image (manager/worker/controller/copaw/hermes) via shared/lib; the silent
+# fallback below keeps scripts working if it is ever absent.
 source /opt/hiclaw/scripts/lib/base.sh 2>/dev/null || true
 
-# Images without base.sh (controller, worker) still run scripts that call
-# log(); define a minimal fallback so they fail on the real error instead of
+# Fallback: images that source hiclaw-env.sh always get a log() here, so
+# scripts calling it fail on the real error instead of
 # "log: command not found" (exit 127).
 if ! declare -F log >/dev/null 2>&1; then
     log() { echo "[hiclaw $(date '+%H:%M:%S')] $*"; }
