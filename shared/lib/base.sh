@@ -4,6 +4,27 @@
 
 set -e
 
+# is_utf8_name <name> — returns 0 when name is valid UTF-8, 1 otherwise.
+# S3 object keys must be valid UTF-8, so names failing this check cannot be
+# pushed to object storage.
+is_utf8_name() {
+    printf '%s' "$1" | python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' >/dev/null 2>&1
+}
+
+# collect_nonutf8_files <dir> — prints, one per line, the <dir>-relative paths
+# of files whose names are not valid UTF-8. Use the output to build
+# `mc mirror --exclude` arguments: a single bad name would otherwise fail the
+# whole push (mc mirror aborts on the first invalid S3 key).
+collect_nonutf8_files() {
+    local dir="$1"
+    find "${dir}/" -type f -print0 2>/dev/null |
+        while IFS= read -r -d '' _f; do
+            if ! is_utf8_name "${_f##*/}"; then
+                printf '%s\n' "${_f#"${dir}"/}"
+            fi
+        done
+}
+
 # Wait for a TCP service to become available
 # Usage: waitForService "ServiceName" "host" port [timeout_seconds]
 waitForService() {

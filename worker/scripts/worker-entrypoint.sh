@@ -177,10 +177,25 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 touch "${WORKSPACE}/.outputs-notify-marker" 2>/dev/null || true
 (
     while true; do
-        # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
-        CHANGED=$(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" 2>/dev/null | head -1)
+        # Only push files modified AFTER the last pull (avoids pushing back
+        # freshly-pulled files). Files with non-UTF-8 names are skipped: S3
+        # object keys must be valid UTF-8 and mc mirror would fail the whole
+        # push on the first bad name (see collect_nonutf8_files).
+        CHANGED=""
+        while IFS= read -r -d '' _f; do
+            if is_utf8_name "${_f##*/}"; then
+                CHANGED="${_f}"
+                break
+            fi
+        done < <(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" -print0 2>/dev/null)
         if [ -n "${CHANGED}" ]; then
             ensure_mc_credentials 2>/dev/null || true
+            # Exclude non-UTF-8 file names from the push so mc mirror never
+            # sees an invalid S3 key; everything else syncs normally.
+            _excl=()
+            while IFS= read -r _rel; do
+                [ -n "${_rel}" ] && _excl+=(--exclude "${_rel}")
+            done < <(collect_nonutf8_files "${WORKSPACE}")
             if ! mc mirror "${WORKSPACE}/" "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
                 --exclude "openclaw.json" \
                 --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
@@ -190,7 +205,8 @@ touch "${WORKSPACE}/.outputs-notify-marker" 2>/dev/null || true
                 --exclude ".last-pull" \
                 --exclude ".outputs-notify-marker" \
                 --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
-                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
+                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" \
+                "${_excl[@]}" 2>&1; then
                 log "WARNING: Local->Remote sync failed"
             fi
             # Per-file push for agent-self-modifiable files: only when locally

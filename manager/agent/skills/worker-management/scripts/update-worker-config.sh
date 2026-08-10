@@ -409,11 +409,18 @@ fi
 # ============================================================
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
+# Exclude non-UTF-8 file names (S3 keys must be valid UTF-8; a single bad
+# name would fail the whole push).
+_excl=()
+while IFS= read -r _rel; do
+    [ -n "${_rel}" ] && _excl+=(--exclude "${_rel}")
+done < <(collect_nonutf8_files "/root/hiclaw-fs/agents/${WORKER_NAME}")
 mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
     "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \
+    "${_excl[@]}" \
     2>&1 | tail -3
 log "  Config synced (memory excluded)"
 
