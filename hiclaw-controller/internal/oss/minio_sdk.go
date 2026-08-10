@@ -66,36 +66,37 @@ func (c *SDKClient) WithCredentialSource(src CredentialSource) *SDKClient {
 	return &SDKClient{cfg: c.cfg, credSource: src, client: client}
 }
 
-// sdkDialTimeout bounds a single TCP/TLS connection attempt. minio-go's
+// The connect timeout bounds a single TCP/TLS connection attempt. minio-go's
 // default transport dials with Go's 30s timeout; on a flaky storage endpoint
 // every retried request would stall 30s before failing, turning a reconcile
-// into minutes of hard waits. 2s fails fast while remaining generous for a
-// healthy endpoint. Connection pooling only reuses live connections — a pool
-// miss (concurrency pressure or stale idle conns dropped by the network)
-// dials anew, which is exactly when this bound matters.
-const sdkDialTimeout = 2 * time.Second
+// into minutes of hard waits. The default 2s fails fast while remaining
+// generous for a healthy endpoint; configurable via
+// HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS (see storage_env.go). Connection
+// pooling only reuses live connections — a pool miss (concurrency pressure
+// or stale idle conns dropped by the network) dials anew, which is exactly
+// when this bound matters.
 
 // sdkMaxRetries bounds minio-go's internal automatic retries. The outer
-// retryStorageOp wrapper (30s window) is the primary resilience layer; this
+// retryStorageOp wrapper (retry window) is the primary resilience layer; this
 // small internal budget covers immediate retries without waiting for the
-// wrapper's backoff.
-const sdkMaxRetries = 2
+// wrapper's backoff. Configurable via HICLAW_STORAGE_SDK_MAX_RETRIES.
 
 // sdkTransport builds the shared HTTP transport for SDKClient: connection
 // pool for reuse (the whole point of the SDK over per-call mc forks) plus a
 // fast-fail dial so an unreachable endpoint does not stall the reconcile.
 func sdkTransport() *http.Transport {
+	dialTimeout := storageConnectTimeout()
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   sdkDialTimeout,
+			Timeout:   dialTimeout,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   sdkDialTimeout,
+		TLSHandshakeTimeout:   dialTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		// Bounds waiting for a server response header; measured after the
 		// request body is fully written, so long uploads are not affected.
@@ -103,15 +104,21 @@ func sdkTransport() *http.Transport {
 	}
 }
 
-func newMinioClient(cfg Config, src CredentialSource) (*minio.Client, error) {
-	endpoint := cfg.Endpoint
-	secure := false
+// endpointHost extracts the bare host and TLS flag from a MinIO/S3 endpoint
+// URL. Both the minio-go and madmin clients take the host with a separate
+// secure flag, so a scheme prefix ("http://minio:9000") must be stripped
+// before construction.
+func endpointHost(endpoint string) (host string, secure bool) {
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
-		secure = u.Scheme == "https"
 		if u.Host != "" {
-			endpoint = u.Host
+			return u.Host, u.Scheme == "https"
 		}
 	}
+	return endpoint, false
+}
+
+func newMinioClient(cfg Config, src CredentialSource) (*minio.Client, error) {
+	endpoint, secure := endpointHost(cfg.Endpoint)
 	var creds *credentials.Credentials
 	if src != nil {
 		creds = credentials.New(&credSourceProvider{src: src})
@@ -122,7 +129,7 @@ func newMinioClient(cfg Config, src CredentialSource) (*minio.Client, error) {
 		Creds:      creds,
 		Secure:     secure,
 		Transport:  sdkTransport(),
-		MaxRetries: sdkMaxRetries,
+		MaxRetries: sdkMaxRetries(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create minio-go client for %s: %w", endpoint, err)

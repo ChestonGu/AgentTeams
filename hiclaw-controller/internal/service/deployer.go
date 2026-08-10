@@ -472,22 +472,23 @@ func localSkillPushEnabled() bool {
 	return os.Getenv("HICLAW_LOCAL_SKILL_PUSH") == "true"
 }
 
-// storageProbeTimeout bounds the reachability probe at the start of
+// The storage reachability probe bounds the check at the start of
 // DeployWorkerConfig. The storage layer already retries transient failures
-// within its 30s window (storageRetryWindow), so the probe budget is set to
-// match: a short OSS blip recovers inside the window and the config phase
-// proceeds instead of requeuing; a permanently dead endpoint still aborts
-// after the budget and the reconciler requeues with a concise status message.
-const storageProbeTimeout = 30 * time.Second
+// within its retry window (HICLAW_STORAGE_RETRY_WINDOW_SECONDS, default 30s),
+// so the probe budget defaults to match: a short OSS blip recovers inside the
+// window and the config phase proceeds instead of requeuing; a permanently
+// dead endpoint still aborts after the budget and the reconciler requeues
+// with a concise status message. Configurable via
+// HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS (see oss.StorageProbeTimeout).
 
 // probeStorage verifies object storage is reachable before the config phase
 // runs its many OSS operations. The probe reads openclaw.json, a key the
 // deployer itself writes; os.ErrNotExist means the endpoint answered and is
 // healthy. Any other error (network-class, or a short-timeout expiry) aborts
-// the config phase fast so the reconciler requeues instead of stalling 30s
-// per subsequent op.
+// the config phase fast so the reconciler requeues instead of stalling per
+// subsequent op.
 func (d *Deployer) probeStorage(ctx context.Context, agentPrefix string) error {
-	probeCtx, cancel := context.WithTimeout(ctx, storageProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, oss.StorageProbeTimeout())
 	defer cancel()
 	_, err := d.oss.GetObject(probeCtx, agentPrefix+"/openclaw.json")
 	if err == nil || os.IsNotExist(err) {

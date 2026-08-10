@@ -322,8 +322,20 @@ func (a *App) initInfraClients(_ context.Context) error {
 	} else {
 		a.oss = storageClient
 		logger.Info("storage provider: minio (embedded)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
+		// The admin provider (MinIO user/policy management) follows the same
+		// driver switch as the storage client: sdk uses the madmin-go Admin
+		// API (default), mc forks `mc admin` subprocesses.
 		if cfg.HasMinIOAdmin() {
-			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			switch cfg.StorageDriver {
+			case "sdk":
+				sc, err := oss.NewSDKAdminClient(cfg.OSSConfig())
+				if err != nil {
+					return fmt.Errorf("create sdk admin client: %w", err)
+				}
+				a.ossAdmin = sc
+			case "mc":
+				a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			}
 		}
 	}
 	// Package downloads go through the same StorageClient (SDK driver) so

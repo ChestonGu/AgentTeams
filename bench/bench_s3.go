@@ -47,6 +47,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -94,6 +95,7 @@ func main() {
 	ops := parseOps(*flagOps)
 
 	ctx := context.Background()
+	fmt.Fprintf(os.Stderr, "connecting: endpoint=%s bucket=%s ...\n", *flagEndpoint, *flagBucket)
 	sdk := newSDK()
 	ensureBucket(ctx, sdk)
 	setupMC() // mc alias set（仅一次，对齐生产静态凭据模式）
@@ -107,7 +109,10 @@ func main() {
 	fmt.Fprintf(os.Stderr, "bucket %q background=%d (-count 开启全桶统计；云 S3 建议用控制台对象数)\n", *flagBucket, background)
 
 	// 读空间: 从真实前缀采样 key 池（不修改任何数据）
+	fmt.Fprintf(os.Stderr, "sampling read keys: prefix=%q probe=%d ...\n", *flagPrefix, *flagProbeN)
+	t0 := time.Now()
 	readKeys := sampleKeys(ctx, sdk, *flagPrefix, *flagProbeN)
+	fmt.Fprintf(os.Stderr, "sampled %d read keys (%s)\n", len(readKeys), time.Since(t0))
 	if len(readKeys) == 0 {
 		fmt.Fprintf(os.Stderr, "fatal: prefix %q 下没有对象\n", *flagPrefix)
 		os.Exit(1)
@@ -186,6 +191,13 @@ func benchOnce(ctx context.Context, drv string, sdk *minio.Client, workers int, 
 	times := map[string][]float64{}
 	var roundMs []float64
 
+	// 进度输出: 长跑（尤其 mc 驱动 + 高 S3 延迟）期间保持可见，避免"假死"观感。
+	// CSV 仍只走 stdout，进度全部走 stderr，不影响结果解析。
+	total := int64(workers * *flagRounds)
+	var progress atomic.Int64
+	fmt.Fprintf(os.Stderr, "== bench: driver=%s workers=%d (warmup=%d rounds=%d) ==\n", drv, workers, *flagWarmup, *flagRounds)
+	comboStart := time.Now()
+
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -226,10 +238,15 @@ func benchOnce(ctx context.Context, drv string, sdk *minio.Client, workers int, 
 				mu.Lock()
 				roundMs = append(roundMs, time.Since(rstart).Seconds()*1000)
 				mu.Unlock()
+				// 每完成一轮打一次进度（多 worker 合计数），\r 原地刷新
+				if n := progress.Add(1); n != total && (n == 1 || n%10 == 0) {
+					fmt.Fprintf(os.Stderr, "\r  driver=%s workers=%d rounds %d/%d  ", drv, workers, n, total)
+				}
 			}
 		}(w)
 	}
 	wg.Wait()
+	fmt.Fprintf(os.Stderr, "== bench: driver=%s workers=%d done (%d rounds in %s) ==\n", drv, workers, progress.Load(), time.Since(comboStart))
 
 	var out []*rec
 	for _, op := range []string{"get", "put", "stat", "list"} {

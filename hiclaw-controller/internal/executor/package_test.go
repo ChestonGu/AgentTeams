@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -557,6 +558,9 @@ func TestResolveAndExtract_FileDirectoryWithoutSoulmd_Succeeds(t *testing.T) {
 }
 
 func TestResolveAndExtract_ZipWithoutSoulmd_Succeeds(t *testing.T) {
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("unzip not available in PATH; skipping zip extraction test")
+	}
 	ctx := context.Background()
 	importDir := t.TempDir()
 	zipPath := filepath.Join(importDir, "minimal.zip")

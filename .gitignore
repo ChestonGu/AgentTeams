@@ -44,6 +44,7 @@ pnpm-lock.yaml
 # Compiled binaries
 hiclaw-controller/controller
 hiclaw-controller/hiclaw
+bench/bench_s3_linux_amd64
 
 # Build-time agent templates (copied from manager/agent/ during docker build)
 hiclaw-controller/agent/

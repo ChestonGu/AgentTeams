@@ -9,7 +9,7 @@
 |------|------|------|------|
 | [kubernetes-controller-perf-sop.md](kubernetes-controller-perf-sop.md) | **通用方法论**（不绑定具体项目） | 任意 K8s CRD 控制器性能问题的完整排查链路：**现象 → 定位 → 常见问题的解法 → 推荐的实践**（四段式）；含 P-1~P-15 现象清单、五步定位法、C-1~C-15 问题模式解法表、B-1~B-12 设计实践、决策树与检查清单 | 任何 controller/operator 开发者 |
 | [team-controller-defect-fixes.md](team-controller-defect-fixes.md) | **实例缺陷清单**（HiClaw 分支 `fix/team-cr-blocking-defects`） | F-01~F-14 缺陷→根因→优化方案→提交映射；与调研底稿编号对照；关键设计决策；未纳入分支的待办 | HiClaw 维护者 |
-| [controller-tuning-sop.md](controller-tuning-sop.md) | **实例调优手册**（HiClaw 专属参数） | 调优参数总表（8 个 env + 内置常量）、症状识别矩阵（S-1~S-6）、日志/指标/pprof/bench 操作、决策树、运维动作（重试武装、CRD schema 核对、回滚矩阵） | HiClaw 运维/排障人员 |
+| [controller-tuning-sop.md](controller-tuning-sop.md) | **实例调优手册**（HiClaw 专属参数） | 调优参数总表（14 个 env + 内置常量）、症状识别矩阵（S-1~S-6）、日志/指标/pprof/bench 操作、决策树、运维动作（重试武装、CRD schema 核对、回滚矩阵） | HiClaw 运维/排障人员 |
 
 ## 阅读顺序建议
 

@@ -1,8 +1,8 @@
 # HiClaw 控制器调优指南 SOP
 
-> 版本: v1.0
-> 日期: 2026-08-06
-> 基线: 分支 `fix/team-cr-blocking-defects`（含 `48ce4aa` 起的 Team/Human 调谐解堵、S3 SDK 存储驱动、可观测性改造）
+> 版本: v1.1
+> 日期: 2026-08-07
+> 基线: 分支 `fix/team-cr-blocking-defects`（含 `48ce4aa` 起的 Team/Human 调谐解堵、S3 SDK 存储驱动、可观测性改造；storage 层超时/重试参数已环境变量化）
 > 关联文档: [team-controller-defect-fixes.md](team-controller-defect-fixes.md)（缺陷与优化总结）
 > 调研底稿（本地 .issue/ 笔记，未入库）: team-controller-defects.md（缺陷清单）、team-controller-performance.md（性能定位）、team-controller-troubleshooting.md（耗时定位与观测）
 
@@ -30,7 +30,13 @@
 | `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` | `0`（关闭） | 单次调谐超时上限 | 外部依赖（OSS/Matrix）偶发挂起时开启（如 300~600） |
 | `HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS` | `300`（5min） | 已收敛 Active Team 的周期 requeue（带 0~10% 正向抖动） | 减少无谓调谐时可调大（600~1800） |
 | `HICLAW_TEAM_ACTIVE_NO_REQUEUE` | `false` | 已收敛且 spec 未变的 Active Team 只按事件调谐，不再周期 requeue | 需要极低队列负载时置 `true` |
-| `HICLAW_STORAGE_DRIVER` | `sdk` | 对象存储驱动：`sdk`（minio-go 连接池）\| `mc`（mc 子进程） | 默认 `sdk`；`mc` 仅作回滚/对比 |
+| `HICLAW_STORAGE_DRIVER` | `sdk` | 对象存储驱动：`sdk`（minio-go 连接池）\| `mc`（mc 子进程）。同时决定 embedded MinIO 的 admin provider（用户/策略管理）：`sdk` 用 madmin-go Admin API，`mc` fork `mc admin` | 默认 `sdk`；`mc` 仅作回滚/对比 |
+| `HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS` | `2` | 单次 TCP/TLS 连接超时（秒）。连接池只复用存活连接，池未命中即重新 dial——此值正是该场景的硬上限 | 端点偶发慢时适当调大（如 5），长期不可达保持小值快速失败 |
+| `HICLAW_STORAGE_RETRY_WINDOW_SECONDS` | `30` | 单次存储操作对瞬时错误（dial 超时/连接重置/5xx）的总重试窗口（秒）；确定性问题（4xx、key 不存在）不重试 | 短 OSS blip 会在窗口内自愈，调谐不失败；端点稳定可调小 |
+| `HICLAW_STORAGE_RETRY_BACKOFF_MS` | `500` | 重试初始退避（毫秒），每轮翻倍至上限 | 一般不动 |
+| `HICLAW_STORAGE_RETRY_BACKOFF_MAX_MS` | `5000` | 单次退避上限（毫秒） | 一般不动 |
+| `HICLAW_STORAGE_SDK_MAX_RETRIES` | `2` | minio-go 内部自动重试次数（外层重试窗口为主，内层仅覆盖立即重试） | 一般不动 |
+| `HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS` | `30` | config 阶段前置存储可达性探测上限（秒）；默认与重试窗口一致，短 blip 在窗口内自愈后继续调谐 | 与重试窗口联动调整 |
 | `HICLAW_FS_ACCESS_KEY` / `HICLAW_FS_SECRET_KEY` | 无 | 云 OSS 静态长效凭据（驱动无关） | 外部 OSS 无 STS sidecar 时配置 |
 | `HICLAW_PPROF_ADDR` | `0.0.0.0:6060` | pprof 监听地址 | 仅调试镜像生效（见 §5） |
 | `ENABLE_PPROF`（构建 arg） | `false` | 是否以 `-tags pprof` 编译控制器 | 仅调试镜像置 `true`，发布镜像必须保持关闭 |
@@ -43,10 +49,9 @@
 | `maxFailBackoff` | `10min` | team_controller.go |
 | 失败退避表 | 30s → 1m → 2m → 4m → 8m（封顶 10m） | `failBackoffFor` |
 | 重试武装注解 | `hiclaw.io/retry`（Team 与 Human 共用） | Reconcile 入口守卫 |
-| SDK 驱动 dial 超时 / 重试 | 2s / 30s 总窗口（退避 0.5s→5s 封顶） | minio_sdk.go（`sdkDialTimeout` / `storageRetryWindow`） |
-| mc 驱动网络错误重试 | 30s 总窗口（与 SDK 共享 `retryStorageOp`） | minio.go（`runMC`） |
-| 存储可达性探测 | 30s 上限（与重试窗口一致），config 阶段前置 | deployer.go（`storageProbeTimeout` / `probeStorage`） |
 | mc 慢调用日志阈值 | 300ms | minio.go（`mcSlowCallThreshold`） |
+
+> storage 层的连接超时 / 重试窗口 / 退避 / SDK 重试次数 / 探测超时已升级为环境变量（见上表 `HICLAW_STORAGE_*`），默认值即原内置常量，无需改动即可保持既有行为。
 
 ---
 
@@ -251,6 +256,7 @@ kubectl get deploy -n <ns> hiclaw-controller -o jsonpath='{.spec.template.spec.c
 | 调优项 | 回滚方式 |
 |--------|----------|
 | 并发/超时/周期/no-requeue | 环境变量改回默认（1 / 0 / 300 / false），重启控制器 |
+| storage 连接/重试/探测 | `HICLAW_STORAGE_*` 改回默认（2 / 30 / 500 / 5000 / 2 / 30），重启控制器；不设置即用默认 |
 | 存储驱动 | `HICLAW_STORAGE_DRIVER=mc`（legacy 驱动保留） |
 | 退避/重试上限 | 无法通过配置回滚（内置常量）；重置 `ConsecutiveFailures=0` + `MaxRetriesReached=false` 可恢复单个 CR |
 | 新增状态字段 | `omitempty` 向后兼容，旧镜像忽略未知字段；不写即不出现 |
@@ -268,8 +274,9 @@ kubectl get deploy -n <ns> hiclaw-controller -o jsonpath='{.spec.template.spec.c
 | 症状 | 一句话动作 |
 |------|-----------|
 | 队列堵、新建 Team 无 Phase | 调大 `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` |
-| 调谐挂起数分钟 | 开 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` |
+| 调谐挂起数分钟 | 开 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS`；若为存储层硬等待，调 `HICLAW_STORAGE_*`（连接超时/重试窗口） |
 | 周期调谐太频繁 | 调大 `HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS` 或 `HICLAW_TEAM_ACTIVE_NO_REQUEUE=true` |
 | Step4 慢 | 确认 `HICLAW_STORAGE_DRIVER=sdk`，查 `mc slow call` 与存储指标 |
+| 存储端点偶发抖动导致调谐失败 | 调大 `HICLAW_STORAGE_RETRY_WINDOW_SECONDS` 让短 blip 在窗口内自愈；端点长期不可达则保持小值快速失败 |
 | Failed 卡死 | 排障后 `kubectl annotate team <name> hiclaw.io/retry=""` |
 | 说不清为什么慢 | pprof 采样（`ENABLE_PPROF=true` 调试镜像）+ bench_s3 复现 |

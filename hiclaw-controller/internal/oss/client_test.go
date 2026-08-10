@@ -30,10 +30,8 @@ func TestMinIOClient_FullPathNoLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("worker-1", "hiclaw-storage", "team-dev", false)
+func TestBuildWorkerPolicy(t *testing.T) {
+	policy := buildWorkerPolicy("worker-1", "hiclaw-storage", "team-dev", false)
 
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
@@ -71,10 +69,8 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("worker-solo", "hiclaw-storage", "", false)
+func TestBuildWorkerPolicyNoTeam(t *testing.T) {
+	policy := buildWorkerPolicy("worker-solo", "hiclaw-storage", "", false)
 
 	rwStmt := policy.Statement[1]
 	for _, r := range rwStmt.Resource {
@@ -87,10 +83,8 @@ func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("default", "hiclaw-storage", "", true)
+func TestBuildManagerPolicy(t *testing.T) {
+	policy := buildWorkerPolicy("default", "hiclaw-storage", "", true)
 
 	if len(policy.Statement) != 2 {
 		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))

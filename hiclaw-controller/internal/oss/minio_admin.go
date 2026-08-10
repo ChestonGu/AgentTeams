@@ -10,8 +10,10 @@ import (
 	"strings"
 )
 
-// MinIOAdminClient implements StorageAdminClient for embedded-mode MinIO.
-// It uses the `mc admin` CLI to manage users and policies.
+// MinIOAdminClient implements StorageAdminClient for embedded-mode MinIO
+// using the `mc admin` CLI. It is the legacy provider, selected together
+// with the mc storage driver via HICLAW_STORAGE_DRIVER=mc; the default
+// HICLAW_STORAGE_DRIVER=sdk uses SDKAdminClient (madmin-go) instead.
 type MinIOAdminClient struct {
 	config     Config
 	aliasReady bool
@@ -64,7 +66,7 @@ func (c *MinIOAdminClient) EnsurePolicy(ctx context.Context, req PolicyRequest) 
 		bucket = c.config.Bucket
 	}
 
-	policy := c.buildWorkerPolicy(req.WorkerName, bucket, req.TeamName, req.IsManager)
+	policy := buildWorkerPolicy(req.WorkerName, bucket, req.TeamName, req.IsManager)
 	policyJSON, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal policy: %w", err)
@@ -107,72 +109,6 @@ func (c *MinIOAdminClient) DeleteUser(ctx context.Context, username string) erro
 		return fmt.Errorf("delete minio user %s: %w", username, err)
 	}
 	return nil
-}
-
-type s3Policy struct {
-	Version   string            `json:"Version"`
-	Statement []s3PolicyStatement `json:"Statement"`
-}
-
-type s3PolicyStatement struct {
-	Effect    string                `json:"Effect"`
-	Action    []string              `json:"Action"`
-	Resource  []string              `json:"Resource"`
-	Condition map[string]interface{} `json:"Condition,omitempty"`
-}
-
-func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string, isManager bool) s3Policy {
-	listPrefixes := []string{
-		fmt.Sprintf("agents/%s", workerName),
-		fmt.Sprintf("agents/%s/*", workerName),
-		"shared",
-		"shared/*",
-	}
-	rwResources := []string{
-		fmt.Sprintf("arn:aws:s3:::%s/agents/%s/*", bucket, workerName),
-		fmt.Sprintf("arn:aws:s3:::%s/shared/*", bucket),
-	}
-
-	if isManager {
-		listPrefixes = append(listPrefixes,
-			"manager",
-			"manager/*",
-		)
-		rwResources = append(rwResources,
-			fmt.Sprintf("arn:aws:s3:::%s/manager/*", bucket),
-		)
-	}
-
-	if teamName != "" {
-		listPrefixes = append(listPrefixes,
-			fmt.Sprintf("teams/%s", teamName),
-			fmt.Sprintf("teams/%s/*", teamName),
-		)
-		rwResources = append(rwResources,
-			fmt.Sprintf("arn:aws:s3:::%s/teams/%s/*", bucket, teamName),
-		)
-	}
-
-	return s3Policy{
-		Version: "2012-10-17",
-		Statement: []s3PolicyStatement{
-			{
-				Effect:   "Allow",
-				Action:   []string{"s3:ListBucket"},
-				Resource: []string{fmt.Sprintf("arn:aws:s3:::%s", bucket)},
-				Condition: map[string]interface{}{
-					"StringLike": map[string]interface{}{
-						"s3:prefix": listPrefixes,
-					},
-				},
-			},
-			{
-				Effect:   "Allow",
-				Action:   []string{"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
-				Resource: rwResources,
-			},
-		},
-	}
 }
 
 func (c *MinIOAdminClient) runMCAdmin(ctx context.Context, args ...string) (string, error) {

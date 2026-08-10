@@ -11,29 +11,23 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-// storageConnectTimeout bounds a single TCP/TLS connection attempt. minio-go's
-// default transport dials with Go's 30s timeout; on a flaky storage endpoint
-// every retried request would stall 30s before failing, turning a reconcile
-// into minutes of hard waits. 2s fails fast while remaining generous for a
-// healthy endpoint.
-const storageConnectTimeout = 2 * time.Second
-
-// storageRetryWindow bounds the total wall-clock time spent retrying
-// transient storage failures for one operation. A short OSS/cloud-S3 blip
-// (dial timeout, connection reset, 5xx) is retried inside this window so the
+// The storage connect timeout, retry window, and backoff bounds are
+// configurable via HICLAW_STORAGE_* environment variables (see storage_env.go);
+// the defaults below document the tuned values and are what the env accessors
+// fall back to. minio-go's default transport dials with Go's 30s timeout; on
+// a flaky storage endpoint every retried request would stall 30s before
+// failing, turning a reconcile into minutes of hard waits. 2s fails fast
+// while remaining generous for a healthy endpoint.
+//
+// The retry window bounds the total wall-clock time spent retrying transient
+// storage failures for one operation: a short OSS/cloud-S3 blip (dial
+// timeout, connection reset, 5xx) is retried inside the window so the
 // reconcile completes instead of failing and being requeued; a permanently
-// dead endpoint still fails, but only after the full window.
-const storageRetryWindow = 30 * time.Second
-
-// storageRetryBackoffBase is the initial pause between retries; doubled per
-// attempt up to storageRetryBackoffCap.
-const storageRetryBackoffBase = 500 * time.Millisecond
-
-// storageRetryBackoffCap bounds the per-attempt pause.
-const storageRetryBackoffCap = 5 * time.Second
+// dead endpoint still fails, but only after the full window. The initial
+// pause between retries is 500ms, doubled per attempt up to a 5s cap.
 
 // retryStorageOp runs fn, retrying transient network-class failures within
-// the storageRetryWindow budget. Deterministic errors (os.ErrNotExist,
+// the retry window budget. Deterministic errors (os.ErrNotExist,
 // permission, malformed requests) are returned immediately — they would fail
 // again on retry. The caller's ctx is honored between attempts; fn itself
 // must respect ctx cancellation.
@@ -47,8 +41,8 @@ func retryStorageOp(ctx context.Context, fn func() error) error {
 // retryStorageOpValue is the value-returning variant of retryStorageOp used
 // by operations that produce a result (e.g. the mc driver's stdout).
 func retryStorageOpValue[T any](ctx context.Context, fn func() (T, error)) (T, error) {
-	deadline := time.Now().Add(storageRetryWindow)
-	backoff := storageRetryBackoffBase
+	deadline := time.Now().Add(storageRetryWindow())
+	backoff := storageRetryBackoffBase()
 	for {
 		v, err := fn()
 		if err == nil || !isRetryableStorageError(err) {
@@ -63,8 +57,8 @@ func retryStorageOpValue[T any](ctx context.Context, fn func() (T, error)) (T, e
 			delay = remaining
 		}
 		backoff *= 2
-		if backoff > storageRetryBackoffCap {
-			backoff = storageRetryBackoffCap
+		if cap := storageRetryBackoffCap(); backoff > cap {
+			backoff = cap
 		}
 		select {
 		case <-ctx.Done():
