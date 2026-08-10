@@ -6,6 +6,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **Worker push skips non-UTF-8 file names**: `base.sh` gains `is_utf8_name` / `collect_nonutf8_files` helpers (python3-based, safe for invalid byte sequences). The worker change-triggered sync loop and `update-worker-config.sh` build `mc mirror --exclude` lists from them, so a single non-UTF-8 file name no longer fails the whole push; the sync loop also ignores such files so it cannot spin on unpushable ones.
+
+- **SDK first-create detection fix**: `os.ErrNotExist` now passes through the SDK storage driver unwrapped — service-layer `os.IsNotExist` checks (which peel only os-package error types, not arbitrary `Unwrap` chains) can again distinguish "object missing (first create)" from real storage failures, so initialization generate-and-injects missing configs (seeded agent files, SOUL.md, AGENTS.md, openclaw.json merge) instead of aborting. Seed/mirror pushes also skip files with non-UTF-8 names (S3 keys must be valid UTF-8) instead of failing the whole operation.
+
 - **base.sh shipped to all images**: `shared/lib/base.sh` provides `log()`, `waitForService()`, `waitForHTTP()`, and `generateKey()` in every image (manager/worker/controller/copaw/hermes), so `hiclaw-env.sh` consumers get the full `log()` (timestamped with date) instead of the minimal fallback; stale comments claiming base.sh was Manager-only are corrected.
 
 - **MinIO admin API via SDK**: Embedded-mode MinIO user/policy management (`EnsureUser`/`EnsurePolicy`/`DeleteUser` during member provisioning) now follows the `HICLAW_STORAGE_DRIVER` switch instead of always forking `mc admin` subprocesses. `sdk` (default) uses the madmin-go Admin API with the same connection-pooled transport and fast-fail dial timeout as the SDK storage driver; `mc` keeps the legacy `mc admin` CLI path for rollback/parity.
@@ -80,6 +84,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **新增功能**
 
+- **Worker 推送跳过非 UTF-8 文件名**: `base.sh` 新增 `is_utf8_name` / `collect_nonutf8_files` 辅助函数（python3 校验，对无效字节安全）。worker 变更触发同步循环和 `update-worker-config.sh` 据此构造 `mc mirror --exclude`，单个非 UTF-8 文件名不再导致整批推送失败；同步循环同时忽略这类文件，避免空转。
+
+- **SDK 首次创建判定修复**: SDK 存储驱动对 `os.ErrNotExist` 不再做 `OpError` 包装，直接透传——service 层依赖的 `os.IsNotExist`（只剥 os 包错误类型、不递归任意 Unwrap）恢复生效，初始化时 OSS 配置文件不存在会被正确识别为首次创建（生成注入：种子文件、SOUL.md、AGENTS.md、openclaw.json 合并），不再报错中断；推送对象时跳过非 UTF-8 文件名的文件（S3 key 必须合法 UTF-8），避免单个坏文件名导致整批推送失败。
+
 - **base.sh 随 shared/lib 进入所有镜像**: `shared/lib/base.sh` 提供 `log()`、`waitForService()`、`waitForHTTP()`、`generateKey()`，manager/worker/controller/copaw/hermes 镜像均包含，`hiclaw-env.sh` 的消费方脚本拿到完整 `log()`（带日期时间戳）而不再是最小 fallback；同步修正了 "base.sh 仅 Manager 用" 的过时注释。
 
 - **MinIO Admin API 走 SDK**: embedded MinIO 的用户/策略管理（成员调谐中的 `EnsureUser`/`EnsurePolicy`/`DeleteUser`）不再固定 fork `mc admin` 子进程，改为跟随 `HICLAW_STORAGE_DRIVER` 切换：`sdk`（默认）用 madmin-go Admin API，复用 SDK 存储驱动的连接池与快速失败 dial 超时；`mc` 保留原 `mc admin` CLI 路径以便回滚/对比。
@@ -130,6 +138,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- fix(controller): pass os.ErrNotExist through the SDK storage driver unwrapped — restores os.IsNotExist first-create detection (generate-and-inject) that OpError wrapping had broken; skip non-UTF-8 file names in seed/mirror pushes ([9393e72](https://github.com/agentscope-ai/HiClaw/commit/9393e72))
+- feat(shared): skip non-UTF-8 file names in mc mirror pushes — base.sh is_utf8_name/collect_nonutf8_files helpers; worker-entrypoint.sh sync loop and update-worker-config.sh exclude them so one bad name cannot fail the whole push ([185a54e](https://github.com/agentscope-ai/HiClaw/commit/185a54e))
 - feat(shared): ship base.sh in all images via shared/lib — full log()/waitForService/waitForHTTP/generateKey, stale Manager-only comments corrected ([b1d31bb](https://github.com/agentscope-ai/HiClaw/commit/b1d31bb))
 - feat(controller): expose storage connect/retry/probe tuning as `HICLAW_STORAGE_*` env vars — connect timeout (`HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS`), retry window (`HICLAW_STORAGE_RETRY_WINDOW_SECONDS`), backoff base/cap (`HICLAW_STORAGE_RETRY_BACKOFF_MS` / `_MAX_MS`), SDK internal retries (`HICLAW_STORAGE_SDK_MAX_RETRIES`), config-phase probe (`HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS`); defaults unchanged (2s / 30s / 500ms→5s / 2 / 30s) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
 - feat(controller): add madmin-go admin provider for embedded MinIO user/policy management, following the HICLAW_STORAGE_DRIVER switch (sdk default; mc admin CLI kept as legacy provider) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
