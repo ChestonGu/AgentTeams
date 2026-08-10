@@ -6,6 +6,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **base.sh shipped to all images**: `shared/lib/base.sh` provides `log()`, `waitForService()`, `waitForHTTP()`, and `generateKey()` in every image (manager/worker/controller/copaw/hermes), so `hiclaw-env.sh` consumers get the full `log()` (timestamped with date) instead of the minimal fallback; stale comments claiming base.sh was Manager-only are corrected.
+
 - **MinIO admin API via SDK**: Embedded-mode MinIO user/policy management (`EnsureUser`/`EnsurePolicy`/`DeleteUser` during member provisioning) now follows the `HICLAW_STORAGE_DRIVER` switch instead of always forking `mc admin` subprocesses. `sdk` (default) uses the madmin-go Admin API with the same connection-pooled transport and fast-fail dial timeout as the SDK storage driver; `mc` keeps the legacy `mc admin` CLI path for rollback/parity.
 
 - **S3 SDK storage driver (default)**: The controller's object-storage layer now defaults to the minio-go S3 SDK (`HICLAW_STORAGE_DRIVER=sdk`), replacing the per-call `mc` subprocess fork with a connection-pooled HTTP client — ~5.8× lower per-member config latency per the `bench_s3` measurements, with static long-lived AK/SK credentials (`HICLAW_FS_ACCESS_KEY`/`HICLAW_FS_SECRET_KEY`) for cloud S3. `HICLAW_STORAGE_DRIVER=mc` restores the legacy driver, and dynamic STS credential sources remain supported on both drivers.
@@ -78,6 +80,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **新增功能**
 
+- **base.sh 随 shared/lib 进入所有镜像**: `shared/lib/base.sh` 提供 `log()`、`waitForService()`、`waitForHTTP()`、`generateKey()`，manager/worker/controller/copaw/hermes 镜像均包含，`hiclaw-env.sh` 的消费方脚本拿到完整 `log()`（带日期时间戳）而不再是最小 fallback；同步修正了 "base.sh 仅 Manager 用" 的过时注释。
+
 - **MinIO Admin API 走 SDK**: embedded MinIO 的用户/策略管理（成员调谐中的 `EnsureUser`/`EnsurePolicy`/`DeleteUser`）不再固定 fork `mc admin` 子进程，改为跟随 `HICLAW_STORAGE_DRIVER` 切换：`sdk`（默认）用 madmin-go Admin API，复用 SDK 存储驱动的连接池与快速失败 dial 超时；`mc` 保留原 `mc admin` CLI 路径以便回滚/对比。
 
 - **本地安装默认优先 QwenPaw**: 安装脚本现在优先展示 QwenPaw 作为默认 Worker 运行时，升级时支持 keep-all 和回车保留已有参数，并强化了非交互模式下的防误执行保护。
@@ -126,6 +130,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(shared): ship base.sh in all images via shared/lib — full log()/waitForService/waitForHTTP/generateKey, stale Manager-only comments corrected ([b1d31bb](https://github.com/agentscope-ai/HiClaw/commit/b1d31bb))
 - feat(controller): expose storage connect/retry/probe tuning as `HICLAW_STORAGE_*` env vars — connect timeout (`HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS`), retry window (`HICLAW_STORAGE_RETRY_WINDOW_SECONDS`), backoff base/cap (`HICLAW_STORAGE_RETRY_BACKOFF_MS` / `_MAX_MS`), SDK internal retries (`HICLAW_STORAGE_SDK_MAX_RETRIES`), config-phase probe (`HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS`); defaults unchanged (2s / 30s / 500ms→5s / 2 / 30s) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
 - feat(controller): add madmin-go admin provider for embedded MinIO user/policy management, following the HICLAW_STORAGE_DRIVER switch (sdk default; mc admin CLI kept as legacy provider) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
 - feat(controller): add minio-go S3 SDK storage driver — HICLAW_STORAGE_DRIVER=sdk default with mc fallback, flaky-storage resilience (probe fast-abort, bounded retries), content-compare builtin skill push ([95dcae1](https://github.com/agentscope-ai/HiClaw/commit/95dcae1))
