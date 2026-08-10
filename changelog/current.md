@@ -6,6 +6,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **MinIO admin API via SDK**: Embedded-mode MinIO user/policy management (`EnsureUser`/`EnsurePolicy`/`DeleteUser` during member provisioning) now follows the `HICLAW_STORAGE_DRIVER` switch instead of always forking `mc admin` subprocesses. `sdk` (default) uses the madmin-go Admin API with the same connection-pooled transport and fast-fail dial timeout as the SDK storage driver; `mc` keeps the legacy `mc admin` CLI path for rollback/parity.
+
 - **S3 SDK storage driver (default)**: The controller's object-storage layer now defaults to the minio-go S3 SDK (`HICLAW_STORAGE_DRIVER=sdk`), replacing the per-call `mc` subprocess fork with a connection-pooled HTTP client — ~5.8× lower per-member config latency per the `bench_s3` measurements, with static long-lived AK/SK credentials (`HICLAW_FS_ACCESS_KEY`/`HICLAW_FS_SECRET_KEY`) for cloud S3. `HICLAW_STORAGE_DRIVER=mc` restores the legacy driver, and dynamic STS credential sources remain supported on both drivers.
 
 - **Storage stability observability**: New Prometheus metrics expose S3 health and reconcile cost: `hiclaw_storage_op_duration_seconds` (per-op latency histogram, op × driver), `hiclaw_storage_op_errors_total` (op × driver × class: network/timeout/not_found/other), `hiclaw_storage_probe_failures_total`, and `hiclaw_member_reconcile_duration_seconds` (per-member full flow: infra → SA → config → container → expose, kind × result). A rising network/timeout series is the "storage endpoint unstable" alarm that previously showed up only as reconcile stalls.
@@ -76,6 +78,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **新增功能**
 
+- **MinIO Admin API 走 SDK**: embedded MinIO 的用户/策略管理（成员调谐中的 `EnsureUser`/`EnsurePolicy`/`DeleteUser`）不再固定 fork `mc admin` 子进程，改为跟随 `HICLAW_STORAGE_DRIVER` 切换：`sdk`（默认）用 madmin-go Admin API，复用 SDK 存储驱动的连接池与快速失败 dial 超时；`mc` 保留原 `mc admin` CLI 路径以便回滚/对比。
+
 - **本地安装默认优先 QwenPaw**: 安装脚本现在优先展示 QwenPaw 作为默认 Worker 运行时，升级时支持 keep-all 和回车保留已有参数，并强化了非交互模式下的防误执行保护。
 
 - **Team 支持人类协调员**: Team 资源支持声明人类协调员成员，Team Room 由 team-admin 归属，并同步更新 Team Leader / Worker 提示词，确保协作收敛在 Team Room 中。
@@ -122,6 +126,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(controller): expose storage connect/retry/probe tuning as `HICLAW_STORAGE_*` env vars — connect timeout (`HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS`), retry window (`HICLAW_STORAGE_RETRY_WINDOW_SECONDS`), backoff base/cap (`HICLAW_STORAGE_RETRY_BACKOFF_MS` / `_MAX_MS`), SDK internal retries (`HICLAW_STORAGE_SDK_MAX_RETRIES`), config-phase probe (`HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS`); defaults unchanged (2s / 30s / 500ms→5s / 2 / 30s) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
+- feat(controller): add madmin-go admin provider for embedded MinIO user/policy management, following the HICLAW_STORAGE_DRIVER switch (sdk default; mc admin CLI kept as legacy provider) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
 - feat(controller): add minio-go S3 SDK storage driver — HICLAW_STORAGE_DRIVER=sdk default with mc fallback, flaky-storage resilience (probe fast-abort, bounded retries), content-compare builtin skill push ([95dcae1](https://github.com/agentscope-ai/HiClaw/commit/95dcae1))
 - feat(controller): optional no-requeue for converged Active teams — HICLAW_TEAM_ACTIVE_NO_REQUEUE, plus team member reconcile flow metrics ([84a9429](https://github.com/agentscope-ai/HiClaw/commit/84a9429))
 - fix(shared): add log fallback when base.sh is absent — scripts fail on the real error instead of exit 127 ([c895d3a](https://github.com/agentscope-ai/HiClaw/commit/c895d3a))
