@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +13,48 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 )
+
+// seedLocalAgentFiles must skip files with non-UTF-8 names (S3 keys must be
+// valid UTF-8) instead of failing the whole seed — a single bad file name
+// would otherwise abort first-create initialization.
+func TestSeedLocalAgentFilesSkipsNonUTF8Names(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot create non-UTF-8 file names on Windows")
+	}
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	workerDir := filepath.Join(agentFSDir, "alice")
+	if err := os.MkdirAll(workerDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "ok.md"), []byte("fine"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid UTF-8 byte sequence in the file name.
+	if err := os.WriteFile(workerDir+"/bad\xff\xfe.md", []byte("bad"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	if err := deployer.seedLocalAgentFiles(ctx, workerDir, "agents/alice", map[string]struct{}{}); err != nil {
+		t.Fatalf("seedLocalAgentFiles failed: %v", err)
+	}
+	if _, err := store.GetObject(ctx, "agents/alice/ok.md"); err != nil {
+		t.Errorf("ok.md was not seeded: %v", err)
+	}
+	names, err := store.ListObjects(ctx, "agents/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.Contains(n, "\xff") {
+			t.Errorf("non-UTF-8 file was pushed: %q", n)
+		}
+	}
+}
 
 func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *testing.T) {
 	ctx := context.Background()
@@ -120,4 +164,120 @@ func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
 	if strings.Contains(string(got), "ORIGINAL SOUL FROM PACKAGE") {
 		t.Fatalf("SOUL.md still contains package seed content: %s", got)
 	}
+}
+
+func TestPushBuiltinSkillsContentCompare(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	workerAgentDir := filepath.Join(tmp, "worker-agent")
+	skillDir := filepath.Join(workerAgentDir, "skills", "file-sync")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	skillMD := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillMD, []byte("v1 content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS:            store,
+		AgentFSDir:     filepath.Join(tmp, "agents"),
+		WorkerAgentDir: workerAgentDir,
+	})
+
+	if err := deployer.pushBuiltinSkills(ctx, "alice", "agents/alice", "worker", "openclaw"); err != nil {
+		t.Fatalf("first push failed: %v", err)
+	}
+	got, err := store.GetObject(ctx, "agents/alice/skills/file-sync/SKILL.md")
+	if err != nil {
+		t.Fatalf("skill not pushed: %v", err)
+	}
+	if string(got) != "v1 content\n" {
+		t.Fatalf("unexpected skill content: %q", got)
+	}
+
+	// Unchanged second pass: content must be preserved.
+	if err := deployer.pushBuiltinSkills(ctx, "alice", "agents/alice", "worker", "openclaw"); err != nil {
+		t.Fatalf("second push failed: %v", err)
+	}
+	got, err = store.GetObject(ctx, "agents/alice/skills/file-sync/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v1 content\n" {
+		t.Fatalf("unchanged push altered content: %q", got)
+	}
+
+	// Content update must propagate (unlike seed-only semantics).
+	if err := os.WriteFile(skillMD, []byte("v2 content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployer.pushBuiltinSkills(ctx, "alice", "agents/alice", "worker", "openclaw"); err != nil {
+		t.Fatalf("update push failed: %v", err)
+	}
+	got, err = store.GetObject(ctx, "agents/alice/skills/file-sync/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v2 content\n" {
+		t.Fatalf("content update not propagated: %q", got)
+	}
+}
+
+func TestPushOnDemandSkillsSkipsLocalPushByDefault(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		// Executor left nil on purpose: the local push must not be reached.
+	})
+
+	if err := deployer.PushOnDemandSkills(ctx, "alice", []string{"github-operations"}, nil); err != nil {
+		t.Fatalf("PushOnDemandSkills failed: %v", err)
+	}
+	names, err := store.ListObjects(ctx, "agents/alice/skills/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("local skill push ran despite default-off switch: %v", names)
+	}
+}
+
+func TestProbeStorage(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	// Object missing → endpoint answered, healthy.
+	if err := deployer.probeStorage(ctx, "agents/alice"); err != nil {
+		t.Fatalf("probe with missing object failed: %v", err)
+	}
+
+	// Object present → healthy.
+	if err := store.PutObject(ctx, "agents/alice/openclaw.json", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployer.probeStorage(ctx, "agents/alice"); err != nil {
+		t.Fatalf("probe with existing object failed: %v", err)
+	}
+
+	// Network-class failure → probe surfaces the error for a fast abort.
+	failing := &failingGetStorage{Memory: ossfake.NewMemory()}
+	d2 := NewDeployer(DeployerConfig{OSS: failing})
+	if err := d2.probeStorage(ctx, "agents/alice"); err == nil {
+		t.Fatal("probe did not surface storage failure")
+	}
+}
+
+// failingGetStorage wraps ossfake.Memory and fails every GetObject with a
+// transport-class error, simulating an unreachable storage endpoint.
+type failingGetStorage struct {
+	*ossfake.Memory
+}
+
+func (f *failingGetStorage) GetObject(_ context.Context, _ string) ([]byte, error) {
+	return nil, errors.New("dial tcp 10.0.0.1:9000: i/o timeout")
 }

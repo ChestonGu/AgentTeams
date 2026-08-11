@@ -14,6 +14,14 @@
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
+# Defensive log() fallback: hiclaw-env.sh provides log() via base.sh or its
+# own fallback, but this script must keep working even when hiclaw-env.sh
+# fails to load — otherwise an mc failure below turns into a misleading
+# "log: command not found".
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[hiclaw $(date '+%H:%M:%S')] $*"; }
+fi
+
 # ============================================================
 # Parse arguments
 # ============================================================

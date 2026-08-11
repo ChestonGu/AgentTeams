@@ -6,6 +6,36 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **Worker push skips non-UTF-8 file names**: `base.sh` gains `is_utf8_name` / `collect_nonutf8_files` helpers (python3-based, safe for invalid byte sequences). The worker change-triggered sync loop and `update-worker-config.sh` build `mc mirror --exclude` lists from them, so a single non-UTF-8 file name no longer fails the whole push; the sync loop also ignores such files so it cannot spin on unpushable ones.
+
+- **SDK first-create detection fix**: `os.ErrNotExist` now passes through the SDK storage driver unwrapped — service-layer `os.IsNotExist` checks (which peel only os-package error types, not arbitrary `Unwrap` chains) can again distinguish "object missing (first create)" from real storage failures, so initialization generate-and-injects missing configs (seeded agent files, SOUL.md, AGENTS.md, openclaw.json merge) instead of aborting. Seed/mirror pushes also skip files with non-UTF-8 names (S3 keys must be valid UTF-8) instead of failing the whole operation.
+
+- **base.sh shipped to all images**: `shared/lib/base.sh` provides `log()`, `waitForService()`, `waitForHTTP()`, and `generateKey()` in every image (manager/worker/controller/copaw/hermes), so `hiclaw-env.sh` consumers get the full `log()` (timestamped with date) instead of the minimal fallback; stale comments claiming base.sh was Manager-only are corrected.
+
+- **MinIO admin API via SDK**: Embedded-mode MinIO user/policy management (`EnsureUser`/`EnsurePolicy`/`DeleteUser` during member provisioning) now follows the `HICLAW_STORAGE_DRIVER` switch instead of always forking `mc admin` subprocesses. `sdk` (default) uses the madmin-go Admin API with the same connection-pooled transport and fast-fail dial timeout as the SDK storage driver; `mc` keeps the legacy `mc admin` CLI path for rollback/parity.
+
+- **S3 SDK storage driver (default)**: The controller's object-storage layer now defaults to the minio-go S3 SDK (`HICLAW_STORAGE_DRIVER=sdk`), replacing the per-call `mc` subprocess fork with a connection-pooled HTTP client — ~5.8× lower per-member config latency per the `bench_s3` measurements, with static long-lived AK/SK credentials (`HICLAW_FS_ACCESS_KEY`/`HICLAW_FS_SECRET_KEY`) for cloud S3. `HICLAW_STORAGE_DRIVER=mc` restores the legacy driver, and dynamic STS credential sources remain supported on both drivers.
+
+- **Storage stability observability**: New Prometheus metrics expose S3 health and reconcile cost: `hiclaw_storage_op_duration_seconds` (per-op latency histogram, op × driver), `hiclaw_storage_op_errors_total` (op × driver × class: network/timeout/not_found/other), `hiclaw_storage_probe_failures_total`, and `hiclaw_member_reconcile_duration_seconds` (per-member full flow: infra → SA → config → container → expose, kind × result). A rising network/timeout series is the "storage endpoint unstable" alarm that previously showed up only as reconcile stalls.
+
+- **Flaky-storage resilience**: `DeployWorkerConfig` probes storage reachability first (30s bounded, matching the retry window) so a short OSS blip recovers inside the window instead of failing the pass; every SDK operation uses a **2s connect timeout** with transient-failure retries within a **30s total window** (exponential backoff 0.5s→5s cap; deterministic 4xx/missing-key errors never retried); the mc driver shares the same 30s retry window. A permanently dead endpoint still aborts and requeues with a concise status message instead of stalling on the CLI's 30s dial per op.
+
+- **Package downloads via the SDK driver**: `PackageResolver` now downloads MinIO/OSS packages through the same `StorageClient` (minio-go SDK) instead of forking `mc cp`/`mc stat` subprocesses, which bypassed the driver selection and carried the CLI's own 30s dial timeout — this was the source of `deploy package: package resolve/extract failed: ... mc: unable to prepare URL for copying` under OSS jitter. ETag-based content caching (skip re-download when the etag-named local cache file exists) and atomic temp+rename writes are preserved; `mc` remains only as a nil-storage fallback.
+
+- **Concise Status.Message on reconcile failure**: Storage-layer errors are now single-layer (`storage get <key>: dial tcp ...: i/o timeout`) via `oss.OpError`, and Worker/Manager/Human/Team controllers write a condensed root-cause message (opaque subprocess-exit leaves skipped, 512-char cap) to `status.message` instead of the full multi-layer wrap chain.
+
+- **Worker-management scripts log fallback**: `push-worker-skills.sh`, `generate-worker-config.sh`, and `enable-peer-mentions.sh` now define a defensive `log()` when `hiclaw-env.sh`/`base.sh` did not provide one, so a failed `mc` call logs its `WARNING` properly instead of aborting with a misleading `log: command not found` in images without `base.sh` (controller/worker) or when the shared lib failed to load.
+
+- **Builtin skill push content-compare**: `pushBuiltinSkills` now pushes per-file, skipping unchanged objects (GET-compare instead of a full `mc mirror --overwrite` re-upload), cutting the per-member skill phase from ~25–35s to a few seconds while still propagating skill updates from new controller images.
+
+- **Active Team no-requeue mode**: `HICLAW_TEAM_ACTIVE_NO_REQUEUE=true` stops the periodic requeue for fully converged Active Teams whose spec is unchanged — they reconcile only on events (pod phase changes, spec edits) instead of on the 5m timer. Default false preserves the existing periodic behavior.
+
+- **On-demand skill push off by default**: The controller-side local skill push (`spec.skills` via `push-worker-skills.sh`) is skipped by default (`HICLAW_LOCAL_SKILL_PUSH=true` re-enables it) — the script reads the Manager's local `workers-registry.json`, which does not exist in the controller container, so the push always failed there. Remote (nacos) skills still push via Go.
+
+**Bug Fixes**
+
+- **Script `log` fallback**: `hiclaw-env.sh` now defines a minimal `log()` when `base.sh` is absent (controller/worker images), so scripts fail on the real error instead of `log: command not found` (exit 127).
+
 - **QwenPaw-first local install flow**: The installer now presents QwenPaw as the default worker runtime, supports keep-all upgrades with enter-to-keep prompts for existing parameters, and improves non-interactive guardrails for scripted installs.
 
 - **Team human coordinators**: Team resources can include human coordinator members, with team-admin-owned Matrix rooms and updated Team Leader / Worker prompts so coordination stays inside the Team Room.
@@ -38,9 +68,29 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Gateway and auth stability**: The configured AI stream idle timeout is applied to the self-hosted Higress gateway, observability/stream-timeout env is propagated during bootstrap, and TokenReview cache entries are capped and swept.
 
+- **Team reconcile unblocking**: Team reconcile parallelism is configurable via `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` (default 1, preserving legacy serial behavior; raise it so one slow/hung Team can no longer stall every other Team, including newly created ones stuck in Phase ""/Pending). An optional per-pass deadline (`HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS`, disabled by default) bounds a single pass against hung external calls; `failTeam` uses exponential backoff (30s → 10min cap) and stops requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation; finalizer add/remove use merge patches instead of `Update`. `TeamStatus` gains `observedGeneration`, so unchanged Active teams skip the full provisioning chain after a controller restart or informer re-sync; the periodic requeue for converged teams defaults to 5m, is configurable via `HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS`, and carries 0–10% positive jitter so teams do not wake in lockstep.
+
+- **Team reconcile observability**: Each Team reconcile pass logs per-step timing (`team reconcile: admin actor / step 1 rooms / step 1 storage / …`), and `DeployWorkerConfig` logs per-phase upload timing, so slow steps (e.g. hung object-storage syncs) are identifiable at a glance. Per-request STS credential INFO logs are commented out (not removed) to reduce log noise; WARN/ERROR paths still log.
+
+- **Team reconcile telemetry**: `Reconcile` injects a team-scoped logger (`team=<name>`, `teamUID=<uid>`) into the context so every downstream layer (deployer, oss, gateway, backend) is tagged with the Team identity — `grep "team=<name>"` covers the whole reconcile span. A unified `timed` helper logs elapsed on success, failure, and cancellation, and member phases now log elapsed on failure too (previously success-only). The oss layer logs `mc slow call` for any mc invocation over 300ms (with op type) to quantify the S3-layer latency distribution; `ProvisionWorker` logs per-step elapsed (Matrix register / MinIO user / room / join / gateway consumer / AI-route auth); `modifyAIRoutes` logs overall elapsed plus 409-conflict retry count; Docker image pulls log completion; a panic guard records reconcile panics with team context and requeues through the error path.
+
+- **S3 benchmark harness**: New `bench/` module with `bench_s3.go` — a read-only reproduction benchmark over the real scenario bucket (mc subprocess vs minio-go SDK drivers, config-phase op mix 12 GET + 3 PUT + 2 STAT + 1 LIST, per-op latency percentiles + per-round wall-clock; write space isolated under `bench-probe/` and auto-cleaned).
+
+- **Debug pprof build switch**: The controller image build accepts `ENABLE_PPROF=true` (`--build-arg`), compiling `cmd/controller` with `-tags pprof` to expose `/debug/pprof` on port 6060 (`HICLAW_PPROF_ADDR` overridable) with block/mutex sampling enabled. Default builds compile a no-op stub — no pprof code, no extra listener, zero debug surface in release images.
+
+- **Human reconcile backoff and parity**: `HumanStatus` gains `observedGeneration` (parity with Worker/Team/Manager) plus `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`. Infra failures now use exponential backoff (30s → 10min cap) and stop requeuing after 5 consecutive failures until re-armed via the `hiclaw.io/retry` annotation, replacing the previous double-requeue (`RequeueAfter` + rate-limiter error) pattern.
+
 ---
 
 **新增功能**
+
+- **Worker 推送跳过非 UTF-8 文件名**: `base.sh` 新增 `is_utf8_name` / `collect_nonutf8_files` 辅助函数（python3 校验，对无效字节安全）。worker 变更触发同步循环和 `update-worker-config.sh` 据此构造 `mc mirror --exclude`，单个非 UTF-8 文件名不再导致整批推送失败；同步循环同时忽略这类文件，避免空转。
+
+- **SDK 首次创建判定修复**: SDK 存储驱动对 `os.ErrNotExist` 不再做 `OpError` 包装，直接透传——service 层依赖的 `os.IsNotExist`（只剥 os 包错误类型、不递归任意 Unwrap）恢复生效，初始化时 OSS 配置文件不存在会被正确识别为首次创建（生成注入：种子文件、SOUL.md、AGENTS.md、openclaw.json 合并），不再报错中断；推送对象时跳过非 UTF-8 文件名的文件（S3 key 必须合法 UTF-8），避免单个坏文件名导致整批推送失败。
+
+- **base.sh 随 shared/lib 进入所有镜像**: `shared/lib/base.sh` 提供 `log()`、`waitForService()`、`waitForHTTP()`、`generateKey()`，manager/worker/controller/copaw/hermes 镜像均包含，`hiclaw-env.sh` 的消费方脚本拿到完整 `log()`（带日期时间戳）而不再是最小 fallback；同步修正了 "base.sh 仅 Manager 用" 的过时注释。
+
+- **MinIO Admin API 走 SDK**: embedded MinIO 的用户/策略管理（成员调谐中的 `EnsureUser`/`EnsurePolicy`/`DeleteUser`）不再固定 fork `mc admin` 子进程，改为跟随 `HICLAW_STORAGE_DRIVER` 切换：`sdk`（默认）用 madmin-go Admin API，复用 SDK 存储驱动的连接池与快速失败 dial 超时；`mc` 保留原 `mc admin` CLI 路径以便回滚/对比。
 
 - **本地安装默认优先 QwenPaw**: 安装脚本现在优先展示 QwenPaw 作为默认 Worker 运行时，升级时支持 keep-all 和回车保留已有参数，并强化了非交互模式下的防误执行保护。
 
@@ -74,8 +124,37 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **网关与认证稳定性**: 自托管 Higress 网关应用配置的 AI stream idle timeout；启动时传递 observability / stream-timeout 环境变量；TokenReview 缓存增加容量上限和清理机制。
 
+- **Team 调谐解除阻塞**: Team 调谐并发度可通过 `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` 配置（默认 1，保持原有串行行为；调高后单个 Team 缓慢或挂起不再拖垮其他所有 Team，含新建、停在 Phase ""/Pending 的）。可通过 `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` 开启单次调谐超时（默认关闭，保持原有行为）；`failTeam` 改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；finalizer 增删改用 merge patch 而非 `Update`。`TeamStatus` 新增 `observedGeneration`，控制器重启或 informer re-sync 后未变更的 Active Team 跳过全量调谐链；已收敛 Team 的周期 requeue 默认 5min，可通过 `HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS` 配置，并带 0–10% 正向抖动避免各 Team 同时唤醒。
+
+- **Team 调谐可观测性**: Team 调谐每次执行按步骤打印耗时日志（`team reconcile: admin actor / step 1 rooms / step 1 storage / …`），`DeployWorkerConfig` 打印各上传阶段耗时，便于快速定位慢步骤（如对象存储同步挂起）。STS 凭据逐请求 INFO 日志改为注释保留（不删除）以降低日志噪声；WARN/ERROR 路径仍会打印。
+
+- **Team 调谐遥测增强**: `Reconcile` 入口将 team-scoped logger（`team=<name>`、`teamUID=<uid>`）注入 context，下游各层（deployer/oss/gateway/backend）日志自动携带 Team 身份，`grep "team=<name>"` 即可覆盖整条调谐链路。新增统一 `timed` helper，成功/失败/取消均记录 elapsed；member 各阶段失败路径补上 elapsed（原先仅成功时打印）。OSS 层对超过 300ms 的 mc 调用打 `mc slow call`（含 op 类型），量化 S3 层单次调用延迟分布；`ProvisionWorker` 各步骤（Matrix 注册 / MinIO 用户 / 建房 / join / gateway consumer / AI 路由授权）补 elapsed；`modifyAIRoutes` 记录整体耗时与 409 冲突重试次数；Docker 镜像拉取完成补日志；新增 panic 兜底，panic 时带 team 上下文记录并走错误路径 requeue。
+
+- **S3 基准复现工具**: 新增 `bench/` module，含 `bench_s3.go` —— 复用真实场景桶的只读复现基准（mc 子进程 vs minio-go SDK 双驱动，对齐 config 阶段操作配比 12 GET + 3 PUT + 2 STAT + 1 LIST，输出各操作延迟分位数与单成员轮次墙钟耗时；写空间隔离在 `bench-probe/` 前缀下并自动清理）。
+
+- **pprof 调试构建开关**: 控制器镜像构建支持 `ENABLE_PPROF=true`（`--build-arg`），以 `-tags pprof` 编译 `cmd/controller`，暴露 6060 端口 `/debug/pprof`（可用 `HICLAW_PPROF_ADDR` 覆盖）并开启 block/mutex 采样。默认构建编译 no-op stub——不含 pprof 代码、不开额外端口，发布镜像零调试面。
+
+- **Human 调谐退避与字段对齐**: `HumanStatus` 新增 `observedGeneration`（与 Worker/Team/Manager 对齐）以及 `consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`。Infra 失败改为指数退避（30s → 10min 封顶），连续失败 5 次后停止自动重试，通过 `hiclaw.io/retry` 注解重新启用；修复了原先 `RequeueAfter` + error 的双重 requeue 模式。
+
 ---
 
+- fix(controller): pass os.ErrNotExist through the SDK storage driver unwrapped — restores os.IsNotExist first-create detection (generate-and-inject) that OpError wrapping had broken; skip non-UTF-8 file names in seed/mirror pushes ([9393e72](https://github.com/agentscope-ai/HiClaw/commit/9393e72))
+- feat(shared): skip non-UTF-8 file names in mc mirror pushes — base.sh is_utf8_name/collect_nonutf8_files helpers; worker-entrypoint.sh sync loop and update-worker-config.sh exclude them so one bad name cannot fail the whole push ([185a54e](https://github.com/agentscope-ai/HiClaw/commit/185a54e))
+- feat(shared): ship base.sh in all images via shared/lib — full log()/waitForService/waitForHTTP/generateKey, stale Manager-only comments corrected ([b1d31bb](https://github.com/agentscope-ai/HiClaw/commit/b1d31bb))
+- feat(controller): expose storage connect/retry/probe tuning as `HICLAW_STORAGE_*` env vars — connect timeout (`HICLAW_STORAGE_CONNECT_TIMEOUT_SECONDS`), retry window (`HICLAW_STORAGE_RETRY_WINDOW_SECONDS`), backoff base/cap (`HICLAW_STORAGE_RETRY_BACKOFF_MS` / `_MAX_MS`), SDK internal retries (`HICLAW_STORAGE_SDK_MAX_RETRIES`), config-phase probe (`HICLAW_STORAGE_PROBE_TIMEOUT_SECONDS`); defaults unchanged (2s / 30s / 500ms→5s / 2 / 30s) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
+- feat(controller): add madmin-go admin provider for embedded MinIO user/policy management, following the HICLAW_STORAGE_DRIVER switch (sdk default; mc admin CLI kept as legacy provider) ([7898244](https://github.com/agentscope-ai/HiClaw/commit/7898244))
+- feat(controller): add minio-go S3 SDK storage driver — HICLAW_STORAGE_DRIVER=sdk default with mc fallback, flaky-storage resilience (probe fast-abort, bounded retries), content-compare builtin skill push ([95dcae1](https://github.com/agentscope-ai/HiClaw/commit/95dcae1))
+- feat(controller): optional no-requeue for converged Active teams — HICLAW_TEAM_ACTIVE_NO_REQUEUE, plus team member reconcile flow metrics ([84a9429](https://github.com/agentscope-ai/HiClaw/commit/84a9429))
+- fix(shared): add log fallback when base.sh is absent — scripts fail on the real error instead of exit 127 ([c895d3a](https://github.com/agentscope-ai/HiClaw/commit/c895d3a))
+- feat(controller): add storage stability and member reconcile metrics — storage op duration/errors (op x driver x class), probe failures, member flow duration ([77ef4b8](https://github.com/agentscope-ai/HiClaw/commit/77ef4b8))
+- feat(controller): add team-scoped reconcile telemetry — ctx logger injection (team/teamUID), timed helper, failure-path elapsed, mc slow-call threshold logs, ProvisionWorker/modifyAIRoutes/ensureImage timing, panic guard ([ce1a531](https://github.com/agentscope-ai/HiClaw/commit/ce1a531))
+- test(bench): add S3 reproduction benchmark under bench/ (mc vs minio-go SDK, real-bucket read-only) ([a12c5b3](https://github.com/agentscope-ai/HiClaw/commit/a12c5b3))
+- feat(controller): add build-time pprof switch — ENABLE_PPROF build arg with -tags pprof, no-op stub in default builds ([6cf6f86](https://github.com/agentscope-ai/HiClaw/commit/6cf6f86))
+- feat(controller): make Active Team reconcile interval configurable with positive jitter ([462f84d](https://github.com/agentscope-ai/HiClaw/commit/462f84d))
+- fix(controller): build hiclaw-controller image with shared/lib via named build context ([82a75e8](https://github.com/agentscope-ai/HiClaw/commit/82a75e8))
+- feat(controller): add per-step Team reconcile timing logs, configurable max concurrency, and quieter STS INFO logs ([c01aaec](https://github.com/agentscope-ai/HiClaw/commit/c01aaec))
+- fix(controller): unblock Team reconcile — concurrency, failTeam backoff, observedGeneration fast path ([48ce4aa](https://github.com/agentscope-ai/HiClaw/commit/48ce4aa))
+- fix(controller): add Human reconcile exponential backoff and observedGeneration parity ([48ce4aa](https://github.com/agentscope-ai/HiClaw/commit/48ce4aa))
 - fix(install): add non-interactive deep-defense guards to step functions ([6cbec18](https://github.com/agentscope-ai/HiClaw/commit/6cbec18))
 - chore(helm): bump chart to 1.1.1 and update repo URLs ([fd09d98](https://github.com/agentscope-ai/HiClaw/commit/fd09d98))
 - fix(install): update GitHub repo URL to agentscope-ai/HiClaw and bump stable fallback to v1.1.1 ([f39601a](https://github.com/agentscope-ai/HiClaw/commit/f39601a))

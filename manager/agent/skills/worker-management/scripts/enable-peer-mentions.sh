@@ -18,6 +18,11 @@
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
+# Defensive log() fallback — see push-worker-skills.sh for rationale.
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[hiclaw $(date '+%H:%M:%S')] $*"; }
+fi
+
 # ============================================================
 # Parse arguments
 # ============================================================

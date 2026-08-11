@@ -2,11 +2,13 @@ package executor
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -556,6 +558,9 @@ func TestResolveAndExtract_FileDirectoryWithoutSoulmd_Succeeds(t *testing.T) {
 }
 
 func TestResolveAndExtract_ZipWithoutSoulmd_Succeeds(t *testing.T) {
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("unzip not available in PATH; skipping zip extraction test")
+	}
 	ctx := context.Background()
 	importDir := t.TempDir()
 	zipPath := filepath.Join(importDir, "minimal.zip")
@@ -835,4 +840,162 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// countingStorage wraps ossfake.Memory and counts GetObject calls so tests can
+// verify the ETag cache-hit path skips re-downloads.
+type countingStorage struct {
+	*ossfake.Memory
+	getCalls int
+}
+
+func (c *countingStorage) GetObject(ctx context.Context, key string) ([]byte, error) {
+	c.getCalls++
+	return c.Memory.GetObject(ctx, key)
+}
+
+func makeTestZip(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestResolve_MinioPathViaStorageClient(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	store := &countingStorage{Memory: ossfake.NewMemory()}
+	key := "hiclaw-config/packages/alice.zip"
+	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "hello")); err != nil {
+		t.Fatalf("seed storage: %v", err)
+	}
+
+	pr := NewPackageResolver(importDir)
+	pr.Storage = store
+
+	resolved, err := pr.Resolve(ctx, "packages/alice.zip")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if store.getCalls != 1 {
+		t.Errorf("GetObject calls = %d, want 1", store.getCalls)
+	}
+	etag, err := store.GetETag(ctx, key)
+	if err != nil {
+		t.Fatalf("GetETag: %v", err)
+	}
+	want := filepath.Join(importDir, etag+".zip")
+	if resolved != want {
+		t.Errorf("resolved = %q, want %q", resolved, want)
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		t.Fatalf("downloaded file missing: %v", err)
+	}
+
+	// Second resolve hits the ETag cache — no re-download, same path.
+	resolved2, err := pr.Resolve(ctx, "packages/alice.zip")
+	if err != nil {
+		t.Fatalf("Resolve (2nd): %v", err)
+	}
+	if store.getCalls != 1 {
+		t.Errorf("GetObject calls after cache hit = %d, want 1", store.getCalls)
+	}
+	if resolved2 != resolved {
+		t.Errorf("resolved2 = %q, want %q", resolved2, resolved)
+	}
+}
+
+func TestResolve_MinioPathViaStorageClient_ChangedContentReDownloads(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	store := &countingStorage{Memory: ossfake.NewMemory()}
+	key := "hiclaw-config/packages/alice.zip"
+	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "v1")); err != nil {
+		t.Fatalf("seed storage: %v", err)
+	}
+
+	pr := NewPackageResolver(importDir)
+	pr.Storage = store
+
+	first, err := pr.Resolve(ctx, "packages/alice.zip")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// Same key, new content → new ETag → new cache file, one more download.
+	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "v2")); err != nil {
+		t.Fatalf("update storage: %v", err)
+	}
+	second, err := pr.Resolve(ctx, "packages/alice.zip")
+	if err != nil {
+		t.Fatalf("Resolve (changed): %v", err)
+	}
+	if store.getCalls != 2 {
+		t.Errorf("GetObject calls = %d, want 2", store.getCalls)
+	}
+	if second == first {
+		t.Errorf("expected a new cache file for changed content, both = %q", first)
+	}
+}
+
+func TestResolve_MinioPathViaStorageClient_MissingPackage(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	pr := NewPackageResolver(importDir)
+	pr.Storage = ossfake.NewMemory()
+
+	_, err := pr.Resolve(ctx, "packages/ghost.zip")
+	if err == nil {
+		t.Fatal("expected error for missing package, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found in storage") {
+		t.Errorf("error = %v, want missing-package hint", err)
+	}
+}
+
+func TestResolve_OSSSchemeViaStorageClient(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	store := &countingStorage{Memory: ossfake.NewMemory()}
+	key := "hiclaw-config/packages/alice-abc123.zip"
+	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "oss")); err != nil {
+		t.Fatalf("seed storage: %v", err)
+	}
+
+	pr := NewPackageResolver(importDir)
+	pr.Storage = store
+
+	resolved, err := pr.Resolve(ctx, "oss://hiclaw-config/packages/alice-abc123.zip")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := filepath.Join(importDir, "alice-abc123.zip")
+	if resolved != want {
+		t.Errorf("resolved = %q, want %q", resolved, want)
+	}
+	if store.getCalls != 1 {
+		t.Errorf("GetObject calls = %d, want 1", store.getCalls)
+	}
+
+	// Content-addressable filename → second resolve is a local cache hit.
+	resolved2, err := pr.Resolve(ctx, "oss://hiclaw-config/packages/alice-abc123.zip")
+	if err != nil {
+		t.Fatalf("Resolve (2nd): %v", err)
+	}
+	if store.getCalls != 1 {
+		t.Errorf("GetObject calls after cache hit = %d, want 1", store.getCalls)
+	}
+	if resolved2 != resolved {
+		t.Errorf("resolved2 = %q, want %q", resolved2, resolved)
+	}
 }

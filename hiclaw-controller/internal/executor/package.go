@@ -28,6 +28,13 @@ type PackageResolver struct {
 	// CredClient is used when a nacos:// package URI includes ?authType=sts-hiclaw
 	// (STS via hiclaw-credential-provider). Optional for user/password or none.
 	CredClient credprovider.Client
+
+	// Storage is the controller-managed object-storage client. When set
+	// (production), MinIO/OSS package downloads go through it (the minio-go
+	// SDK driver with connect timeout + bounded retries) instead of forking
+	// `mc` subprocesses, which bypass the driver selection and carried the
+	// CLI's own 30s dial timeout. Nil keeps the legacy mc fallback (tests).
+	Storage oss.StorageClient
 }
 
 func NewPackageResolver(importDir string) *PackageResolver {
@@ -90,13 +97,18 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 		return resolved, nil
 	default:
 		// Treat as relative MinIO path (e.g. "packages/alice.zip")
-		// Use content-addressable cache: download to /tmp/import/{md5}.zip
+		// Use content-addressable cache: download to /tmp/import/{etag}.zip
 		// If the same content already exists locally, skip re-download.
+		key := "hiclaw-config/" + strings.TrimPrefix(uri, "/")
+		if p.Storage != nil {
+			return p.resolveMinIOStorage(ctx, key, uri, safeURI)
+		}
+		// Legacy mc fallback (Storage not configured, tests only).
 		storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
 		if storagePrefix == "" {
 			storagePrefix = "hiclaw/hiclaw-storage"
 		}
-		minioPath := fmt.Sprintf("%s/hiclaw-config/%s", storagePrefix, uri)
+		minioPath := fmt.Sprintf("%s/%s", storagePrefix, key)
 
 		// Get remote file's ETag (MD5) via mc stat
 		etag := getMinIOETag(ctx, minioPath)
@@ -120,6 +132,66 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "minioPath", minioPath, "path", destPath, "etag", etag, "format", "zip")
 		return destPath, nil
 	}
+}
+
+// resolveMinIOStorage downloads a MinIO/OSS package through the
+// StorageClient (minio-go SDK driver in production). ETag-based content
+// caching preserves the legacy mc semantics: the local cache file is named
+// after the object ETag, so unchanged content is never re-downloaded.
+func (p *PackageResolver) resolveMinIOStorage(ctx context.Context, key, uri, safeURI string) (string, error) {
+	logger := log.FromContext(ctx)
+
+	etag, err := p.Storage.GetETag(ctx, key)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("package %s not found in storage", key)
+		}
+		return "", fmt.Errorf("failed to stat %s from storage: %w", key, err)
+	}
+	if etag == "" {
+		// Fallback: use URI hash if the endpoint does not expose ETags.
+		h := sha256.Sum256([]byte(uri))
+		etag = fmt.Sprintf("%x", h[:8])
+	}
+
+	destPath := filepath.Join(p.ImportDir, etag+".zip")
+	if _, err := os.Stat(destPath); err == nil {
+		logger.Info("package pull cache hit", "package", safeURI, "scheme", "minio", "key", key, "path", destPath, "etag", etag, "format", "zip")
+		return destPath, nil
+	}
+
+	logger.Info("package pull started", "package", safeURI, "scheme", "minio", "key", key, "path", destPath, "etag", etag)
+	data, err := p.Storage.GetObject(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("failed to download %s from storage: %w", key, err)
+	}
+	if err := writePackageFile(destPath, data); err != nil {
+		return "", fmt.Errorf("write package %s: %w", destPath, err)
+	}
+	logger.Info("package pull completed", "package", safeURI, "scheme", "minio", "key", key, "path", destPath, "etag", etag, "format", "zip")
+	return destPath, nil
+}
+
+// writePackageFile writes package bytes to destPath atomically (temp file +
+// rename). The download cache is keyed by ETag filename, and the cache-hit
+// check skips the download entirely when that file exists — so the file must
+// never be observable half-written, or a crash mid-write would leave a
+// corrupt zip that the skip logic would reuse forever.
+func writePackageFile(destPath string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".pkg-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, destPath)
 }
 
 // ResolveAndExtract downloads/locates a package, extracts it, and returns the
@@ -721,7 +793,21 @@ func (p *PackageResolver) resolveOSS(ctx context.Context, u *url.URL) (string, e
 		return destPath, nil // cache hit
 	}
 
-	// Download from MinIO
+	logger := log.FromContext(ctx)
+	if p.Storage != nil {
+		logger.Info("package pull started", "package", safePackageURI(u.String()), "scheme", "oss", "key", ossPath, "path", destPath)
+		data, err := p.Storage.GetObject(ctx, ossPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to download oss://%s from storage: %w", ossPath, err)
+		}
+		if err := writePackageFile(destPath, data); err != nil {
+			return "", fmt.Errorf("write package %s: %w", destPath, err)
+		}
+		logger.Info("package pull completed", "package", safePackageURI(u.String()), "scheme", "oss", "key", ossPath, "path", destPath, "format", "zip")
+		return destPath, nil
+	}
+
+	// Legacy mc fallback (Storage not configured, tests only).
 	storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
 	if storagePrefix == "" {
 		storagePrefix = "hiclaw/hiclaw-storage"

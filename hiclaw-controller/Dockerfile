@@ -20,7 +20,16 @@ COPY go.mod go.sum ./
 RUN go mod download || true
 
 COPY . .
-RUN CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /hiclaw-controller ./cmd/controller/
+# Debug-only pprof build: `make build-hiclaw-controller DOCKER_BUILD_ARGS="--build-arg ENABLE_PPROF=true"`
+# compiles cmd/controller with `-tags pprof` so the image exposes
+# /debug/pprof on 6060 (HICLAW_PPROF_ADDR overridable). Default false keeps
+# the release image free of pprof code and its extra listener.
+ARG ENABLE_PPROF=false
+RUN if [ "$ENABLE_PPROF" = "true" ]; then \
+        CGO_ENABLED=1 go build -tags pprof -ldflags '-extldflags "-static"' -o /hiclaw-controller ./cmd/controller/; \
+    else \
+        CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /hiclaw-controller ./cmd/controller/; \
+    fi
 RUN CGO_ENABLED=0 go build -o /hiclaw ./cmd/hiclaw/
 
 # ============ Stage 2: mc (MinIO Client) ============
@@ -51,7 +60,7 @@ COPY --from=builder /hiclaw /usr/local/bin/hiclaw
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/hiclaw/config/crd/
 COPY agent/ /opt/hiclaw/agent/
-COPY shared-lib/ /opt/hiclaw/scripts/lib/
+COPY --from=shared . /opt/hiclaw/scripts/lib/
 
 # Default endpoint + token-file for the bundled `hiclaw` CLI when invoked via
 # `docker exec hiclaw-controller hiclaw …`. The controller process mints a

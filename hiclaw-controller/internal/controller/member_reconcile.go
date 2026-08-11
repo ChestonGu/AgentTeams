@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
@@ -303,7 +304,9 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	}
 
 	logger := log.FromContext(ctx)
-	result, err := wb.Status(ctx, m.Name)
+	result, err := timedValue(ctx, "backend status", func() (*backend.WorkerResult, error) {
+		return wb.Status(ctx, m.Name)
+	})
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
 	}
@@ -323,7 +326,9 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 			"name", m.Name,
 			"generation", m.Generation,
 			"observedGeneration", m.ObservedGeneration)
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		if err := timed(ctx, "backend delete", func() error {
+			return wb.Delete(ctx, m.Name)
+		}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
 		}
 		return createMemberContainer(ctx, d, m, state, wb)
@@ -331,12 +336,16 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	case backend.StatusStopped:
 		state.ContainerState = string(result.Status)
 		if wb.Name() == "docker" && !specChanged {
-			if err := wb.Start(ctx, m.Name); err != nil {
+			if err := timed(ctx, "backend start", func() error {
+				return wb.Start(ctx, m.Name)
+			}); err != nil {
 				return reconcile.Result{}, fmt.Errorf("start container: %w", err)
 			}
 			return reconcile.Result{}, nil
 		}
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		if err := timed(ctx, "backend delete", func() error {
+			return wb.Delete(ctx, m.Name)
+		}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
 		return createMemberContainer(ctx, d, m, state, wb)
@@ -347,7 +356,9 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	default:
 		state.ContainerState = string(result.Status)
 		logger.Info("container in unexpected state, recreating", "name", m.Name, "status", result.Status)
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		if err := timed(ctx, "backend delete", func() error {
+			return wb.Delete(ctx, m.Name)
+		}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container in unknown state: %w", err)
 		}
 		return createMemberContainer(ctx, d, m, state, wb)
@@ -363,11 +374,15 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 		return reconcile.Result{}, nil
 	}
 	if remove {
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		if err := timed(ctx, "backend delete", func() error {
+			return wb.Delete(ctx, m.Name)
+		}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container: %w", err)
 		}
 	} else {
-		if err := wb.Stop(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		if err := timed(ctx, "backend stop", func() error {
+			return wb.Stop(ctx, m.Name)
+		}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("stop container: %w", err)
 		}
 	}
@@ -426,7 +441,9 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		createReq.AuthToken = token
 	}
 
-	if _, err := wb.Create(ctx, createReq); err != nil {
+	if _, err := timedValue(ctx, "backend create", func() (*backend.WorkerResult, error) {
+		return wb.Create(ctx, createReq)
+	}); err != nil {
 		if errors.Is(err, backend.ErrConflict) {
 			return reconcile.Result{}, nil
 		}
@@ -460,6 +477,13 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) error {
 	logger := log.FromContext(ctx)
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
+
+	start := time.Now()
+	defer func() {
+		logger.Info("member delete complete",
+			"name", m.Name, "runtimeName", m.RuntimeName, "role", m.Role.String(),
+			"elapsed", time.Since(start).Truncate(time.Millisecond).String())
+	}()
 
 	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
@@ -495,7 +519,9 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	// about, so this is the only reliable cleanup path.
 	if d.Backend != nil {
 		if wb := d.Backend.DetectWorkerBackend(ctx); wb != nil {
-			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+			if err := timed(ctx, "backend delete", func() error {
+				return wb.Delete(ctx, m.Name)
+			}); err != nil && !errors.Is(err, backend.ErrNotFound) {
 				logger.Error(err, "failed to delete member container (may already be removed)", "name", m.Name)
 			}
 		}

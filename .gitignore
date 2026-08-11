@@ -43,11 +43,17 @@ pnpm-lock.yaml
 .cursor/
 
 # Compiled binaries
+<<<<<<< HEAD
 hiclaw-controller/bin/
 
 # Go workspace (local dev: points gopls at the hiclaw-controller module)
 go.work
 go.work.sum
+=======
+hiclaw-controller/controller
+hiclaw-controller/hiclaw
+bench/bench_s3_linux_amd64
+>>>>>>> fix/team-cr-blocking-defects
 
 # Build-time agent templates (copied from manager/agent/ during docker build)
 hiclaw-controller/agent/

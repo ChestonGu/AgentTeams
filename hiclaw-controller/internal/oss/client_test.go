@@ -1,6 +1,8 @@
 package oss
 
 import (
+	"errors"
+	"os"
 	"testing"
 )
 
@@ -28,10 +30,8 @@ func TestMinIOClient_FullPathNoLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("worker-1", "hiclaw-storage", "team-dev", false)
+func TestBuildWorkerPolicy(t *testing.T) {
+	policy := buildWorkerPolicy("worker-1", "hiclaw-storage", "team-dev", false)
 
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
@@ -69,10 +69,8 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("worker-solo", "hiclaw-storage", "", false)
+func TestBuildWorkerPolicyNoTeam(t *testing.T) {
+	policy := buildWorkerPolicy("worker-solo", "hiclaw-storage", "", false)
 
 	rwStmt := policy.Statement[1]
 	for _, r := range rwStmt.Resource {
@@ -85,10 +83,8 @@ func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
-
-	policy := c.buildWorkerPolicy("default", "hiclaw-storage", "", true)
+func TestBuildManagerPolicy(t *testing.T) {
+	policy := buildWorkerPolicy("default", "hiclaw-storage", "", true)
 
 	if len(policy.Statement) != 2 {
 		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))
@@ -130,5 +126,30 @@ func TestNewMinIOClient_Defaults(t *testing.T) {
 	}
 	if c.config.Alias != "hiclaw" {
 		t.Errorf("Alias = %q, want hiclaw", c.config.Alias)
+	}
+}
+
+func TestClassifyStorageError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"not exist", os.ErrNotExist, "not_found"},
+		{"dial timeout", errors.New("dial tcp 10.0.0.1:9000: i/o timeout"), "network"},
+		{"connection refused", errors.New("mc cp: connection refused"), "network"},
+		{"no such host", errors.New("dial tcp: lookup s3.example.com: no such host"), "network"},
+		{"context deadline", errors.New("context deadline exceeded"), "network"},
+		{"op timeout", errors.New("request timed out after 30s"), "timeout"},
+		{"s3 500", errors.New("mc cat: The request failed (500)"), "other"},
+		{"permission", errors.New("mc cp: AccessDenied"), "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyStorageError(tc.err); got != tc.want {
+				t.Errorf("classifyStorageError(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }

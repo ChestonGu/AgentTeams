@@ -60,6 +60,10 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 	defer func() { metrics.Observe("worker", start, reterr) }()
 
 	logger := log.FromContext(ctx)
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"worker", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
 
 	var worker v1beta1.Worker
 	if err := r.Get(ctx, req.NamespacedName, &worker); err != nil {
@@ -81,7 +85,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 			worker.Status.ObservedGeneration = worker.Generation
 			worker.Status.Message = ""
 		} else {
-			worker.Status.Message = reterr.Error()
+			worker.Status.Message = conciseStatusMessage(reterr)
 		}
 		if err := r.Status().Patch(ctx, &worker, patchBase); err != nil {
 			logger.Error(err, "failed to patch worker status")
@@ -111,7 +115,16 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 // member reconcile phases, and writes runtime state back to Worker.Status.
 // Legacy Manager groupAllowFrom is updated here only for standalone workers;
 // team leaders are handled by TeamReconciler.
-func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
+func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (res reconcile.Result, err error) {
+	start := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.MemberReconcileDuration.WithLabelValues("worker", result).Observe(time.Since(start).Seconds())
+	}()
+
 	deps := MemberDeps{
 		Provisioner:    r.Provisioner,
 		Deployer:       r.Deployer,
