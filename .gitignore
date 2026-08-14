@@ -13,6 +13,10 @@
 .vscode/
 .idea/
 
+# Local tooling runtime artifacts
+.omo/
+plugins/.omo/
+
 # Dependencies
 node_modules/
 venv/
