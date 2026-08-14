@@ -899,7 +899,7 @@ func TestResolve_MinioPathViaStorageClient(t *testing.T) {
 	ctx := context.Background()
 	importDir := t.TempDir()
 	store := &countingStorage{Memory: ossfake.NewMemory()}
-	key := "hiclaw-config/packages/alice.zip"
+	key := "agentteams-config/packages/alice.zip"
 	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "hello")); err != nil {
 		t.Fatalf("seed storage: %v", err)
 	}
@@ -926,7 +926,7 @@ func TestResolve_MinioPathViaStorageClient(t *testing.T) {
 		t.Fatalf("downloaded file missing: %v", err)
 	}
 
-	// Second resolve hits the ETag cache — no re-download, same path.
+	// Second resolve hits the ETag cache 鈥?no re-download, same path.
 	resolved2, err := pr.Resolve(ctx, "packages/alice.zip")
 	if err != nil {
 		t.Fatalf("Resolve (2nd): %v", err)
@@ -943,7 +943,7 @@ func TestResolve_MinioPathViaStorageClient_ChangedContentReDownloads(t *testing.
 	ctx := context.Background()
 	importDir := t.TempDir()
 	store := &countingStorage{Memory: ossfake.NewMemory()}
-	key := "hiclaw-config/packages/alice.zip"
+	key := "agentteams-config/packages/alice.zip"
 	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "v1")); err != nil {
 		t.Fatalf("seed storage: %v", err)
 	}
@@ -956,7 +956,7 @@ func TestResolve_MinioPathViaStorageClient_ChangedContentReDownloads(t *testing.
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	// Same key, new content → new ETag → new cache file, one more download.
+	// Same key, new content 鈫?new ETag 鈫?new cache file, one more download.
 	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "v2")); err != nil {
 		t.Fatalf("update storage: %v", err)
 	}
@@ -991,7 +991,7 @@ func TestResolve_OSSSchemeViaStorageClient(t *testing.T) {
 	ctx := context.Background()
 	importDir := t.TempDir()
 	store := &countingStorage{Memory: ossfake.NewMemory()}
-	key := "hiclaw-config/packages/alice-abc123.zip"
+	key := "agentteams-config/packages/alice-abc123.zip"
 	if err := store.PutObject(ctx, key, makeTestZip(t, "hello.txt", "oss")); err != nil {
 		t.Fatalf("seed storage: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestResolve_OSSSchemeViaStorageClient(t *testing.T) {
 	pr := NewPackageResolver(importDir)
 	pr.Storage = store
 
-	resolved, err := pr.Resolve(ctx, "oss://hiclaw-config/packages/alice-abc123.zip")
+	resolved, err := pr.Resolve(ctx, "oss://agentteams-config/packages/alice-abc123.zip")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -1011,8 +1011,8 @@ func TestResolve_OSSSchemeViaStorageClient(t *testing.T) {
 		t.Errorf("GetObject calls = %d, want 1", store.getCalls)
 	}
 
-	// Content-addressable filename → second resolve is a local cache hit.
-	resolved2, err := pr.Resolve(ctx, "oss://hiclaw-config/packages/alice-abc123.zip")
+	// Content-addressable filename 鈫?second resolve is a local cache hit.
+	resolved2, err := pr.Resolve(ctx, "oss://agentteams-config/packages/alice-abc123.zip")
 	if err != nil {
 		t.Fatalf("Resolve (2nd): %v", err)
 	}

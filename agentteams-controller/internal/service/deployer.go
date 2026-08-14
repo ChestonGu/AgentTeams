@@ -297,7 +297,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// runtime-mutated OSS state during reconcile; authoritative files are
 	// written explicitly below via the overwrite whitelist.
 	//
-	// Always exclude SOUL.md, AGENTS.md, HEARTBEAT.md from the mirror 鈥?each
+	// Always exclude SOUL.md, AGENTS.md, HEARTBEAT.md from the mirror 閳?each
 	// has a dedicated authoritative writer below (PutObject for SOUL.md,
 	// prepareAndPushAgentsMD for AGENTS.md, pushBuiltinTopLevelFiles for
 	// HEARTBEAT.md). Mirroring them here would race with that writer when
@@ -778,8 +778,8 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 // Remote skills are fetched from source registries (currently nacos://) and
 // mirrored to OSS. The local spec.skills path shells out to
 // push-worker-skills.sh, which reads the Manager's local workers-registry.json
-// 鈥?a file that does not exist in the controller container 鈥?so it is skipped
-// by default (HICLAW_LOCAL_SKILL_PUSH=true re-enables it for deployments
+// 閳?a file that does not exist in the controller container 閳?so it is skipped
+// by default (AGENTTEAMS_LOCAL_SKILL_PUSH=true re-enables it for deployments
 // where the script's prerequisites are met). Skill distribution for local
 // skills is normally owned by the Manager Agent's worker-management skill.
 func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
