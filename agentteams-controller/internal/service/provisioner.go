@@ -148,9 +148,9 @@ type ProvisionerConfig struct {
 
 	// ManagerEnabled reflects AGENTTEAMS_MANAGER_ENABLED. When false, no Manager
 	// CR is ever created, so the Matrix user `@manager:<domain>` does not
-	// exist on Tuwunel. Worker room creation must therefore skip inviting
-	// the manager; otherwise Conduwuit/Tuwunel returns HTTP 403 (it rejects
-	// invites to non-existent local users).
+	// exist on the homeserver. Worker room creation must therefore skip
+	// inviting the manager; otherwise the homeserver returns HTTP 403 (it
+	// rejects invites to non-existent local users).
 	ManagerEnabled bool
 
 	// RemoteCache resolves remote cluster clients for cross-cluster SA operations.
@@ -570,17 +570,21 @@ func (p *Provisioner) DeprovisionWorker(ctx context.Context, req WorkerDeprovisi
 // ensureMatrixToken obtains a Matrix access token for the given user.
 //
 // Always reuses the cached token when present, regardless of AS or legacy
-// mode. Re-login on Tuwunel (conduwuit) invalidates the previous access
-// token, which would break any running Worker that still holds it. Token
-// refresh is handled on-demand via POST /api/v1/credentials/matrix-token
-// when a Worker encounters a 401 from the homeserver.
+// mode: re-login creates a fresh device session and can invalidate the
+// previous access token (Tuwunel/conduwuit invalidates the old token on
+// re-login), which would break any running Worker that still holds it. On
+// Synapse the old session also remains valid, so reuse is safe on both
+// providers. Token refresh is handled on-demand via
+// POST /api/v1/credentials/matrix-token when a Worker encounters a 401 from
+// the homeserver.
 //
 // Callers should Save the updated creds back to the credential store after
 // this returns so the token survives controller restarts.
 func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername string, creds *WorkerCredentials) (string, error) {
 	// Always reuse cached token. Re-login invalidates the old token on
-	// Tuwunel, breaking running Workers. On-demand refresh is available
-	// via POST /api/v1/credentials/matrix-token for 401 recovery.
+	// Tuwunel (and creates a new device session on Synapse), breaking
+	// running Workers. On-demand refresh is available via
+	// POST /api/v1/credentials/matrix-token for 401 recovery.
 	if creds.MatrixToken != "" {
 		return creds.MatrixToken, nil
 	}

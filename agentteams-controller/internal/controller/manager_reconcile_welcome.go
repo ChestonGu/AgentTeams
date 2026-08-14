@@ -18,7 +18,7 @@ import (
 // auto-join is typically a few seconds; longer than this makes the
 // admin's Element Web window sit empty for an uncomfortable time on
 // fresh installs. The cost of the 5s loop is one ListRoomMembers HTTP
-// call against the local Tuwunel — negligible — and the loop terminates
+// call against the local homeserver — negligible — and the loop terminates
 // the moment the agent's auto-join lands.
 const welcomeRequeueInterval = 5 * time.Second
 

@@ -192,7 +192,7 @@ func (a *App) Start(ctx context.Context) error {
 				LLMAPIKey:                  a.cfg.LLMAPIKey,
 				OpenAIBaseURL:              a.cfg.OpenAIBaseURL,
 				AIStreamIdleTimeoutSeconds: a.cfg.AIStreamIdleTimeoutSeconds,
-				TuwunelURL:                 a.cfg.MatrixServerURL,
+				MatrixURL:                  a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
 				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,

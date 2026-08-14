@@ -53,7 +53,7 @@ type Config struct {
 	LLMApiURL                  string // provider-specific base URL (optional)
 	OpenAIBaseURL              string // custom base URL for openai-compat providers
 	AIStreamIdleTimeoutSeconds int
-	TuwunelURL                 string // internal Tuwunel URL, e.g. http://tuwunel:6167
+	MatrixURL                  string // internal Matrix homeserver URL (Tuwunel in embedded mode, Synapse in k8s mode), e.g. http://tuwunel:6167
 	ElementWebURL              string // internal Element Web URL (optional)
 }
 
@@ -233,27 +233,31 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 	logger := ctrl.Log.WithName("initializer")
 	cfg := i.Config
 
-	// 1. Tuwunel service source
-	if cfg.TuwunelURL != "" {
-		host, port, err := parseHostPort(cfg.TuwunelURL)
+	// 1. Matrix homeserver service source. The service source keeps the
+	// historical name "tuwunel" (stable identifier for existing installs),
+	// but the backing host/port come from MatrixServerURL, so it serves
+	// whichever homeserver is configured (Tuwunel in embedded mode, Synapse
+	// in k8s mode).
+	if cfg.MatrixURL != "" {
+		host, port, err := parseHostPort(cfg.MatrixURL)
 		if err != nil {
-			return fmt.Errorf("parse Tuwunel URL: %w", err)
+			return fmt.Errorf("parse Matrix homeserver URL: %w", err)
 		}
 
 		var svcSuffix string
 		if cfg.IsEmbedded {
 			if err := i.Gateway.EnsureStaticServiceSource(ctx, "tuwunel", host, port); err != nil {
-				logger.Error(err, "failed to register Tuwunel static service source (non-fatal)")
+				logger.Error(err, "failed to register Matrix homeserver static service source (non-fatal)")
 			}
 			svcSuffix = "static"
 		} else {
 			if err := i.Gateway.EnsureServiceSource(ctx, "tuwunel", host, port, "http"); err != nil {
-				logger.Error(err, "failed to register Tuwunel service source (non-fatal)")
+				logger.Error(err, "failed to register Matrix homeserver service source (non-fatal)")
 			}
 			svcSuffix = "dns"
 		}
 
-		// Matrix Homeserver routes (/_matrix/*, /_tuwunel/* → Tuwunel)
+		// Matrix homeserver route (/_matrix/* → the configured homeserver)
 		if err := i.Gateway.EnsureRoute(ctx, "matrix-homeserver", nil, "tuwunel."+svcSuffix, port, "/_matrix"); err != nil {
 			logger.Error(err, "failed to create Matrix route (non-fatal)")
 		}

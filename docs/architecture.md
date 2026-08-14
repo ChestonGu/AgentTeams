@@ -118,11 +118,12 @@ flowchart TB
 
 ## Communication mechanisms
 
-### Matrix (Tuwunel)
+### Matrix (Tuwunel / Synapse)
 
 - **Human ↔ Manager ↔ Worker** (and **Team Leader** / team room) use the **Matrix** client-server API.
 - Rooms provide **human-in-the-loop** visibility: assignments, progress, and interventions share the same timeline.
-- Tuwunel is a **conduwuit**-family homeserver; configuration uses the **`CONDUWUIT_`** environment prefix.
+- Two homeserver providers are supported behind the same business-level **`MatrixOps`** abstraction (selected by `AGENTTEAMS_MATRIX_PROVIDER`, default `tuwunel`): **Tuwunel** (a conduwuit-family homeserver; configuration uses the **`CONDUWUIT_`** environment prefix) and **Synapse 1.127+** (Helm default; see [synapse.md](synapse.md)).
+- The business layer (Provisioner, Initializer, HTTP handlers) depends **only** on `MatrixOps` — it never references raw protocol clients (`matrix.Client`, `TuwunelClient`, `SynapseClient`) or provider-specific commands (`!admin …`). All provider differences (admin-bot chat vs Synapse REST admin API, `force-leave-room` vs `force-join`/`make_room_admin` recovery, declarative vs runtime AppService registration) are encapsulated inside the per-provider `MatrixOps` implementations in `internal/matrix`.
 
 ### MinIO (or compatible S3 / OSS)
 

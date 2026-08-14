@@ -169,10 +169,10 @@ func (p *Provisioner) InviteToRoom(ctx context.Context, roomID, userID string) e
 }
 
 // JoinRoomAs joins roomID with the supplied user access token. Required
-// for Tuwunel's trusted_private_chat preset (the rooms the controller
-// creates), which leaves an invite pending until the invitee explicitly
-// /joins — an admin-side invite alone is not sufficient to make the user
-// a full member.
+// because the controller-created rooms use the trusted_private_chat preset
+// (per the Matrix spec), which leaves an invite pending until the invitee
+// explicitly /joins — an admin-side invite alone is not sufficient to make
+// the user a full member.
 func (p *Provisioner) JoinRoomAs(ctx context.Context, roomID, userToken string) error {
 	return p.matrixOps.JoinRoom(ctx, roomID, matrix.MemberSpec{ActorToken: userToken})
 }
