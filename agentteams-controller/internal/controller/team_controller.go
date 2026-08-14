@@ -374,20 +374,26 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	workerRuntimeNames := teamWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
-		TeamName:             teamRuntimeName,
-		LeaderName:           leaderRuntimeName,
-		LeaderCredentialName: leaderRef.Name,
-		WorkerNames:          workerRuntimeNames,
-		AdminSpec:            derivedTeam.Spec.Admin,
-		HumanMembers:         derivedTeam.Spec.HumanMembers,
-		TeamAdminActorToken:  adminActor.Token,
-		TeamAdminActorName:   adminActor.Username,
+		TeamName:                    teamRuntimeName,
+		DisplayName:                 t.Spec.DisplayName,
+		LeaderName:                  leaderRuntimeName,
+		LeaderCredentialName:        leaderRef.Name,
+		WorkerNames:                 workerRuntimeNames,
+		AdminSpec:                   derivedTeam.Spec.Admin,
+		HumanMembers:                derivedTeam.Spec.HumanMembers,
+		TeamAdminActorToken:         adminActor.Token,
+		TeamAdminActorName:          adminActor.Username,
+		Generation:                  t.Generation,
+		DisplayNameSyncedGeneration: t.Status.DisplayNameSyncedGeneration,
 	})
 	if err != nil {
 		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	if rooms.DisplayNameSynced {
+		t.Status.DisplayNameSyncedGeneration = t.Generation
+	}
 	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {

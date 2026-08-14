@@ -96,6 +96,82 @@ func TestValidateMemberDeploymentRejectsRemote(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberInfraSyncsDisplayNameWhenConfigured(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                        "leader-cr",
+		RuntimeName:                 "leader",
+		DisplayName:                 "Team Leader",
+		Generation:                  3,
+		ExistingMatrixUserID:        "@leader:localhost",
+		ExistingRoomID:              "!leader:localhost",
+		DisplayNameSyncedGeneration: 2,
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1", len(prov.Calls.SetDisplayName))
+	}
+	if got := prov.Calls.SetDisplayName[0]; got.UserID != "@leader:localhost" || got.DisplayName != "Team Leader" {
+		t.Fatalf("SetDisplayName call=%+v, want userID @leader:localhost displayName Team Leader", got)
+	}
+	if !state.DisplayNameSynced {
+		t.Fatal("state.DisplayNameSynced=false, want true")
+	}
+}
+
+func TestReconcileMemberInfraSkipsDisplayNameSyncWhenGenerationSynced(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                        "leader-cr",
+		RuntimeName:                 "leader",
+		DisplayName:                 "Team Leader",
+		Generation:                  3,
+		ExistingMatrixUserID:        "@leader:localhost",
+		ExistingRoomID:              "!leader:localhost",
+		DisplayNameSyncedGeneration: 3,
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 0 {
+		t.Fatalf("SetDisplayName calls=%d, want 0", len(prov.Calls.SetDisplayName))
+	}
+	if state.DisplayNameSynced {
+		t.Fatal("state.DisplayNameSynced=true, want false")
+	}
+}
+
+func TestReconcileMemberInfraSkipsDisplayNameSyncWithoutDisplayName(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                 "leader-cr",
+		RuntimeName:          "leader",
+		Generation:           3,
+		ExistingMatrixUserID: "@leader:localhost",
+		ExistingRoomID:       "!leader:localhost",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 0 {
+		t.Fatalf("SetDisplayName calls=%d, want 0", len(prov.Calls.SetDisplayName))
+	}
+}
+
 func TestReconcileMemberInfraPreservesTeamStorageAccess(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}

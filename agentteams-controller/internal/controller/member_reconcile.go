@@ -125,7 +125,17 @@ type MemberContext struct {
 	// it is NOT used as an idempotency key (the room alias is — see
 	// service.Provisioner.ProvisionWorker). Safe to leave empty; the alias
 	// resolution in ProvisionWorker will populate RoomID on first run.
-	ExistingRoomID      string
+	ExistingRoomID string
+
+	// DisplayName is the desired Matrix profile display name
+	// (spec.displayName). Empty means "no explicit display name" and skips
+	// profile syncing.
+	DisplayName string
+	// DisplayNameSyncedGeneration is the owning CR generation whose
+	// DisplayName was last synced to Matrix. When it equals Generation the
+	// Infra phase skips SetDisplayName on this reconcile.
+	DisplayNameSyncedGeneration int64
+
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
 	// PodLabels are merged into backend.CreateRequest.Labels.
@@ -179,6 +189,11 @@ type MemberState struct {
 	// or on the first successful deployment. Written back to
 	// Worker.Status.BackendRuntime by the owning reconciler.
 	BackendRuntime string
+
+	// DisplayNameSynced reports that this reconcile applied the member's
+	// display name to Matrix. Owning reconcilers use it to stamp the synced
+	// generation into their status.
+	DisplayNameSynced bool
 
 	// Message holds backend-reported status message (e.g. failing condition
 	// detail). Written to Worker.Status.Message when reconcile succeeds but
@@ -314,6 +329,7 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 			MinIOPassword:  refreshResult.MinIOPassword,
 			MatrixPassword: refreshResult.MatrixPassword,
 		}
+		syncMemberDisplayName(ctx, d.Provisioner, m, m.ExistingMatrixUserID, refreshResult.MatrixToken, state)
 		return reconcile.Result{}, nil
 	}
 
@@ -358,7 +374,25 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 	state.MatrixUserID = provResult.MatrixUserID
 	state.RoomID = provResult.RoomID
 	state.ProvResult = provResult
+	syncMemberDisplayName(ctx, d.Provisioner, m, provResult.MatrixUserID, provResult.MatrixToken, state)
 	return reconcile.Result{}, nil
+}
+
+// syncMemberDisplayName applies the member's spec.displayName to its Matrix
+// profile when a display name is configured and the owning CR generation
+// changed since the last successful sync. Non-fatal: a profile-sync failure
+// must not block infrastructure provisioning.
+func syncMemberDisplayName(ctx context.Context, prov service.WorkerProvisioner, m MemberContext, userID, accessToken string, state *MemberState) {
+	if m.DisplayName == "" || accessToken == "" || m.Generation == m.DisplayNameSyncedGeneration {
+		return
+	}
+	logger := log.FromContext(ctx)
+	if err := prov.SetDisplayName(ctx, userID, accessToken, m.DisplayName); err != nil {
+		logger.Error(err, "failed to sync member displayName (non-fatal)", "name", m.Name, "userID", userID)
+		return
+	}
+	logger.Info("member displayName synced", "name", m.Name, "userID", userID, "displayName", m.DisplayName)
+	state.DisplayNameSynced = true
 }
 
 // EnsureModelProviderAuth authorizes the member's gateway consumer on the

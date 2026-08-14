@@ -5,31 +5,24 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 // SynapseClient implements Client for Synapse homeservers.
 //
-// It reuses TuwunelClient's Matrix client-server API methods verbatim —
-// both homeservers implement the same /_matrix/client/v3/* surface, so the
-// 17 standard methods (Login, CreateRoom, JoinRoom, SendMessage, …) need no
-// change. The ONLY divergence is administration: Tuwunel drives admin ops by
-// sending "!admin ..." chat messages to a built-in admin bot room, while
-// Synapse exposes a REST admin API (/_synapse/admin/v1/*). SynapseClient
-// therefore overrides AdminCommand to parse the legacy "!admin ..." command
-// strings emitted by the service layer and translate them to Synapse REST.
+// It embeds the provider-neutral *matrixClient to reuse the shared
+// /_matrix/client/v3/* CS API surface. Synapse-specific admin operations go
+// through the REST helpers below (synAdminCall, synResetPassword,
+// synDeactivateUser, synSetDisplayName, MakeRoomAdmin, DeleteRoom) and the
+// Synapse-native EnsureUser (PUT /_synapse/admin/v2/users/{id}), NOT through
+// any Tuwunel concept.
 //
-// EnsureUser is also overridden (copied verbatim from TuwunelClient) so its
-// orphan-recovery AdminCommand call dispatches to this Synapse translation
-// instead of the embedded TuwunelClient's chat-based one (Go does not give
-// virtual dispatch through an embedded type's methods, so the copy is what
-// makes c.AdminCommand resolve to the override below).
-//
-// Note: v1.1.2's controller is NOT a Matrix AppService (no as_token /
-// /_matrix/app/* code), so there is no runtime AppService-registration path
-// to translate — the homeserver is configured declaratively in both cases.
+// AdminCommand is explicitly defined to return an error as a regression guard:
+// even though *matrixClient no longer carries AdminCommand (it lives on
+// *TuwunelClient), this guard ensures any future accidental re-addition to
+// matrixClient surfaces immediately on Synapse rather than silently delivering
+// a "!admin" message into a Synapse room.
 type SynapseClient struct {
-	*TuwunelClient
+	*matrixClient
 }
 
 // Compile-time assertion that SynapseClient satisfies the Client interface.
@@ -37,33 +30,21 @@ var _ Client = (*SynapseClient)(nil)
 
 // NewSynapseClient creates a Matrix client for a Synapse homeserver.
 func NewSynapseClient(cfg Config, httpClient *http.Client) *SynapseClient {
-	return &SynapseClient{TuwunelClient: NewTuwunelClient(cfg, httpClient)}
+	return &SynapseClient{matrixClient: newMatrixClient(cfg, httpClient)}
 }
 
-// AdminCommand translates a legacy "!admin ..." command to Synapse admin REST.
-// These are the only forms v1.1.2's service layer emits:
-//
-//	!admin users reset-password   <userID> <password>  -> POST /_synapse/admin/v1/reset_password/{userID}
-//	!admin users force-leave-room <userID> <roomID>    -> POST /_synapse/admin/v1/rooms/{roomID}/kick
-//	!admin rooms  delete-room     <roomID>             -> DELETE /_synapse/admin/v2/rooms/{roomID}
-//
-// Any other "!admin" form returns an error (surfaced in controller logs).
+// AdminCommand is a Tuwunel-only concept (sends a "!admin ..." chat message to
+// the Tuwunel admin bot room). Synapse has no admin bot — it exposes a REST
+// admin API consumed directly by the SynapseMatrixOps layer. This method
+// exists as a regression guard: it returns an explicit error so that if
+// AdminCommand is ever accidentally re-added to *matrixClient, the Synapse
+// path surfaces the problem immediately instead of silently sending a
+// "!admin" message into a Synapse room. Callers that need a Synapse admin
+// operation should use the SynapseMatrixOps methods (DissolveRoom,
+// DeactivateUser, ResetUserPassword, …), which call synAdminCall /
+// MakeRoomAdmin / etc. directly.
 func (s *SynapseClient) AdminCommand(ctx context.Context, command string) error {
-	command = strings.TrimSpace(command)
-	f := strings.Fields(command)
-	if len(f) < 2 || f[0] != "!admin" {
-		return fmt.Errorf("synapse admin: not an !admin command: %q", command)
-	}
-	switch {
-	case len(f) >= 5 && f[1] == "users" && f[2] == "reset-password":
-		return s.synResetPassword(ctx, f[3], f[4])
-	case len(f) >= 5 && f[1] == "users" && f[2] == "force-leave-room":
-		return s.synKick(ctx, f[4], f[3]) // roomID, userID
-	case len(f) >= 4 && f[1] == "rooms" && f[2] == "delete-room":
-		return s.synDeleteRoom(ctx, f[3])
-	default:
-		return fmt.Errorf("synapse admin: unsupported !admin command: %q", command)
-	}
+	return fmt.Errorf("synapse: AdminCommand %q not supported — Synapse has no admin bot; use SynapseMatrixOps methods (REST admin API) instead", command)
 }
 
 // synAdminCall issues a Synapse admin REST request with the cached admin
@@ -89,14 +70,21 @@ func (s *SynapseClient) synResetPassword(ctx context.Context, userID, password s
 	return s.synAdminCall(ctx, http.MethodPost, path, map[string]string{"new_password": password})
 }
 
-func (s *SynapseClient) synKick(ctx context.Context, roomID, userID string) error {
-	path := "/_synapse/admin/v1/rooms/" + url.PathEscape(roomID) + "/kick"
-	return s.synAdminCall(ctx, http.MethodPost, path, map[string]string{"user_id": userID})
+// synDeactivateUser deactivates a user account via the Synapse admin API.
+// erase=false keeps the user's data (room memberships, messages) intact —
+// matching Tuwunel's deactivate semantics, which also do not erase.
+func (s *SynapseClient) synDeactivateUser(ctx context.Context, userID string) error {
+	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPost, path, map[string]bool{"erase": false})
 }
 
-func (s *SynapseClient) synDeleteRoom(ctx context.Context, roomID string) error {
-	path := "/_synapse/admin/v2/rooms/" + url.PathEscape(roomID)
-	return s.synAdminCall(ctx, http.MethodDelete, path, nil)
+// synSetDisplayName updates a user's displayname via the Synapse admin REST
+// users endpoint (PUT /_synapse/admin/v2/users/{id} accepts a displayname
+// field without touching the password). Used as the admin-identity fallback
+// when no user access token is available.
+func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayName string) error {
+	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPut, path, map[string]string{"displayname": displayName})
 }
 
 // EnsureUser creates (or re-creates) the Matrix user via the Synapse admin
@@ -119,10 +107,15 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	userID := s.UserID(req.Username)
 
 	// Create or update the user via the Synapse admin API.
+	// logout_devices=false keeps existing device sessions alive when this PUT
+	// re-applies to an already-provisioned user (idempotent reconcile). Synapse
+	// 1.127 defaults logout_devices to true on UserRestServletV2, which would
+	// silently kill running worker/human sessions on every re-provision.
 	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
 	body := map[string]interface{}{
-		"password":    password,
-		"displayname": req.Username,
+		"password":       password,
+		"displayname":    req.Username,
+		"logout_devices": false,
 	}
 	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
 		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)

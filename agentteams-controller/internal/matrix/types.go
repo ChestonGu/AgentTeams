@@ -11,6 +11,13 @@ type Config struct {
 	AdminPassword     string // global admin password
 	E2EEEnabled       bool   // whether to enable E2EE on new rooms
 
+	// Provider selects the MatrixOps implementation. Valid values:
+	//   - "tuwunel" (default): TuwunelMatrixOps, uses admin bot for admin ops
+	//   - "synapse":           SynapseMatrixOps, uses Synapse admin REST API +
+	//                          make_room_admin fallback for in-room operations
+	// Empty is treated as "tuwunel". Set from AGENTTEAMS_MATRIX_PROVIDER env.
+	Provider string
+
 	// AppService mode configuration. When enabled, the controller acts as a
 	// Matrix Application Service, using as_token to register/login users
 	// without passwords. Legacy password-based auth is preserved when disabled.
@@ -133,4 +140,91 @@ func GeneratePassword(n int) (string, error) {
 		out[i*2+1] = hex[v&0x0f]
 	}
 	return string(out), nil
+}
+
+// ----------------------------------------------------------------------------
+// Business-level types (MatrixOps surface)
+//
+// These types express business intent without leaking Matrix protocol details
+// (raw tokens, state_key strings, m.room.member JSON). The MatrixOps
+// implementation translates them to/from the protocol-level types above
+// (CreateRoomRequest, UserCredentials, etc.).
+// ----------------------------------------------------------------------------
+
+// RoomSpec describes a room to create. It carries WHAT the room is
+// (name/topic/invitees/power-levels/alias/metadata) without prescribing HOW
+// to create it (no preset constant, no API path). The creator identity is an
+// explicit actor hint: ActorUserID identifies the user who should own the
+// room (empty = global admin), and ActorToken is that user's access token
+// (empty = the implementation resolves the admin token).
+//
+// ActorUserID is a business-level hint (matching MemberSpec.ActorUserID):
+// the business layer expresses "this team's admin owns the team room", and
+// the implementation maps it to protocol details (e.g. Synapse must inject
+// the creator into power_levels — contract §4 修复 4). ActorToken exists so
+// a stateless ops layer can authenticate the createRoom call as that user
+// (Tuwunel needs the real token; there is no credential store to resolve it).
+type RoomSpec struct {
+	Name           string
+	Topic          string
+	Invite         []string       // user IDs to invite
+	PowerLevels    map[string]int // userID → power level override
+	AliasLocalpart string         // when non-empty, CreateRoom is idempotent on this alias
+	IsDirect       bool
+	E2EE           bool
+	InitialState   []StateEvent  // additional state events to seed
+	Metadata       *RoomMetadata // optional room.meta content (rendered as initial_state by impl)
+
+	// ActorUserID optionally identifies the user to create the room as
+	// (e.g. the team admin who owns the team room and leader DM). Empty
+	// means the global admin creates the room.
+	ActorUserID string
+	// ActorToken is the access token for ActorUserID, used to authenticate
+	// the createRoom call. Empty means the implementation uses the admin
+	// token. Ignored when ActorUserID is empty.
+	ActorToken string
+}
+
+// RoomRef is the business-level reference to a room returned by CreateRoom.
+type RoomRef struct {
+	RoomID  string
+	Created bool // true if newly created; false if the alias already existed
+}
+
+// UserSpec describes a user to provision (password mode).
+type UserSpec struct {
+	Username string // localpart only, e.g. "alice"
+	Password string // if empty, implementation generates a secure random password
+}
+
+// UserRef is the business-level reference to a user. It deliberately omits
+// sensitive fields (AccessToken, Password) — those are returned via the
+// separate UserCredentials returned alongside UserRef from ProvisionUser.
+type UserRef struct {
+	UserID  string // full Matrix user ID, e.g. @alice:domain
+	Created bool   // true if newly registered
+}
+
+// MemberSpec describes a member operation target. ActorUserID optionally
+// identifies the user whose token the implementation should use for the
+// operation (e.g. "team-admin" acting as inviter). When empty, the
+// implementation uses the admin identity.
+type MemberSpec struct {
+	UserID      string
+	ActorUserID string // optional; "" means use admin
+	// ActorToken is the access token for ActorUserID, used to authenticate
+	// the operation (e.g. a team admin token for ReconcileMembers invites and
+	// kicks). Empty means the implementation uses the admin token. The ops
+	// layer is stateless (no credential store), so the business layer must
+	// pass the token when the operation must act as a specific user.
+	ActorToken string
+}
+
+// RoomMetadata is the business-typed view of the room.meta custom state event.
+// The MatrixOps implementation translates this to/from the loose
+// map[string]interface{} form used by the protocol layer.
+type RoomMetadata struct {
+	Kind          string // "worker_room" | "team_room" | "direct_room" | ...
+	SchemaVersion int
+	Extra         map[string]interface{} // additional fields (teamName, workerName, members, ...)
 }

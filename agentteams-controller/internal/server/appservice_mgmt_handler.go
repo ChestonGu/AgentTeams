@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 )
@@ -25,9 +26,13 @@ type rotateTokenRequest struct {
 }
 
 // RotateToken rotates the Matrix AppService as_token (and optionally hs_token).
-// It creates a temporary TuwunelClient with the new token, unregisters the old
-// registration (via admin command, which does not require the old as_token),
-// registers with the new token, and verifies with a smoke test.
+// It creates a provider-routed MatrixOps with the new token, unregisters the
+// old registration (via admin command, which does not require the old
+// as_token), registers with the new token, and verifies with a smoke test.
+//
+// On Synapse, AppService registrations are declarative (Helm-managed), so
+// runtime rotation is not supported: the endpoint answers 501 and points the
+// operator at the Helm values + homeserver app_service_config_files.
 //
 // NOTE: This only updates the homeserver registration. The caller must also
 // update the controller env var / Secret and restart for the new token to
@@ -43,6 +48,16 @@ func (h *AppServiceHandler) RotateToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// On Synapse, registrations are declarative (Helm-managed): there is no
+	// runtime registration/unregistration API, so rotation must go through
+	// Helm values + the homeserver app_service_config_files instead.
+	if strings.EqualFold(h.matrixCfg.Provider, "synapse") {
+		http.Error(w,
+			"appservice token rotation is not supported for provider \"synapse\": registrations are declarative (Helm-managed); update the chart's matrix.appservice.* values and the Synapse app_service_config_files, then re-apply",
+			http.StatusNotImplemented)
+		return
+	}
+
 	// Build a new config with the rotated tokens.
 	newCfg := h.matrixCfg
 	newCfg.AppServiceToken = req.ASToken
@@ -50,20 +65,24 @@ func (h *AppServiceHandler) RotateToken(w http.ResponseWriter, r *http.Request) 
 		newCfg.AppServiceHSToken = req.HSToken
 	}
 
-	// Create a temporary client with the new token.
-	client := matrix.NewTuwunelClient(newCfg, nil)
+	// Route through the provider factory — no hardcoded Tuwunel client.
+	ops, err := matrix.NewOps(newCfg.Provider, newCfg, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("create matrix ops: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	ctx := r.Context()
 
 	// Build registration with new tokens and register (includes unregister fallback).
 	reg := matrix.RenderAppServiceRegistration(newCfg)
-	if err := client.RegisterAppService(ctx, reg); err != nil {
+	if err := ops.RegisterAppService(ctx, reg); err != nil {
 		http.Error(w, fmt.Sprintf("appservice registration failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Verify the new token works.
-	if err := client.AppServiceSmokeTest(ctx); err != nil {
+	if err := ops.SmokeTestAppService(ctx); err != nil {
 		http.Error(w, fmt.Sprintf("smoke test failed after rotation: %v", err), http.StatusInternalServerError)
 		return
 	}

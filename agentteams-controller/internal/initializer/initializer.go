@@ -53,7 +53,7 @@ type Config struct {
 	LLMApiURL                  string // provider-specific base URL (optional)
 	OpenAIBaseURL              string // custom base URL for openai-compat providers
 	AIStreamIdleTimeoutSeconds int
-	TuwunelURL                 string // internal Tuwunel URL, e.g. http://tuwunel:6167
+	MatrixURL                  string // internal Matrix homeserver URL (Tuwunel in embedded mode, Synapse in k8s mode), e.g. http://tuwunel:6167
 	ElementWebURL              string // internal Element Web URL (optional)
 }
 
@@ -69,11 +69,11 @@ func (c Config) managesStorage() bool {
 // initializes storage structure, registers the admin account, sets up gateway
 // routes, and optionally creates the Manager CR.
 type Initializer struct {
-	OSS     oss.StorageClient
-	Matrix  matrix.Client
-	Gateway gateway.Client
-	RestCfg *rest.Config
-	Config  Config
+	OSS       oss.StorageClient
+	MatrixOps matrix.MatrixOps
+	Gateway   gateway.Client
+	RestCfg   *rest.Config
+	Config    Config
 }
 
 func (i *Initializer) Run(ctx context.Context) error {
@@ -178,28 +178,28 @@ func (i *Initializer) ensureOSSStructure(ctx context.Context) error {
 	return nil
 }
 
-// waitForMatrix polls the Matrix server until it responds.
+// waitForMatrix polls the Matrix server until it responds. HealthCheck
+// returns an error only for transport-level failures (connection refused,
+// DNS error, dial timeout, EOF); any HTTP-level response — including 401/403
+// from the probe login — means the homeserver is up.
 func (i *Initializer) waitForMatrix(ctx context.Context) error {
 	return retry(ctx, 3*time.Second, 5*time.Minute, func() error {
-		_, err := i.Matrix.Login(ctx, "__healthcheck__", "invalid")
-		if err != nil && isMatrixConnError(err) {
-			return err
-		}
-		// Any non-connection error (403, 401, etc.) means Matrix is up.
-		return nil
+		return i.MatrixOps.HealthCheck(ctx)
 	})
 }
 
 func (i *Initializer) registerAdmin(ctx context.Context) error {
-	_, err := i.Matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
+	_, _, err := i.MatrixOps.ProvisionUser(ctx, matrix.UserSpec{
 		Username: i.Config.AdminUser,
 		Password: i.Config.AdminPassword,
 	})
 	return err
 }
 
-// registerAppService registers the AgentTeams controller as a Matrix Application
-// Service via the Tuwunel admin bot, then verifies with a smoke test.
+// registerAppService registers the AgentTeams controller as a Matrix
+// Application Service (provider-specific: Tuwunel admin-bot registration with
+// smoke-test idempotency; Synapse verifies the declarative Helm-managed
+// registration), then verifies with a smoke test.
 func (i *Initializer) registerAppService(ctx context.Context) error {
 	cfg := matrix.Config{
 		Domain:                    i.Config.MatrixDomain,
@@ -210,10 +210,10 @@ func (i *Initializer) registerAppService(ctx context.Context) error {
 		AppServicePushURL:         i.Config.AppServicePushURL,
 	}
 	reg := matrix.RenderAppServiceRegistration(cfg)
-	if err := i.Matrix.RegisterAppService(ctx, reg); err != nil {
+	if err := i.MatrixOps.RegisterAppService(ctx, reg); err != nil {
 		return fmt.Errorf("register appservice: %w", err)
 	}
-	if err := i.Matrix.AppServiceSmokeTest(ctx); err != nil {
+	if err := i.MatrixOps.SmokeTestAppService(ctx); err != nil {
 		return fmt.Errorf("appservice smoke test: %w", err)
 	}
 	return nil
@@ -233,27 +233,31 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 	logger := ctrl.Log.WithName("initializer")
 	cfg := i.Config
 
-	// 1. Tuwunel service source
-	if cfg.TuwunelURL != "" {
-		host, port, err := parseHostPort(cfg.TuwunelURL)
+	// 1. Matrix homeserver service source. The service source keeps the
+	// historical name "tuwunel" (stable identifier for existing installs),
+	// but the backing host/port come from MatrixServerURL, so it serves
+	// whichever homeserver is configured (Tuwunel in embedded mode, Synapse
+	// in k8s mode).
+	if cfg.MatrixURL != "" {
+		host, port, err := parseHostPort(cfg.MatrixURL)
 		if err != nil {
-			return fmt.Errorf("parse Tuwunel URL: %w", err)
+			return fmt.Errorf("parse Matrix homeserver URL: %w", err)
 		}
 
 		var svcSuffix string
 		if cfg.IsEmbedded {
 			if err := i.Gateway.EnsureStaticServiceSource(ctx, "tuwunel", host, port); err != nil {
-				logger.Error(err, "failed to register Tuwunel static service source (non-fatal)")
+				logger.Error(err, "failed to register Matrix homeserver static service source (non-fatal)")
 			}
 			svcSuffix = "static"
 		} else {
 			if err := i.Gateway.EnsureServiceSource(ctx, "tuwunel", host, port, "http"); err != nil {
-				logger.Error(err, "failed to register Tuwunel service source (non-fatal)")
+				logger.Error(err, "failed to register Matrix homeserver service source (non-fatal)")
 			}
 			svcSuffix = "dns"
 		}
 
-		// Matrix Homeserver routes (/_matrix/*, /_tuwunel/* → Tuwunel)
+		// Matrix homeserver route (/_matrix/* → the configured homeserver)
 		if err := i.Gateway.EnsureRoute(ctx, "matrix-homeserver", nil, "tuwunel."+svcSuffix, port, "/_matrix"); err != nil {
 			logger.Error(err, "failed to create Matrix route (non-fatal)")
 		}
@@ -530,32 +534,4 @@ func retry(ctx context.Context, interval, timeout time.Duration, fn func() error
 		case <-time.After(interval):
 		}
 	}
-}
-
-// isMatrixConnError returns true if the error indicates a transport-level failure
-// (connection refused, DNS error, etc.) as opposed to an HTTP-level response.
-func isMatrixConnError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, sub := range []string{"connection refused", "no such host", "dial tcp", "i/o timeout", "EOF"} {
-		if contains(msg, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

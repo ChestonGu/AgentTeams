@@ -12,8 +12,9 @@ import (
 // reconcileHumanDelete cleans up best-effort external state before
 // removing the finalizer. The human has no container, no gateway
 // consumer, and no MinIO account — only Matrix room memberships. We can't log in as the
-// human to /leave (password may be stale), so we rely on the Tuwunel
-// admin bot's force-leave-room command instead.
+// human to /leave (password may be stale), so we rely on the provider-specific
+// force-leave path in MatrixOps.RemoveMember instead (Tuwunel admin bot's
+// force-leave-room command; Synapse make_room_admin + kick retry).
 //
 // Every external call here is non-fatal: a transient Matrix or OSS
 // failure must not wedge finalizer removal, and the homeserver's

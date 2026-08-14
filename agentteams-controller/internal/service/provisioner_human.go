@@ -33,7 +33,7 @@ import (
 // not assign one and callers that want password login must follow up
 // with SetUserPassword explicitly.
 func (p *Provisioner) RegisterAppServiceUser(ctx context.Context, username string) (*HumanCredentials, error) {
-	uc, err := p.matrix.EnsureAppServiceUser(ctx, username)
+	_, uc, err := p.matrixOps.ProvisionUserViaAppService(ctx, username)
 	if err != nil {
 		return nil, fmt.Errorf("AS register human %s: %w", username, err)
 	}
@@ -45,13 +45,12 @@ func (p *Provisioner) RegisterAppServiceUser(ctx context.Context, username strin
 	}, nil
 }
 
-// RegisterLegacyUser performs a single registration_token-based
-// register; on M_USER_IN_USE the underlying client falls through to
-// orphan-recovery (admin reset-password + login). The returned
-// HumanCredentials always carries a Password since legacy auth has no
-// AS bypass.
+// RegisterLegacyUser provisions a password-mode Matrix account via
+// MatrixOps.ProvisionUser. On existing accounts the provider falls through
+// to password reset + login. The returned HumanCredentials always carries a
+// Password since legacy auth has no AS bypass.
 func (p *Provisioner) RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error) {
-	uc, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{Username: username})
+	_, uc, err := p.matrixOps.ProvisionUser(ctx, matrix.UserSpec{Username: username})
 	if err != nil {
 		return nil, fmt.Errorf("register legacy human %s: %w", username, err)
 	}
@@ -69,21 +68,21 @@ func (p *Provisioner) RegisterLegacyUser(ctx context.Context, username string) (
 // confirm propagation are expected to test by attempting a login
 // afterwards.
 func (p *Provisioner) SetUserPassword(ctx context.Context, userID, password string) error {
-	return p.matrix.SetPasswordAsAdmin(ctx, userID, password)
+	return p.matrixOps.ResetUserPassword(ctx, userID, password)
 }
 
 // LoginAppServiceUser obtains a fresh access token via the AS login
 // flow (no password required). Used by both legacy_password and
 // external_sso identity sources when the controller runs in AS mode.
 func (p *Provisioner) LoginAppServiceUser(ctx context.Context, username string) (string, error) {
-	return p.matrix.LoginAppServiceUser(ctx, username)
+	return p.matrixOps.LoginUserViaAppService(ctx, username)
 }
 
 // LoginWithPassword obtains a fresh access token via the password
 // login flow. Used by legacy_password when AS mode is disabled and
 // the controller has the user's stored InitialPassword.
 func (p *Provisioner) LoginWithPassword(ctx context.Context, username, password string) (string, error) {
-	return p.matrix.Login(ctx, username, password)
+	return p.matrixOps.LoginUser(ctx, username, password)
 }
 
 // =========================================================================
@@ -144,9 +143,9 @@ func (p *Provisioner) EnsureHumanUser(ctx context.Context, username string) (*Hu
 // LoginAsHuman obtains a fresh access token for an already-provisioned
 // Human without touching their password. This is the steady-state path
 // the reconciler uses once Status.MatrixUserID is non-empty; it must NOT
-// fall back to EnsureUser on failure because EnsureUser's orphan-recovery
-// branch issues "!admin users reset-password", which would silently
-// overwrite any password the user changed via Element.
+// fall back to ProvisionUser on failure because the provider's
+// password-reset fallback would silently overwrite any password the user
+// changed via Element.
 func (p *Provisioner) LoginAsHuman(ctx context.Context, username, password string) (string, error) {
 	if p.MatrixAppServiceEnabled() {
 		return p.LoginAppServiceUser(ctx, username)
@@ -160,44 +159,45 @@ func (p *Provisioner) LoginAsHuman(ctx context.Context, username, password strin
 
 // SetDisplayName updates the Matrix profile displayname for a human user.
 func (p *Provisioner) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
-	return p.matrix.SetDisplayName(ctx, userID, accessToken, displayName)
+	return p.matrixOps.SetUserDisplayName(ctx, userID, accessToken, displayName)
 }
 
 // InviteToRoom invites the given Matrix user into roomID using the admin
 // access token. Idempotent; see matrix.Client.InviteToRoom.
 func (p *Provisioner) InviteToRoom(ctx context.Context, roomID, userID string) error {
-	return p.matrix.InviteToRoom(ctx, roomID, userID)
+	return p.matrixOps.AddMember(ctx, roomID, userID)
 }
 
 // JoinRoomAs joins roomID with the supplied user access token. Required
-// for Tuwunel's trusted_private_chat preset (the rooms the controller
-// creates), which leaves an invite pending until the invitee explicitly
-// /joins — an admin-side invite alone is not sufficient to make the user
-// a full member.
+// because the controller-created rooms use the trusted_private_chat preset
+// (per the Matrix spec), which leaves an invite pending until the invitee
+// explicitly /joins — an admin-side invite alone is not sufficient to make
+// the user a full member.
 func (p *Provisioner) JoinRoomAs(ctx context.Context, roomID, userToken string) error {
-	return p.matrix.JoinRoom(ctx, roomID, userToken)
+	return p.matrixOps.JoinRoom(ctx, roomID, matrix.MemberSpec{ActorToken: userToken})
 }
 
 // KickFromRoom removes userID from roomID using the admin token. Idempotent.
 func (p *Provisioner) KickFromRoom(ctx context.Context, roomID, userID, reason string) error {
-	return p.matrix.KickFromRoom(ctx, roomID, userID, reason)
+	return p.matrixOps.RemoveMember(ctx, roomID, userID, reason)
 }
 
-// ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out of
-// roomID. Used by the Human delete flow where the controller no longer
-// holds a valid user token (password may be stale) and must rely on the
-// admin bot instead of /leave. Fire-and-forget at the bot layer.
+// ForceLeaveRoom removes userID out of roomID even when a normal admin kick
+// is not possible (e.g. the controller no longer holds a valid user token or
+// the room power levels block the kick). Delegates to MatrixOps.RemoveMember,
+// which tries the admin kick first and falls back to the provider-specific
+// escalation (Tuwunel admin bot force-leave, Synapse make_room_admin + kick
+// retry).
 func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string) error {
-	cmd := fmt.Sprintf("!admin users force-leave-room %s %s", userID, roomID)
-	log.FromContext(ctx).Info("sending tuwunel force-leave-room admin command", "room", roomID, "user", userID, "command", cmd)
-	return p.matrix.AdminCommand(ctx, cmd)
+	log.FromContext(ctx).Info("force-leaving user from room", "room", roomID, "user", userID)
+	return p.matrixOps.RemoveMember(ctx, roomID, userID, "force leave by admin")
 }
 
-// DeactivateHumanUser disables a Matrix account through the Tuwunel admin bot.
-// Tuwunel owns the exact deactivate/revoke semantics; the controller treats a
-// successful command delivery as the offboard handoff point.
+// DeactivateHumanUser disables a Matrix account via MatrixOps.DeactivateUser.
+// The provider-specific admin operation (Tuwunel admin bot, Synapse admin
+// REST) is fire-and-forget; the controller treats a successful call as the
+// offboard handoff point.
 func (p *Provisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
-	cmd := fmt.Sprintf("!admin users deactivate %s", userID)
-	log.FromContext(ctx).Info("sending tuwunel human deactivate admin command", "user", userID, "command", cmd)
-	return p.matrix.AdminCommand(ctx, cmd)
+	log.FromContext(ctx).Info("deactivating human matrix user", "user", userID)
+	return p.matrixOps.DeactivateUser(ctx, userID)
 }

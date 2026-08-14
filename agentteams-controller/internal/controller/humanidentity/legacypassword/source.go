@@ -30,6 +30,18 @@ func (s source) EnsurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, m
 	if err != nil {
 		return humanidentity.Credentials{}, err
 	}
+	// When the user pinned a custom initial password in spec, enforce it as
+	// the Matrix password. This runs inside needsProvision only (first
+	// registration or identity switch), so it never resets a password the
+	// user has since rotated via Element. On the AS path EnsureHumanUser may
+	// already have assigned a generated password for a brand-new account;
+	// this override simply replaces it with the pinned value.
+	if spec.InitialPassword != "" && creds.Password != spec.InitialPassword {
+		if err := s.deps.Provisioner.SetUserPassword(ctx, creds.UserID, spec.InitialPassword); err != nil {
+			return humanidentity.Credentials{}, err
+		}
+		creds.Password = spec.InitialPassword
+	}
 	return humanidentity.Credentials{
 		UserID:      creds.UserID,
 		AccessToken: creds.AccessToken,

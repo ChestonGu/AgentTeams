@@ -42,6 +42,12 @@ spec:
           volumeMounts:
             - { name: config, mountPath: /config, readOnly: true }
             - { name: data,  mountPath: /data }
+            {{- /* AppService registration YAML (declarative). Mounted from the
+                 synapse-appservice Secret so Synapse loads the controller's AS
+                 registration at startup via app_service_config_files. */ -}}
+            {{- if .Values.matrix.appservice.enabled }}
+            - { name: appservice, mountPath: /as-registrations, readOnly: true }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /_matrix/client/versions, port: http }
             initialDelaySeconds: 10
@@ -55,6 +61,12 @@ spec:
       volumes:
         - name: config
           configMap: { name: {{ include "agentteams.synapse.fullname" . }} }
+        {{- if .Values.matrix.appservice.enabled }}
+        - name: appservice
+          secret:
+            secretName: {{ include "agentteams.synapse.fullname" . }}-appservice
+            defaultMode: 0440   # readable by Synapse, not world-readable
+        {{- end }}
   {{- if .Values.matrix.synapse.persistence.enabled }}
   volumeClaimTemplates:
     - metadata: { name: data }

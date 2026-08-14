@@ -148,6 +148,11 @@ type Config struct {
 	MatrixE2EE              bool
 	MatrixProvider          string // "tuwunel" (default) or "synapse" — selects the matrix.Client implementation
 
+	// MatrixProvider selects the MatrixOps implementation. Valid values:
+	// "tuwunel" (default) or "synapse". Set from AGENTTEAMS_MATRIX_PROVIDER.
+	// Validated in LoadConfig; unknown values fail startup.
+	MatrixProvider string
+
 	// Matrix AppService mode
 	MatrixAppServiceEnabled            bool
 	MatrixAppServiceID                 string
@@ -374,7 +379,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("AGENTTEAMS_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("AGENTTEAMS_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "1" || os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "true",
-		MatrixProvider:          envOrDefault("AGENTTEAMS_MATRIX_PROVIDER", "tuwunel"),
+		MatrixProvider:          strings.ToLower(envOrDefault("AGENTTEAMS_MATRIX_PROVIDER", "tuwunel")),
 
 		MatrixAppServiceEnabled:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "false",
 		MatrixAppServiceID:                 envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_ID", "agentteams-controller"),
@@ -470,6 +475,16 @@ func LoadConfig() *Config {
 		if cfg.MatrixAppServiceHSToken == "" {
 			panic("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
+	}
+
+	// Validate Matrix provider selection.
+	switch cfg.MatrixProvider {
+	case "tuwunel", "":
+		cfg.MatrixProvider = "tuwunel"
+	case "synapse":
+		// ok
+	default:
+		panic(fmt.Sprintf("invalid AGENTTEAMS_MATRIX_PROVIDER %q: valid values are \"tuwunel\" (default) or \"synapse\"", cfg.MatrixProvider))
 	}
 
 	return cfg
@@ -748,6 +763,7 @@ func (c *Config) MatrixConfig() matrix.Config {
 		AdminUser:                    c.MatrixAdminUser,
 		AdminPassword:                c.MatrixAdminPassword,
 		E2EEEnabled:                  c.MatrixE2EE,
+		Provider:                     c.MatrixProvider,
 		AppServiceEnabled:            c.MatrixAppServiceEnabled,
 		AppServiceID:                 c.MatrixAppServiceID,
 		AppServiceToken:              c.MatrixAppServiceASToken,
@@ -759,7 +775,8 @@ func (c *Config) MatrixConfig() matrix.Config {
 }
 
 // UsesSynapse reports whether the Matrix homeserver is Synapse (vs the
-// default Tuwunel). Drives the matrix.Client factory selection in app.go.
+// default Tuwunel). Drives provider-specific code paths in the app factory
+// and HTTP handlers (e.g., RotateToken returning 501 on Synapse).
 func (c *Config) UsesSynapse() bool {
 	return c.MatrixProvider == "synapse"
 }

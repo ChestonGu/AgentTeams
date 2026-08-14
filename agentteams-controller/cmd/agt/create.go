@@ -31,6 +31,7 @@ func createCmd() *cobra.Command {
 func createWorkerCmd() *cobra.Command {
 	var (
 		name        string
+		displayName string
 		model       string
 		runtime     string
 		image       string
@@ -86,6 +87,7 @@ func createWorkerCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
@@ -130,6 +132,7 @@ func createWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Matrix profile, defaults to worker name)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
@@ -217,6 +220,7 @@ func renderWorkerStatusSummary(resp *workerResp) string {
 func createTeamCmd() *cobra.Command {
 	var (
 		name                 string
+		displayName          string
 		teamName             string
 		leaderName           string
 		leaderHeartbeatEvery string
@@ -260,6 +264,7 @@ resources, skills, and lifecycle state.`,
 			}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
 			if adminName != "" {
 				req["admin"] = map[string]interface{}{"name": adminName, "matrixUserId": adminMatrixID}
@@ -277,6 +282,7 @@ resources, skills, and lifecycle state.`,
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Team room name, defaults to --name)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
@@ -301,6 +307,7 @@ func createHumanCmd() *cobra.Command {
 		accessibleTeams   string
 		accessibleWorkers string
 		note              string
+		initialPassword   string
 	)
 
 	cmd := &cobra.Command{
@@ -309,13 +316,11 @@ func createHumanCmd() *cobra.Command {
 		Long: `Create a new Human resource (Matrix account + room access).
 
   agt create human --name bob --display-name "Bob Chen"
-  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50`,
+  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50
+  agt create human --name bob --permission-level 50`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
-			}
-			if displayName == "" {
-				return fmt.Errorf("--display-name is required")
 			}
 
 			req := map[string]interface{}{
@@ -325,6 +330,7 @@ func createHumanCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "email", email)
 			setIfNotEmpty(req, "note", note)
+			setIfNotEmpty(req, "initialPassword", initialPassword)
 			if accessibleTeams != "" {
 				req["accessibleTeams"] = splitCSV(accessibleTeams)
 			}
@@ -343,12 +349,13 @@ func createHumanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Human username (required)")
-	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (optional; empty leaves the Matrix profile displayname unset)")
 	cmd.Flags().StringVar(&email, "email", "", "Email address")
 	cmd.Flags().IntVar(&permissionLevel, "permission-level", 0, "Permission level (0-100)")
 	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")
 	cmd.Flags().StringVar(&accessibleWorkers, "accessible-workers", "", "Comma-separated worker names")
 	cmd.Flags().StringVar(&note, "note", "", "Note for the Human user")
+	cmd.Flags().StringVar(&initialPassword, "initial-password", "", "Initial Matrix password (controller generates one when omitted)")
 	return cmd
 }
 

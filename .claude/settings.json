@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Program Files/PuTTY/plink.exe\" *)"
+    ]
+  }
+}

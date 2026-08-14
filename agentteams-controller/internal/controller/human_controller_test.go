@@ -176,6 +176,197 @@ func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 	}
 }
 
+// TestHumanReconciler_InitialPassword_SpecProvided locks in the custom
+// initial-password feature: when spec.initialPassword is pinned, the
+// legacy_password identity source overrides the Matrix password on first
+// provisioning (SetUserPassword with the pinned value), and both spec and
+// status persist that same value. The controller must never generate a
+// different one.
+func TestHumanReconciler_InitialPassword_SpecProvided(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+		InitialPassword: "custom-pw",
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(rig.prov.Calls.SetUserPassword) != 1 {
+		t.Fatalf("SetUserPassword calls=%d, want 1: %+v",
+			len(rig.prov.Calls.SetUserPassword), rig.prov.Calls.SetUserPassword)
+	}
+	if got := rig.prov.Calls.SetUserPassword[0]; got.UserID != "@alice:localhost" || got.Password != "custom-pw" {
+		t.Errorf("SetUserPassword=%+v, want (@alice:localhost, custom-pw)", got)
+	}
+	if out.Spec.InitialPassword != "custom-pw" {
+		t.Errorf("Spec.InitialPassword=%q, want custom-pw", out.Spec.InitialPassword)
+	}
+	if out.Status.InitialPassword != "custom-pw" {
+		t.Errorf("Status.InitialPassword=%q, want custom-pw", out.Status.InitialPassword)
+	}
+}
+
+// TestHumanReconciler_InitialPassword_GeneratedAndPersisted covers the
+// controller-generated path: with spec.initialPassword empty, the
+// provisioning step returns a password (the mock's EnsureHumanUser yields
+// "mock-human-pw-<name>") and the reconciler persists it into BOTH
+// spec.initialPassword and status.initialPassword — specDirty triggers the
+// spec write-back. The second reconcile then converges: no re-provisioning,
+// no SetUserPassword, and the persisted password stays stable. This locks
+// in the idempotency contract that prevents the spec write-back (which
+// bumps generation) from causing an infinite reset loop.
+func TestHumanReconciler_InitialPassword_GeneratedAndPersisted(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// No custom password pinned → the source must not issue its own reset;
+	// the provisioning composite already assigned a password.
+	if len(rig.prov.Calls.SetUserPassword) != 0 {
+		t.Errorf("SetUserPassword must not be called when spec.initialPassword is empty, got %+v",
+			rig.prov.Calls.SetUserPassword)
+	}
+	want := "mock-human-pw-alice"
+	if out.Spec.InitialPassword != want {
+		t.Errorf("Spec.InitialPassword=%q, want generated %q", out.Spec.InitialPassword, want)
+	}
+	if out.Status.InitialPassword != want {
+		t.Errorf("Status.InitialPassword=%q, want %q", out.Status.InitialPassword, want)
+	}
+
+	// Second pass must converge without touching the account.
+	rig.prov.ClearCalls()
+	out2, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(rig.prov.Calls.EnsureHumanUser) != 0 || len(rig.prov.Calls.SetUserPassword) != 0 {
+		t.Errorf("second reconcile must not provision or reset; EnsureHumanUser=%d SetUserPassword=%d",
+			len(rig.prov.Calls.EnsureHumanUser), len(rig.prov.Calls.SetUserPassword))
+	}
+	if out2.Spec.InitialPassword != want || out2.Status.InitialPassword != want {
+		t.Errorf("password must be stable across reconciles; spec=%q status=%q, want %q",
+			out2.Spec.InitialPassword, out2.Status.InitialPassword, want)
+	}
+}
+
+// TestHumanReconciler_InitialPassword_AlreadyProvisioned_NoReset simulates
+// the post-write-back state (spec.initialPassword pinned, account already
+// provisioned) and asserts that steady-state reconciles never re-issue
+// SetUserPassword — the password is only enforced at provisioning time so a
+// user who rotated it via Element is never silently overwritten.
+func TestHumanReconciler_InitialPassword_AlreadyProvisioned_NoReset(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+		InitialPassword: "custom-pw",
+	})
+	human.Status.MatrixUserID = "@alice:localhost"
+	human.Status.InitialPassword = "custom-pw"
+	human.Status.Phase = "Active"
+	human.Finalizers = []string{finalizerName}
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(rig.prov.Calls.EnsureHumanUser) != 0 {
+		t.Errorf("EnsureHumanUser must not be called on steady-state reconcile, got %d",
+			len(rig.prov.Calls.EnsureHumanUser))
+	}
+	if len(rig.prov.Calls.SetUserPassword) != 0 {
+		t.Errorf("steady-state reconcile must not reset the password, got %+v", rig.prov.Calls.SetUserPassword)
+	}
+	if out.Status.InitialPassword != "custom-pw" {
+		t.Errorf("Status.InitialPassword=%q, want custom-pw", out.Status.InitialPassword)
+	}
+}
+
+// TestHumanReconciler_DisplayName_Optional locks in the optional
+// displayName contract for Humans (mirroring Worker/Team): with an empty
+// spec.displayName the reconciler must NOT call SetDisplayName (an empty
+// value would clear the Matrix profile displayname), and it must not touch
+// the displayName generation marker or acquire a token just to skip it.
+func TestHumanReconciler_DisplayName_Optional(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		PermissionLevel: 2,
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(rig.prov.Calls.SetDisplayName) != 0 {
+		t.Errorf("SetDisplayName must not be called when spec.displayName is empty, got %+v",
+			rig.prov.Calls.SetDisplayName)
+	}
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword must not be called when there is nothing to sync or join, got %d",
+			len(rig.prov.Calls.LoginWithPassword))
+	}
+	if out.Status.DisplayNameSyncedGeneration != 0 {
+		t.Errorf("DisplayNameSyncedGeneration=%d, want 0 (empty displayName is never marked synced)",
+			out.Status.DisplayNameSyncedGeneration)
+	}
+}
+
+// TestHumanReconciler_DisplayName_Synced verifies the displayName sync path
+// for a non-empty value: one SetDisplayName on first provisioning, then a
+// generation-guarded idempotent steady state (no duplicate calls).
+func TestHumanReconciler_DisplayName_Synced(t *testing.T) {
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+	})
+
+	rig := newHumanRig(t, human)
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(rig.prov.Calls.SetDisplayName) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1: %+v",
+			len(rig.prov.Calls.SetDisplayName), rig.prov.Calls.SetDisplayName)
+	}
+	if got := rig.prov.Calls.SetDisplayName[0]; got.UserID != "@alice:localhost" || got.DisplayName != "Alice" {
+		t.Errorf("SetDisplayName=%+v, want (@alice:localhost, Alice)", got)
+	}
+	if out.Status.DisplayNameSyncedGeneration != out.Generation {
+		t.Errorf("DisplayNameSyncedGeneration=%d, want %d", out.Status.DisplayNameSyncedGeneration, out.Generation)
+	}
+
+	// Steady-state reconcile must not re-sync an unchanged displayName.
+	rig.prov.ClearCalls()
+	_, _, err = rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(rig.prov.Calls.SetDisplayName) != 0 {
+		t.Errorf("SetDisplayName must not be called again on steady-state, got %+v",
+			rig.prov.Calls.SetDisplayName)
+	}
+}
+
 // TestHumanReconciler_FinalizerPatchPreservesIdentitySource locks in the
 // Worker-style MergeFrom patch when adding the cleanup finalizer. A full
 // Update would rewrite the entire spec from the in-memory object and can
