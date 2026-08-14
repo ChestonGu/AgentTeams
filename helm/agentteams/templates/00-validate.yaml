@@ -16,6 +16,31 @@ Validate public values at render time. Supported combinations:
 {{- fail (printf "unsupported matrix.mode %q: only \"managed\" is supported" (.Values.matrix.mode | default "")) -}}
 {{- end -}}
 
+{{- /* Matrix AppService validation.
+     For provider=synapse the homeserver loads the registration from a YAML file
+     (synapse-appservice-secret.yaml) while the controller reads the tokens from
+     this chart's runtime-env Secret. Helm cannot synchronize auto-generated
+     tokens across two Secrets during a first install (the second Secret cannot
+     see the first via lookup at render time), so non-empty asToken/hsToken are
+     REQUIRED for synapse+managed+AppService. values.yaml ships "change-me-..."
+     defaults matching the synapse macaroon/form-secret convention; operators
+     MUST override both in production.
+     Namespace security: on a shared/existing homeserver the broad "@.*:<domain>"
+     default lets the as_token impersonate every local user; require an explicit
+     userNamespaceRegex whenever a non-managed mode is permitted (forward-looking;
+     today mode is locked to managed, so this branch is a no-op safety net). */ -}}
+{{- if and (eq $matrixProvider "synapse") .Values.matrix.appservice.enabled -}}
+  {{- if not (.Values.matrix.appservice.asToken | default "") -}}
+  {{- fail "matrix.appservice.asToken must be non-empty when matrix.provider=synapse and matrix.appservice.enabled (Helm cannot sync auto-generated tokens across the runtime-env and synapse-appservice Secrets on first install); values.yaml ships a change-me default — override it for production" -}}
+  {{- end -}}
+  {{- if not (.Values.matrix.appservice.hsToken | default "") -}}
+  {{- fail "matrix.appservice.hsToken must be non-empty when matrix.provider=synapse and matrix.appservice.enabled; see matrix.appservice.asToken" -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.matrix.appservice.enabled (ne (.Values.matrix.mode | default "") "managed") (not (.Values.matrix.appservice.userNamespaceRegex | default "")) -}}
+{{- fail "matrix.appservice.userNamespaceRegex is required when matrix.mode != managed and AppService mode is enabled (the broad \"@.*:<domain>\" default is only safe on an exclusively AgentTeams-managed homeserver)" -}}
+{{- end -}}
+
 {{- $gatewayProvider := .Values.gateway.provider | default "" -}}
 {{- $gatewayMode := .Values.gateway.mode | default "" -}}
 {{- if eq $gatewayProvider "higress" -}}

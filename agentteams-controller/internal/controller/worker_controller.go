@@ -62,7 +62,7 @@ type WorkerReconciler struct {
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
 	// when a Worker CR omits spec.runtime. Sourced from
 	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). Empty means
-	// "no operator preference" — backend.ResolveRuntime will fall back to
+	// "no operator preference" 鈥?backend.ResolveRuntime will fall back to
 	// "openclaw".
 	DefaultRuntime string
 
@@ -198,6 +198,15 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	mctx.TeamName, err = r.workerTeamName(ctx, w)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -205,6 +214,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", effectiveSpec.ModelProvider, err)
 		}
 		mctx.ModelProviderInfo = info
+	}
+	configContext := mctx
+	if inTeam && teamRole == RoleTeamLeader {
+		configContext.Role = RoleTeamLeader
 	}
 
 	if mctx.DeployMode == v1beta1.DeployModeEdge {
@@ -244,9 +257,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			applyMemberStateToWorker(w, state)
 			return reconcile.Result{}, err
 		}
-		if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
-			applyMemberStateToWorker(w, state)
-			return reconcile.Result{}, err
+		if !configOwnedByTeam {
+			if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
+				applyMemberStateToWorker(w, state)
+				return reconcile.Result{}, err
+			}
+		} else {
+			logger.Info("worker runtime config owned by TeamReconciler, skipping standalone config reconcile", "worker", w.Name, "team", mctx.TeamName)
 		}
 		applyMemberStateToWorker(w, state)
 		w.Status.SpecHash = mctx.AppliedSpecHash
@@ -270,9 +287,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		applyMemberStateToWorker(w, state)
 		return reconcile.Result{}, err
 	}
-	if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
-		applyMemberStateToWorker(w, state)
-		return reconcile.Result{}, err
+	if !configOwnedByTeam {
+		if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
+			applyMemberStateToWorker(w, state)
+			return reconcile.Result{}, err
+		}
+	} else {
+		logger.Info("worker runtime config owned by TeamReconciler, skipping standalone config reconcile", "worker", w.Name, "team", mctx.TeamName)
 	}
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
@@ -286,7 +307,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	// Stamp or remove the service-name label on the Worker CR.
 	// IMPORTANT: snapshot base BEFORE mutating w so MergeFrom produces
-	// a non-empty patch — capturing base after the mutation makes the
+	// a non-empty patch 鈥?capturing base after the mutation makes the
 	// diff identical and the label change never lands.
 	base := w.DeepCopy()
 	if labelChanged := reconcileWorkerSvcLabel(w, svcName); labelChanged {
@@ -309,6 +330,27 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 
 	requeueAfter := minPositiveDuration(reconcileInterval, state.RequeueAfter)
 	return reconcile.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *WorkerReconciler) workerTeamName(ctx context.Context, w *v1beta1.Worker) (string, error) {
+	if teamName := w.Annotations[v1beta1.AnnotationWorkerTeamName]; teamName != "" {
+		return teamName, nil
+	}
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		return "", fmt.Errorf("list teams for worker %q: %w", w.Name, err)
+	}
+	sort.Slice(teams.Items, func(i, j int) bool {
+		return teams.Items[i].Name < teams.Items[j].Name
+	})
+	for _, team := range teams.Items {
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				return team.Spec.EffectiveTeamName(team.Name), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes
@@ -520,7 +562,7 @@ func mergeBackendResourceRequirements(defaults, override *backend.ResourceRequir
 
 // workerMemberContext translates a Worker CR into a MemberContext for the
 // shared member reconcile helpers. WorkerReconciler always produces a
-// standalone context — team semantics are injected externally by
+// standalone context 鈥?team semantics are injected externally by
 // TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
 // Worker CR annotations.
 //
@@ -578,19 +620,21 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		// Workers go through StatusNotFound create instead of a transient
 		// spec-change delete. CurrentSpecHash lets sandbox read managerConfig live
 		// annotations only when Worker.status.specHash is empty.
-		SpecChanged:          specChanged,
-		AppliedSpecHash:      appliedSpecHash,
-		CurrentSpecHash:      w.Status.SpecHash,
-		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		ExistingMatrixUserID: w.Status.MatrixUserID,
-		ExistingRoomID:       w.Status.RoomID,
-		CurrentExposedPorts:  w.Status.ExposedPorts,
-		Owner:                w,
-		DeployMode:           deployMode,
-		ServiceEnabled:       serviceEnabled,
-		Resources:            agentResourcesToBackend(resourceSpec),
-		BackendRuntime:       backendRuntime,
-		StatusBackendRuntime: w.Status.BackendRuntime,
+		SpecChanged:                 specChanged,
+		AppliedSpecHash:             appliedSpecHash,
+		CurrentSpecHash:             w.Status.SpecHash,
+		IsUpdate:                    w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
+		ExistingMatrixUserID:        w.Status.MatrixUserID,
+		ExistingRoomID:              w.Status.RoomID,
+		DisplayName:                 spec.DisplayName,
+		DisplayNameSyncedGeneration: w.Status.DisplayNameSyncedGeneration,
+		CurrentExposedPorts:         w.Status.ExposedPorts,
+		Owner:                       w,
+		DeployMode:                  deployMode,
+		ServiceEnabled:              serviceEnabled,
+		Resources:                   agentResourcesToBackend(resourceSpec),
+		BackendRuntime:              backendRuntime,
+		StatusBackendRuntime:        w.Status.BackendRuntime,
 	}
 }
 
@@ -616,6 +660,9 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	if state.BackendRuntime != "" {
 		w.Status.BackendRuntime = state.BackendRuntime
 	}
+	if state.DisplayNameSynced {
+		w.Status.DisplayNameSyncedGeneration = w.Generation
+	}
 }
 
 // reconcileWorkerSvcLabel adds or removes the worker Service name
@@ -631,7 +678,7 @@ func reconcileWorkerSvcLabel(w *v1beta1.Worker, svcName string) bool {
 		w.Labels[v1beta1.LabelWorkerSvcName] = svcName
 		return true
 	}
-	// Service disabled/removed — delete label if present.
+	// Service disabled/removed 鈥?delete label if present.
 	if _, exists := w.Labels[v1beta1.LabelWorkerSvcName]; !exists {
 		return false
 	}
@@ -683,7 +730,7 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 }
 
 // WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile
-// requests. If namespace is non-empty, it overrides obj.GetNamespace() — used
+// requests. If namespace is non-empty, it overrides obj.GetNamespace() 鈥?used
 // for remote clusters where Pod namespace != CR namespace.
 func WorkerPodMapFunc(namespace string) handler.MapFunc {
 	return func(_ context.Context, obj client.Object) []reconcile.Request {
@@ -718,17 +765,18 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //
 // Excluded (do not trigger pod recreation):
 //
-//	Model, McpServers — config-only (consumed by ReconcileMemberConfig)
-//	AccessEntries — permission-only (resolved by credential issuance)
-//	AgentIdentity, CredentialBindings — runtime credential config
-//	State, IdleTimeout — lifecycle/policy
-//	ServiceEnabled, Expose — service-only (consumed by ReconcileMemberService)
+//	Model, DisplayName, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
+//	AccessEntries 鈥?permission-only (resolved by credential issuance)
+//	AgentIdentity, CredentialBindings 鈥?runtime credential config
+//	State, IdleTimeout 鈥?lifecycle/policy
+//	ServiceEnabled, Expose 鈥?service-only (consumed by ReconcileMemberService)
 //
 // Consumed by workerMemberContext to populate MemberContext.AppliedSpecHash,
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
+	spec.DisplayName = ""    // Matrix-profile-only: synced via SetDisplayName, does not affect pod
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
 	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
 	spec.AgentIdentity = nil // config-only: written to runtime.yaml
@@ -879,9 +927,9 @@ func workerDepsLayoutVersionForBackendRuntime(backendRuntime string) string {
 // it carries both:
 //
 //   - labelKey (one of the AgentTeams identity labels) with a non-empty
-//     value — identifying which CR
+//     value 鈥?identifying which CR
 //     kind owns the pod.
-//   - agentteams.io/controller == controllerName — identifying which controller
+//   - agentteams.io/controller == controllerName 鈥?identifying which controller
 //     instance owns the pod.
 //
 // The controller filter is defense-in-depth against the informer cache label

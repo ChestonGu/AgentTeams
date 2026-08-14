@@ -43,6 +43,13 @@ data:
     bcrypt_rounds: 12
     max_upload_size: 50M
     federation_domain_whitelist: []
+    {{- /* Load the AgentTeams AppService registration rendered by synapse-appservice-secret.yaml
+         when AppService mode is enabled. Synapse reads this file at startup; the StatefulSet
+         mounts the Secret at /as-registrations (readOnly). */ -}}
+    {{- if .Values.matrix.appservice.enabled }}
+    app_service_config_files:
+      - /as-registrations/agentteams-controller.yaml
+    {{- end }}
     # Raise rate limits — agentteams controller provisions multiple users in bursts
     # (admin login + per-user create/login), which trips Synapse's low defaults
     # (rc_login burst 3) into M_LIMIT_EXCEEDED storms.

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ func createCmd() *cobra.Command {
 func createWorkerCmd() *cobra.Command {
 	var (
 		name        string
+		displayName string
 		model       string
 		runtime     string
 		image       string
@@ -51,7 +53,7 @@ func createWorkerCmd() *cobra.Command {
 
   agt create worker --name alice --model qwen3.6-plus
   agt create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
-  agt create worker --name charlie --runtime copaw --expose 8080,3000
+  agt create worker --name charlie --runtime qwenpaw --expose 8080,3000
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -85,6 +87,7 @@ func createWorkerCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
@@ -92,7 +95,11 @@ func createWorkerCmd() *cobra.Command {
 				req["skills"] = splitCSV(skills)
 			}
 			if expose != "" {
-				req["expose"] = parseExposePorts(expose)
+				ports, err := parseExposePorts(expose)
+				if err != nil {
+					return err
+				}
+				req["expose"] = ports
 			}
 
 			client := NewAPIClient()
@@ -125,8 +132,9 @@ func createWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Matrix profile, defaults to worker name)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -212,6 +220,7 @@ func renderWorkerStatusSummary(resp *workerResp) string {
 func createTeamCmd() *cobra.Command {
 	var (
 		name                 string
+		displayName          string
 		teamName             string
 		leaderName           string
 		leaderHeartbeatEvery string
@@ -255,6 +264,7 @@ resources, skills, and lifecycle state.`,
 			}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
 			if adminName != "" {
 				req["admin"] = map[string]interface{}{"name": adminName, "matrixUserId": adminMatrixID}
@@ -272,6 +282,7 @@ resources, skills, and lifecycle state.`,
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Team room name, defaults to --name)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
@@ -296,6 +307,7 @@ func createHumanCmd() *cobra.Command {
 		accessibleTeams   string
 		accessibleWorkers string
 		note              string
+		initialPassword   string
 	)
 
 	cmd := &cobra.Command{
@@ -304,13 +316,11 @@ func createHumanCmd() *cobra.Command {
 		Long: `Create a new Human resource (Matrix account + room access).
 
   agt create human --name bob --display-name "Bob Chen"
-  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50`,
+  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50
+  agt create human --name bob --permission-level 50`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
-			}
-			if displayName == "" {
-				return fmt.Errorf("--display-name is required")
 			}
 
 			req := map[string]interface{}{
@@ -320,6 +330,7 @@ func createHumanCmd() *cobra.Command {
 			}
 			setIfNotEmpty(req, "email", email)
 			setIfNotEmpty(req, "note", note)
+			setIfNotEmpty(req, "initialPassword", initialPassword)
 			if accessibleTeams != "" {
 				req["accessibleTeams"] = splitCSV(accessibleTeams)
 			}
@@ -338,12 +349,13 @@ func createHumanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Human username (required)")
-	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (optional; empty leaves the Matrix profile displayname unset)")
 	cmd.Flags().StringVar(&email, "email", "", "Email address")
 	cmd.Flags().IntVar(&permissionLevel, "permission-level", 0, "Permission level (0-100)")
 	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")
 	cmd.Flags().StringVar(&accessibleWorkers, "accessible-workers", "", "Comma-separated worker names")
 	cmd.Flags().StringVar(&note, "note", "", "Note for the Human user")
+	cmd.Flags().StringVar(&initialPassword, "initial-password", "", "Initial Matrix password (controller generates one when omitted)")
 	return cmd
 }
 
@@ -366,7 +378,7 @@ func createManagerCmd() *cobra.Command {
 		Long: `Create a new Manager resource.
 
   agt create manager --name default --model qwen3.6-plus
-  agt create manager --name default --model claude-sonnet-4-6 --runtime copaw
+  agt create manager --name default --model claude-sonnet-4-6 --runtime qwenpaw
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -396,7 +408,7 @@ func createManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (required)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd
@@ -475,13 +487,31 @@ func splitCSV(s string) []string {
 	return result
 }
 
-func parseExposePorts(s string) []map[string]interface{} {
-	var ports []map[string]interface{}
-	for _, p := range splitCSV(s) {
-		port := map[string]interface{}{"port": p}
+func parseExposePorts(s string) ([]map[string]interface{}, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("--expose requires at least one port")
+	}
+
+	values := strings.Split(s, ",")
+	ports := make([]map[string]interface{}, 0, len(values))
+	seen := make(map[int]struct{}, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, fmt.Errorf("invalid --expose value %q: port entries must not be empty", s)
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 65535 {
+			return nil, fmt.Errorf("invalid --expose port %q: must be an integer between 1 and 65535", raw)
+		}
+		if _, exists := seen[value]; exists {
+			return nil, fmt.Errorf("duplicate --expose port %d", value)
+		}
+		seen[value] = struct{}{}
+		port := map[string]interface{}{"port": value}
 		ports = append(ports, port)
 	}
-	return ports
+	return ports, nil
 }
 
 func setIfNotEmpty(m map[string]interface{}, key, value string) {

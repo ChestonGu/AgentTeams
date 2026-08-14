@@ -69,6 +69,15 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		}
 		human.Status.Phase = computeHumanPhase(&human, reterr)
 
+		// Status patch first: on an object with a status subresource the
+		// main-resource PATCH endpoint ignores status, so the status
+		// subresource is the only channel that persists it. The spec
+		// write-back below then applies spec.initialPassword on the main
+		// resource. Both patches use the same original merge base (no
+		// resourceVersion precondition), so re-applying the finalizer/spec
+		// in the second patch is idempotent. Only the first provisioning
+		// pass sets specDirty (empty spec.initialPassword + generated
+		// password); the generation bump re-reconciles once and converges.
 		if err := r.Status().Patch(ctx, &human, patchBase); err != nil {
 			logger.Error(err, "failed to patch human status; CR will appear to have no status",
 				"name", human.Name, "phase", human.Status.Phase, "matrixUserID", human.Status.MatrixUserID)
@@ -78,6 +87,22 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		logger.Info("human status patched",
 			"name", human.Name, "phase", human.Status.Phase,
 			"matrixUserID", human.Status.MatrixUserID, "reconcileFailed", reterr != nil)
+
+		if s.specDirty {
+			// The status patch response above reflects the stored spec,
+			// which does not yet carry the generated initialPassword, so it
+			// clobbered the in-memory write-back. Restore the value before
+			// issuing the main-resource patch. Both patches share the
+			// original merge base (no resourceVersion precondition), and
+			// the main-resource PATCH endpoint ignores status, so
+			// re-applying finalizer/spec changes here is idempotent.
+			human.Spec.InitialPassword = s.specInitialPassword
+			if err := r.Patch(ctx, &human, patchBase); err != nil {
+				logger.Error(err, "failed to patch human spec (initialPassword write-back)",
+					"name", human.Name, "matrixUserID", human.Status.MatrixUserID)
+				reterr = kerrors.NewAggregate([]error{reterr, err})
+			}
+		}
 	}()
 
 	if !human.DeletionTimestamp.IsZero() {

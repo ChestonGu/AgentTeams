@@ -43,6 +43,10 @@ const LabelWorkerEdgeUUID = "agentteams.io/worker-edge-uuid"
 // re-issues credentials and updates the annotation to match.
 const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 
+// AnnotationWorkerTeamName records the effective Team identity for a referenced
+// Worker so independent Worker reconciles preserve its scoped team storage access.
+const AnnotationWorkerTeamName = "agentteams.io/team-name"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //
@@ -176,6 +180,7 @@ type WorkerSpec struct {
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
 	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
+	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
@@ -380,6 +385,12 @@ type WorkerStatus struct {
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
+	// DisplayNameSyncedGeneration records the Worker generation whose
+	// spec.displayName was last synced to the Matrix profile. Mirrors the
+	// Human status field of the same name; used as the idempotency guard so
+	// the controller only calls SetDisplayName after a displayName change.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
+
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
 	// Values: "pod" (default), or "" before the first successful deployment.
@@ -419,6 +430,7 @@ type Team struct {
 
 type TeamSpec struct {
 	Description  string           `json:"description,omitempty"`
+	DisplayName  string           `json:"displayName,omitempty"` // friendly display name (Team room name, listings); falls back to teamName
 	TeamName     string           `json:"teamName,omitempty"`
 	Admin        *TeamAdminSpec   `json:"admin,omitempty"`
 	HumanMembers []TeamMemberSpec `json:"humanMembers,omitempty"`
@@ -485,6 +497,11 @@ type TeamStatus struct {
 	// Combined with ReconcileAttempt, this reveals how long the Pending
 	// phase has been active and how many passes it took to converge.
 	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+	// DisplayNameSyncedGeneration records the Team generation whose
+	// spec.displayName was last applied to the Team room name. Used as the
+	// idempotency guard so ProvisionTeamRooms only renames the room after a
+	// displayName change instead of on every reconcile.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.
@@ -582,7 +599,10 @@ type Human struct {
 }
 
 type HumanSpec struct {
-	DisplayName       string              `json:"displayName"`
+	// DisplayName is the friendly name for this Human (Matrix profile
+	// displayname and listings). Optional: empty leaves the Matrix profile
+	// displayname unset and listings show the username.
+	DisplayName       string              `json:"displayName,omitempty"`
 	Username          string              `json:"username,omitempty"`
 	Email             string              `json:"email,omitempty"`
 	PermissionLevel   int                 `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
@@ -590,6 +610,14 @@ type HumanSpec struct {
 	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
 	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
 	Note              string              `json:"note,omitempty"`
+	// InitialPassword pins the Matrix password assigned to this Human on
+	// first provisioning. Empty means the controller generates a random
+	// one and persists it back into spec.initialPassword + status.initialPassword
+	// on creation. Only honored for password-bearing identity sources
+	// (legacy_password); external_sso humans authenticate via SSO and never
+	// receive a controller-managed password. Enforced only at provisioning
+	// time — later edits do not reset a password the user has rotated.
+	InitialPassword string `json:"initialPassword,omitempty"`
 }
 
 type IdentitySourceSpec struct {
@@ -641,7 +669,7 @@ type Manager struct {
 type ManagerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | qwenpaw
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	Soul          string                     `json:"soul,omitempty"`          // custom SOUL.md content
 	Agents        string                     `json:"agents,omitempty"`        // custom AGENTS.md content

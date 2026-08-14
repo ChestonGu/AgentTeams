@@ -29,6 +29,8 @@ type ResourceHandler struct {
 	namespace string
 	backend   *backend.Registry
 
+	defaultWorkerRuntime string
+
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
 	// enforces that HTTP-created resources always belong to the serving
@@ -82,10 +84,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
-	runtime := req.Runtime
-	if runtime == "" {
-		runtime = backend.RuntimeOpenClaw
-	}
+	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -95,6 +94,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
 			ModelProvider:    req.ModelProvider,
+			DisplayName:      req.DisplayName,
 			WorkerName:       req.WorkerName,
 			Runtime:          runtime,
 			Image:            req.Image,
@@ -214,6 +214,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName
 		}
+		if req.DisplayName != "" {
+			worker.Spec.DisplayName = req.DisplayName
+		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
 		}
@@ -323,6 +326,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.TeamSpec{
 			Description:    req.Description,
+			DisplayName:    req.DisplayName,
 			TeamName:       req.TeamName,
 			Admin:          req.Admin,
 			HumanMembers:   req.HumanMembers,
@@ -404,6 +408,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.Description != "" {
 			team.Spec.Description = req.Description
 		}
+		if req.DisplayName != "" {
+			team.Spec.DisplayName = req.DisplayName
+		}
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
 		}
@@ -480,6 +487,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 			AccessibleTeams:   req.AccessibleTeams,
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,
+			InitialPassword:   req.InitialPassword,
 		},
 	}
 
@@ -718,6 +726,7 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		Name:             w.Name,
+		DisplayName:      w.Spec.DisplayName,
 		WorkerName:       w.Spec.WorkerName,
 		Phase:            w.Status.Phase,
 		State:            w.Spec.DesiredState(),
@@ -750,6 +759,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 func teamToResponse(t *v1beta1.Team) TeamResponse {
 	resp := TeamResponse{
 		Name:           t.Name,
+		DisplayName:    t.Spec.DisplayName,
 		TeamName:       t.Spec.EffectiveTeamName(t.Name),
 		Phase:          t.Status.Phase,
 		Description:    t.Spec.Description,
@@ -809,6 +819,13 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 }
 
 func humanToResponse(h *v1beta1.Human) HumanResponse {
+	// Prefer the status value (the password actually set on the Matrix
+	// account); before the first reconcile it is empty, so fall back to the
+	// spec value the caller pinned at create time.
+	initialPassword := h.Status.InitialPassword
+	if initialPassword == "" {
+		initialPassword = h.Spec.InitialPassword
+	}
 	resp := HumanResponse{
 		Name:              h.Name,
 		Phase:             h.Status.Phase,
@@ -819,7 +836,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
-		InitialPassword:   h.Status.InitialPassword,
+		InitialPassword:   initialPassword,
 		Rooms:             h.Status.Rooms,
 		Message:           h.Status.Message,
 	}

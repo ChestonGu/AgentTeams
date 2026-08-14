@@ -34,18 +34,31 @@ preflight:
 
 # ── Matrix ────────────────────────────────────────────────────────────────
 matrix:
-  provider: tuwunel           # tuwunel | synapse
+  provider: synapse          # synapse (default) | tuwunel
   mode: managed               # managed | existing
   internalURL: ""             # existing mode only; managed mode auto-derives
   serverName: ""              # existing mode only; managed mode auto-derives
   # Matrix AppService registration (controller registers as an appservice
   # to provision worker/human Matrix accounts without passwords). Enabled by
-  # default; the controller panics if as_token/hs_token are absent, so the
-  # runtime-env Secret auto-generates and preserves them when these are empty.
+  # default. The runtime-env Secret auto-generates and preserves as_token/hs_token
+  # when these are empty.
+  #
+  # IMPORTANT (provider=synapse, the default): the homeserver loads the
+  # registration from a YAML file (synapse-appservice-secret.yaml) while the
+  # controller reads the same tokens from env. Helm cannot sync auto-generated
+  # tokens across two Secrets on first install, so the values.yaml defaults ship
+  # non-empty "change-me" tokens (matching the synapse macaroon/form secret
+  # convention). OVERRIDE both tokens in production with `helm install ... --set`.
+  # On tuwunel the controller registers at runtime and the values here are
+  # ignored, so auto-generation via the runtime-env Secret is fine.
   appservice:
     enabled: true            # set false to disable AppService mode entirely
-    asToken: ""             # override the Matrix AppService as_token (auto-generated if empty)
-    hsToken: ""             # override the Matrix AppService hs_token (auto-generated if empty)
+    id: "agentteams-controller"            # AppService ID (must match controller AGENTTEAMS_MATRIX_APPSERVICE_ID)
+    senderLocalpart: "agentteams-controller" # localpart of the AS bot user the controller logs in as
+    asToken: "change-me-as-token"          # Matrix AppService as_token — OVERRIDE in production
+    hsToken: "change-me-hs-token"          # Matrix AppService hs_token — OVERRIDE in production
+    userNamespaceRegex: ""  # narrow the user namespace matched by the AS registration (empty = "@.*:<domain>"; REQUIRED when matrix.mode != managed on a shared homeserver). The namespace is intentionally NOT exclusive — exclusivity would block the shared-secret admin bootstrap and admin-API user creation with M_EXCLUSIVE on Synapse.
+    pushURL: ""             # controller HTTP endpoint for homeserver→AS transaction push (empty = passwordless-only, no push)
   tuwunel:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel
@@ -273,7 +286,7 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | copaw | hermes
+  runtime: "openclaw"           # openclaw | qwenpaw
   image:
     repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
     tag: ""                     # defaults to global.imageTag

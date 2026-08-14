@@ -12,6 +12,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -738,6 +739,29 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler.defaultWorkerRuntime = backend.RuntimeQwenPaw
+
+	body := []byte(`{"name":"worker-cr"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get created worker: %v", err)
+	}
+	if got := stored.Spec.Runtime; got != backend.RuntimeQwenPaw {
+		t.Fatalf("worker.spec.runtime = %q, want %q", got, backend.RuntimeQwenPaw)
+	}
+}
+
 func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "l1", Namespace: "default"}}
@@ -780,6 +804,61 @@ func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 	}
 	if got := human.Labels[v1beta1.LabelController]; got != "ctrl-a" {
 		t.Fatalf("expected controller label ctrl-a, got %q", got)
+	}
+}
+
+func TestCreateHuman_InitialPassword(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+
+	body := []byte(`{"name":"h1","displayName":"Human One","initialPassword":"s3cret"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "h1", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.InitialPassword != "s3cret" {
+		t.Errorf("Spec.InitialPassword=%q, want s3cret", human.Spec.InitialPassword)
+	}
+
+	// The create response echoes the pinned password even though the
+	// controller has not reconciled yet (status.initialPassword is empty),
+	// so the caller sees the value it requested.
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got, _ := resp["initialPassword"].(string); got != "s3cret" {
+		t.Errorf("response initialPassword=%v, want s3cret", resp["initialPassword"])
+	}
+}
+
+func TestCreateHuman_DisplayNameOptional(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+
+	body := []byte(`{"name":"h1","permissionLevel":2}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "h1", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.DisplayName != "" {
+		t.Errorf("Spec.DisplayName=%q, want empty (optional)", human.Spec.DisplayName)
 	}
 }
 

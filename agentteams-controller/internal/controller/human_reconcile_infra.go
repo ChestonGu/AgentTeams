@@ -29,9 +29,8 @@ import (
 //     credential store, so we avoid the call altogether unless needed.
 //
 // We deliberately never fall back to EnsureHumanUser after the first
-// provisioning: its orphan-recovery branch issues
-// "!admin users reset-password" and would silently overwrite a password
-// the user may have rotated via Element.
+// provisioning: the provider's password-reset fallback would silently
+// overwrite a password the user may have rotated via Element.
 func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope) error {
 	h := s.human
 	username := s.username
@@ -62,6 +61,15 @@ func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope
 		h.Status.MatrixUserID = expectedUserID
 		if s.identity.ManagesInitialPassword {
 			h.Status.InitialPassword = creds.Password
+			// Persist a controller-generated initial password into spec so
+			// it is durable and auditable across reconciles. The spec write
+			// bumps generation exactly once (next reconcile sees the pinned
+			// value, needsProvision is false, and nothing regenerates).
+			if h.Spec.InitialPassword == "" && creds.Password != "" {
+				h.Spec.InitialPassword = creds.Password
+				s.specInitialPassword = creds.Password
+				s.specDirty = true
+			}
 		} else {
 			h.Status.InitialPassword = ""
 		}
@@ -75,8 +83,12 @@ func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope
 		h.Status.InitialPassword = ""
 	}
 
-	// Sync Matrix profile displayName on first provisioning and when spec changes.
-	shouldSyncDisplayName := needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation
+	// Sync Matrix profile displayName on first provisioning and when spec
+	// changes. Empty displayName is left untouched (mirrors the Worker
+	// syncMemberDisplayName contract): the Matrix profile keeps whatever it
+	// has and we never issue a SetDisplayName call to clear it.
+	shouldSyncDisplayName := (needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation) &&
+		h.Spec.DisplayName != ""
 	if shouldSyncDisplayName {
 		token := r.ensureUserToken(ctx, s)
 		if token != "" {

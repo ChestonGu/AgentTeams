@@ -14,10 +14,11 @@ spec:
           properties:
             spec:
               type: object
-              required: [displayName, permissionLevel]
+              required: [permissionLevel]
               properties:
                 displayName:
                   type: string
+                  description: Friendly display name (Matrix profile displayname and listings). Empty leaves the Matrix profile displayname unset.
                 username:
                   type: string
                   description: Matrix localpart for this human (fallback to metadata.name)
@@ -50,6 +51,9 @@ spec:
                   required: [issuer, subject]
                 note:
                   type: string
+                initialPassword:
+                  type: string
+                  description: "Custom initial Matrix password (legacy_password only); empty means the controller generates one and persists it into spec/status on creation"
             status:
               type: object
               properties:

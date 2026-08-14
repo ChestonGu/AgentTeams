@@ -72,12 +72,12 @@ type App struct {
 	credProvider credprovider.Client
 
 	// Infrastructure clients
-	matrix   matrix.Client
-	gateway  gateway.Client
-	oss      oss.StorageClient
-	ossAdmin oss.StorageAdminClient
-	agentGen *agentconfig.Generator
-	registry *backend.Registry
+	matrixOps matrix.MatrixOps // business ops abstraction (provider-specific)
+	gateway   gateway.Client
+	oss       oss.StorageClient
+	ossAdmin  oss.StorageAdminClient
+	agentGen  *agentconfig.Generator
+	registry  *backend.Registry
 
 	// Remote-cluster k8s client cache. Non-nil only when the credential
 	// provider sidecar is configured; consumed by the K8s worker backend
@@ -171,10 +171,10 @@ func (a *App) Start(ctx context.Context) error {
 		logger.Info("elected as leader, running cluster initialization")
 
 		init := &initializer.Initializer{
-			OSS:     a.oss,
-			Matrix:  a.matrix,
-			Gateway: a.gateway,
-			RestCfg: a.restCfg,
+			OSS:       a.oss,
+			MatrixOps: a.matrixOps,
+			Gateway:   a.gateway,
+			RestCfg:   a.restCfg,
 			Config: initializer.Config{
 				ManagerEnabled:             a.cfg.ManagerEnabled,
 				ManagerModel:               a.cfg.ManagerModel,
@@ -192,7 +192,7 @@ func (a *App) Start(ctx context.Context) error {
 				LLMAPIKey:                  a.cfg.LLMAPIKey,
 				OpenAIBaseURL:              a.cfg.OpenAIBaseURL,
 				AIStreamIdleTimeoutSeconds: a.cfg.AIStreamIdleTimeoutSeconds,
-				TuwunelURL:                 a.cfg.MatrixServerURL,
+				MatrixURL:                  a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
 				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
@@ -285,11 +285,18 @@ func (a *App) initInfraClients(_ context.Context) error {
 	cfg := a.cfg
 	logger := ctrl.Log.WithName("app")
 
+	// MatrixOps is selected through the single provider factory (provider.go);
+	// unknown providers were already rejected at config load, so a failure here
+	// is a programmer error.
+	ops, err := matrix.NewOps(cfg.MatrixProvider, cfg.MatrixConfig(), nil)
+	if err != nil {
+		return fmt.Errorf("init infra clients: %w", err)
+	}
+	a.matrixOps = ops
+
 	if cfg.UsesSynapse() {
-		a.matrix = matrix.NewSynapseClient(cfg.MatrixConfig(), nil)
 		logger.Info("matrix provider: synapse")
 	} else {
-		a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
 		logger.Info("matrix provider: tuwunel")
 	}
 	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
@@ -499,7 +506,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.provisioner = service.NewProvisioner(service.ProvisionerConfig{
-		Matrix:            a.matrix,
+		MatrixOps:         a.matrixOps,
 		Gateway:           a.gateway,
 		OSSAdmin:          a.ossAdmin,
 		Creds:             credStore,
@@ -660,6 +667,8 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		SocketPath:     a.cfg.SocketPath,
 		MatrixConfig:   a.cfg.MatrixConfig(),
 		Provisioner:    a.provisioner,
+
+		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
 	})
 	return nil
 }

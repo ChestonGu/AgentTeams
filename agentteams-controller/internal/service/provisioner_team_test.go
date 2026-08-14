@@ -295,9 +295,9 @@ func TestRefreshWorkerCredentialsRestoresMinIOAccess(t *testing.T) {
 		},
 	}
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:   newFakeTeamMatrix(),
-		Creds:    creds,
-		OSSAdmin: admin,
+		MatrixOps: matrix.NewLegacyClientOps(newFakeTeamMatrix(), matrix.Config{Domain: "localhost"}),
+		Creds:     creds,
+		OSSAdmin:  admin,
 	})
 
 	result, err := p.RefreshWorkerCredentials(context.Background(), "alpha-worker-lead", "leader", "alpha")
@@ -326,7 +326,7 @@ func TestProvisionWorkerFreshCredentialsRecreatesStaleRoomAlias(t *testing.T) {
 	matrixClient.created = false
 	creds := fakeCredentialStore{}
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:       matrixClient,
+		MatrixOps:    matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		Gateway:      fakeGateway{},
 		Creds:        creds,
 		MatrixDomain: "localhost",
@@ -368,7 +368,7 @@ func TestProvisionWorkerTeamMemberRoomMeta(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	creds := fakeCredentialStore{}
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:       matrixClient,
+		MatrixOps:    matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		Gateway:      fakeGateway{},
 		Creds:        creds,
 		MatrixDomain: "localhost",
@@ -403,7 +403,7 @@ func TestProvisionWorkerTeamMemberRoomMeta(t *testing.T) {
 func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		Gateway:   fakeGateway{},
 		Creds:     fakeCredentialStore{},
 		AdminUser: "admin",
@@ -428,7 +428,7 @@ func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 func TestArchiveTeamRoomsMarksRoomNamesDeleted(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -471,7 +471,7 @@ func (f *fakeTeamMatrix) VerifyAccessToken(_ context.Context, _ string) error { 
 func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -566,7 +566,7 @@ func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testi
 func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -628,7 +628,7 @@ func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) 
 func TestProvisionTeamRoomsKeepsFallbackGlobalAdmin(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -657,7 +657,7 @@ func TestProvisionTeamRoomsSkipsNewFallbackLeaderDMReconcileWithoutJoinedActor(t
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.listErrs["!leader-dm:localhost"] = errors.New("M_FORBIDDEN: not a room member")
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -676,7 +676,7 @@ func TestProvisionTeamRoomsSkipsNewFallbackLeaderDMReconcileWithoutJoinedActor(t
 func TestProvisionTeamRoomsDerivesTeamAdminMatrixIDFromName(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -705,7 +705,7 @@ func TestProvisionTeamRoomsDoesNotLeaveExistingLeaderDM(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.created = false
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -729,7 +729,7 @@ func TestProvisionTeamRoomsLeaderJoinsExistingFallbackLeaderDMBeforeReconcile(t 
 	matrixClient.created = false
 	matrixClient.tokenUsers["leader-token"] = "@lead:localhost"
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 		Creds: fakeCredentialStore{
 			"lead-cr": {MatrixToken: "leader-token"},
@@ -757,7 +757,7 @@ func TestProvisionTeamRoomsLeaderJoinsExistingFallbackLeaderDMBeforeReconcile(t 
 func TestProvisionTeamRoomsRequiresTeamAdminActorToken(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -775,7 +775,7 @@ func TestProvisionTeamRoomsUsesTeamAdminTokenForExistingTeamRoom(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.created = false
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
@@ -806,6 +806,87 @@ func TestProvisionTeamRoomsUsesTeamAdminTokenForExistingTeamRoom(t *testing.T) {
 	}
 }
 
+func TestProvisionTeamRoomsRenamesTeamRoomForDisplayName(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
+		AdminUser: "admin",
+	})
+
+	res, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName:    "alpha",
+		DisplayName: "Alpha Squad",
+		LeaderName:  "lead",
+		WorkerNames: []string{"dev"},
+		Generation:  2,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionTeamRooms: %v", err)
+	}
+	if !res.DisplayNameSynced {
+		t.Fatalf("DisplayNameSynced=false, want true after a displayName change")
+	}
+	if got := matrixClient.createRooms[0].Name; got != "Team: Alpha Squad" {
+		t.Fatalf("team room name=%q, want %q", got, "Team: Alpha Squad")
+	}
+	if len(matrixClient.roomNames) != 1 {
+		t.Fatalf("SetRoomName calls=%d, want 1", len(matrixClient.roomNames))
+	}
+	if got, want := matrixClient.roomNames[0], (roomNameCall{roomID: "!team:localhost", name: "Team: Alpha Squad", token: ""}); got != want {
+		t.Fatalf("SetRoomName call=%+v, want %+v", got, want)
+	}
+}
+
+func TestProvisionTeamRoomsSkipsRenameWhenDisplayNameGenerationSynced(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
+		AdminUser: "admin",
+	})
+
+	res, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName:                    "alpha",
+		DisplayName:                 "Alpha Squad",
+		LeaderName:                  "lead",
+		WorkerNames:                 []string{"dev"},
+		Generation:                  2,
+		DisplayNameSyncedGeneration: 2,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionTeamRooms: %v", err)
+	}
+	if res.DisplayNameSynced {
+		t.Fatalf("DisplayNameSynced=true, want false when the generation is already synced")
+	}
+	if len(matrixClient.roomNames) != 0 {
+		t.Fatalf("SetRoomName calls=%d, want 0", len(matrixClient.roomNames))
+	}
+}
+
+func TestProvisionTeamRoomsFallsBackToTeamNameWithoutDisplayName(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
+		AdminUser: "admin",
+	})
+
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName:    "alpha",
+		LeaderName:  "lead",
+		WorkerNames: []string{"dev"},
+		Generation:  2,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionTeamRooms: %v", err)
+	}
+	if got := matrixClient.createRooms[0].Name; got != "Team: alpha" {
+		t.Fatalf("team room name=%q, want %q", got, "Team: alpha")
+	}
+	if len(matrixClient.roomNames) != 0 {
+		t.Fatalf("SetRoomName calls=%d, want 0 without a configured displayName", len(matrixClient.roomNames))
+	}
+}
+
 func TestReconcileRoomMembershipForceLeavesWhenKickPowerDenied(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.members["!team:localhost"] = []matrix.RoomMember{
@@ -814,7 +895,7 @@ func TestReconcileRoomMembershipForceLeavesWhenKickPowerDenied(t *testing.T) {
 	}
 	matrixClient.kickErr = errors.New("HTTP 403 M_FORBIDDEN: sender does not have enough power to kick target user")
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:    matrixClient,
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
 		AdminUser: "admin",
 	})
 
