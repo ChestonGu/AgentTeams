@@ -17,6 +17,10 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_LLM_API_KEY` | Yes | - | LLM API key |
 | `AGENTTEAMS_LLM_PROVIDER` | No | `qwen` | LLM provider (`qwen` for Alibaba Cloud, `openai-compat` for OpenAI-compatible APIs) |
 | `AGENTTEAMS_DEFAULT_MODEL` | No | `qwen3.5-plus` | Default model ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | No | (model default) | Override context window size for custom models |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | No | (model default) | Override max output tokens for custom models |
+| `AGENTTEAMS_MODEL_VISION` | No | (model default) | Override vision capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
+| `AGENTTEAMS_MODEL_REASONING` | No | (model default) | Override reasoning capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
 | `AGENTTEAMS_ADMIN_USER` | No | `admin` | Human admin Matrix username |
 | `AGENTTEAMS_ADMIN_PASSWORD` | No | (auto-generated) | Human admin password (min 8 chars, MinIO requirement) |
 | `AGENTTEAMS_MATRIX_DOMAIN` | No | `matrix-local.agentteams.io:18080` | Matrix server domain (used inside container) |
@@ -32,11 +36,11 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
 | `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
-| `AGENTTEAMS_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `agentteams-manager` image) or **`copaw`** (`agentteams-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager engine: **`qwenpaw`** (default, `agentteams-manager-qwenpaw` image) or **`openclaw`** (`agentteams-manager` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
 
-### QwenPaw Manager (formerly CoPaw, `AGENTTEAMS_MANAGER_RUNTIME=copaw`)
+### QwenPaw Manager (`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`)
 
-When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-copaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
+When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-qwenpaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
 
 ### Customizing the Manager Agent
 
@@ -48,16 +52,52 @@ The Manager Agent's behavior is defined by three files stored in the **`agenttea
 
 If your install still exposes MinIO on localhost, use the MinIO Console; otherwise use `mc` from inside **`agentteams-controller`** or edit the mirrored files under the workspace directory on the host.
 
-### Adding Skills
+### Installing a Skill on a Worker through the Manager
 
-The repo ships **16** built-in Manager skills under `manager/agent/skills/` (synced into the bucket as `agents/manager/skills/<name>/SKILL.md`): **channel-management**, **file-sync-management**, **git-delegation-management**, **agentteams-find-worker**, **human-management**, **matrix-server-management**, **mcp-server-management**, **mcporter**, **model-switch**, **project-management**, **service-publishing**, **task-coordination**, **task-management**, **team-management**, **worker-management**, **worker-model-switch**.
+There are two supported ways to give the Manager the Skill files.
 
-Place additional self-contained `SKILL.md` files under `agents/manager/skills/<skill-name>/`. The Manager runtime auto-discovers skills from that directory.
+#### Use the Manager workspace
 
-To add a new skill:
-1. Create directory: `agents/manager/skills/<your-skill-name>/`
-2. Write `SKILL.md` with complete API reference and examples
-3. The Manager Agent will discover it automatically (~300ms)
+Put the complete skill directory in the Manager workspace's Worker skill library. With the default workspace location, the host-side layout is:
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/
+├── SKILL.md
+├── scripts/       # optional
+└── references/    # optional
+```
+
+If `AGENTTEAMS_WORKSPACE_DIR` uses a custom location, replace `~/agentteams-manager` with that directory. Inside the Manager container, the same skill is available as `~/worker-skills/alert-fusion/`. The directory name and the `name` in `SKILL.md` should match.
+
+Then send the Manager a direct instruction, for example:
+
+> Install the `alert-fusion` skill for Worker `amy-ai`. The skill files are in `~/worker-skills/alert-fusion/`. Verify the installation and confirm that the Worker assignment includes this skill.
+
+#### Send a ZIP attachment to the Manager
+
+Package one complete Skill root as a ZIP. The archive must contain `SKILL.md` and may also contain `scripts/` and `references/`. Send the ZIP as a file attachment in a Manager conversation, then send an instruction such as:
+
+> Install the Skill from the ZIP attachment I just sent for Worker `amy-ai`. Safely extract and validate `SKILL.md`, stage the complete Skill under `~/worker-skills/`, distribute it, and verify the final assignment.
+
+The built-in Matrix conversation supports file attachments. The Manager downloads the attachment, rejects unsafe or ambiguous archives, extracts it into a temporary directory, validates the Skill metadata, and then places the complete directory in the Worker skill library before distribution. Send a ZIP rather than separate files when the Skill includes scripts or references.
+
+The Manager validates the skill source, uploads the complete directory to the Worker's isolated storage, verifies the remote `SKILL.md`, and only then updates the Worker's assigned skills. For a QwenPaw Worker, the runtime pulls the assignment, copies the skill into its native workspace, refreshes skill discovery, and enables the skill. No manual QwenPaw restart is required.
+
+You can verify the assignment through natural-language conversation with the Manager:
+
+> Check the skills currently assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+To verify runtime availability rather than only the assignment record, ask:
+
+> Ask Worker `amy-ai` to confirm that it can discover and use the `alert-fusion` skill.
+
+For operator-side inspection or troubleshooting, run the equivalent query from the Manager or controller container:
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+If the Manager reports that the source is missing, check that `SKILL.md` is under `worker-skills/<skill-name>/`, not directly under `worker-skills/`.
 
 ### Managing MCP Servers
 

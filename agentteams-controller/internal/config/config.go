@@ -170,6 +170,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
+	ModelVision        *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -211,6 +213,7 @@ type WorkerEnvDefaults struct {
 	StoragePrefix        string
 	FSAccessKey          string // shared static S3 access key (external-OSS static-credential mode); empty in embedded/per-worker mode
 	FSSecretKey          string // shared static S3 secret key (external-OSS static-credential mode); empty in embedded/per-worker mode
+	StorageProvider      string
 	ControllerURL        string
 	AIGatewayURL         string
 	MatrixURL            string
@@ -348,7 +351,7 @@ func LoadConfig() *Config {
 
 		ManagerEnabled:          envOrDefault("AGENTTEAMS_MANAGER_ENABLED", "true") == "true",
 		ManagerModel:            firstNonEmpty(os.Getenv("AGENTTEAMS_MANAGER_MODEL"), envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus")),
-		ManagerRuntime:          envOrDefault("AGENTTEAMS_MANAGER_RUNTIME", "openclaw"),
+		ManagerRuntime:          envOrDefault("AGENTTEAMS_MANAGER_RUNTIME", "qwenpaw"),
 		ManagerImage:            os.Getenv("AGENTTEAMS_MANAGER_IMAGE"),
 		DefaultWorkerRuntime:    os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
 		K8sManagerCPURequest:    envOrDefault("AGENTTEAMS_K8S_MANAGER_CPU_REQUEST", "500m"),
@@ -387,6 +390,8 @@ func LoadConfig() *Config {
 		Runtime:            envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
 		ModelContextWindow: envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
 		ModelMaxTokens:     envOrDefaultInt("AGENTTEAMS_MODEL_MAX_TOKENS", 0),
+		ModelVision:        envOptionalBool("AGENTTEAMS_MODEL_VISION"),
+		ModelReasoning:     envOptionalBool("AGENTTEAMS_MODEL_REASONING"),
 
 		LLMProvider:                envOrDefault("AGENTTEAMS_LLM_PROVIDER", "qwen"),
 		LLMAPIKey:                  os.Getenv("AGENTTEAMS_LLM_API_KEY"),
@@ -412,6 +417,7 @@ func LoadConfig() *Config {
 			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
 			FSAccessKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_ACCESS_KEY"), os.Getenv("AGENTTEAMS_MINIO_USER")),
 			FSSecretKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_SECRET_KEY"), os.Getenv("AGENTTEAMS_MINIO_PASSWORD")),
+			StorageProvider:      envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
 			ControllerURL:        os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
@@ -519,6 +525,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		DefaultNetwork:       envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -561,6 +568,7 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		WorkerCPU:            c.K8sWorkerCPU,
 		WorkerMemory:         c.K8sWorkerMemory,
 		ControllerName:       c.ControllerName,
@@ -577,6 +585,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		CopawWorkerImage:             envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,
@@ -622,6 +631,17 @@ func envBoolDefault(key string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
+}
+
+// envOptionalBool returns nil when the env var is unset, so callers can
+// distinguish "not configured" from "explicitly false".
+func envOptionalBool(key string) *bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	b := v == "1" || v == "true" || v == "True" || v == "TRUE"
+	return &b
 }
 
 func firstNonEmpty(values ...string) string {
@@ -851,6 +871,8 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		E2EEEnabled:        c.MatrixE2EE,
 		ModelContextWindow: c.ModelContextWindow,
 		ModelMaxTokens:     c.ModelMaxTokens,
+		ModelVision:        c.ModelVision,
+		ModelReasoning:     c.ModelReasoning,
 		CMSTracesEnabled:   c.CMSTracesEnabled,
 		CMSMetricsEnabled:  c.CMSMetricsEnabled,
 		CMSEndpoint:        c.CMSEndpoint,

@@ -9,7 +9,7 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 | Layer | Role | Typical images |
 |--------|------|------------------|
 | **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
-| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-copaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
+| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
 | **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, or `agentteams-hermes-worker` |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
@@ -156,7 +156,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 | Mode | `AGENTTEAMS_MANAGER_RUNTIME` | Behavior |
 |------|---------------------------|----------|
 | **OpenClaw** | `openclaw` (default) | Node/OpenClaw gateway; Matrix “message tool” style integration |
-| **QwenPaw** | `copaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-copaw-manager.sh`) |
+| **QwenPaw** | `qwenpaw` (default) | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-qwenpaw-manager.sh`) |
 
 **Hermes** is a **Worker** runtime in the API and charts; Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
 
@@ -167,7 +167,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 ### CRDs (`agentteams.io/v1beta1`)
 
 1. **Worker** — model, runtime, image, skills, MCP servers, optional **expose** ports, **channelPolicy**, **state** (`Running` / `Sleeping` / `Stopped`), **accessEntries** (cloud credential scoping when provider sidecar is used).
-2. **Manager** — model, runtime, image, soul/agents overrides, skills, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
+2. **Manager** — model, runtime, image, soul/agents overrides, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
 3. **Team** — **Leader** + **Workers** specs, optional **admin**, **peerMentions**, team **channelPolicy**; status aggregates member readiness and rooms (**team room**, **leader DM**, per-member **RoomID** with Manager).
 4. **Human** — display name, email, **permissionLevel**, accessible teams/workers; status includes Matrix user, initial password (once), rooms.
 
@@ -207,7 +207,7 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 ### Worker skills
 
 - **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
-- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): the Manager can push selected packages to workers when `spec.skills` references them.
+- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): after an administrator asks the Manager to install a named skill for a Worker, the Manager verifies and uploads the skill before adding it to `spec.skills`.
 
 ### Team Leader skills
 

@@ -17,6 +17,10 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_LLM_API_KEY` | 是 | - | LLM API Key |
 | `AGENTTEAMS_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
 | `AGENTTEAMS_DEFAULT_MODEL` | 否 | `qwen3.5-plus` | 默认模型 ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | 否 | (模型默认) | 覆盖自定义模型的上下文窗口大小 |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | 否 | (模型默认) | 覆盖自定义模型的最大输出 Token 数 |
+| `AGENTTEAMS_MODEL_VISION` | 否 | (模型默认) | 覆盖自定义模型的多模态视觉能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
+| `AGENTTEAMS_MODEL_REASONING` | 否 | (模型默认) | 覆盖自定义模型的推理能力（`true`/`false`）。仅模型不在内置预设表中时需要。 |
 | `AGENTTEAMS_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
 | `AGENTTEAMS_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
 | `AGENTTEAMS_MATRIX_DOMAIN` | 否 | `matrix-local.agentteams.io:18080` | Matrix 服务器域名（容器内使用） |
@@ -32,11 +36,11 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-qwenpaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
 
 ### QwenPaw Manager（原 CoPaw，`AGENTTEAMS_MANAGER_RUNTIME=copaw`）
 
-安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-copaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-qwenpaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
 ### 自定义 Manager Agent
 
@@ -48,16 +52,52 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 若本地仍暴露 MinIO 端口，可使用 MinIO 控制台；否则在 **`agentteams-controller`** 内使用 `mc`，或编辑宿主机工作区中的镜像文件。
 
-### 添加技能
+### 通过 Manager 为 Worker 安装 Skill
 
-仓库内置 **16** 个 Manager 技能，源码位于 `manager/agent/skills/`，同步到桶内路径 `agents/manager/skills/<name>/SKILL.md`：**channel-management**、**file-sync-management**、**git-delegation-management**、**agentteams-find-worker**、**human-management**、**matrix-server-management**、**mcp-server-management**、**mcporter**、**model-switch**、**project-management**、**service-publishing**、**task-coordination**、**task-management**、**team-management**、**worker-management**、**worker-model-switch**。
+有两种方式可以把 Skill 文件交给 Manager。
 
-将更多自包含的 `SKILL.md` 放到 `agents/manager/skills/<skill-name>/`。Manager 运行时会自动发现该目录下的技能。
+#### 使用 Manager 工作空间
 
-添加新技能的步骤：
-1. 创建目录：`agents/manager/skills/<your-skill-name>/`
-2. 编写 `SKILL.md`，包含完整的 API 参考和示例
-3. Manager Agent 会自动发现它（约 300ms）
+将完整的 Skill 目录放入 Manager 工作空间的 Worker Skill 库。使用默认工作空间时，宿主机目录结构如下：
+
+```text
+~/agentteams-manager/worker-skills/alert-fusion/
+├── SKILL.md
+├── scripts/       # 可选
+└── references/    # 可选
+```
+
+如果通过 `AGENTTEAMS_WORKSPACE_DIR` 配置了其他工作空间，请将 `~/agentteams-manager` 替换为实际目录。在 Manager 容器中，同一个 Skill 的路径为 `~/worker-skills/alert-fusion/`。目录名应与 `SKILL.md` 中的 `name` 保持一致。
+
+然后直接向 Manager 下达指令，例如：
+
+> 请为 Worker `amy-ai` 安装 `alert-fusion` Skill。Skill 文件位于 `~/worker-skills/alert-fusion/`。安装完成后请验证，并确认该 Skill 已加入 Worker 的分配列表。
+
+#### 直接向 Manager 发送 ZIP 附件
+
+将一个完整的 Skill 根目录打包为 ZIP。压缩包必须包含 `SKILL.md`，也可以包含 `scripts/` 和 `references/`。在 Manager 对话中把 ZIP 作为文件附件发送，然后继续发送指令，例如：
+
+> 请将我刚发送的 ZIP 附件中的 Skill 安装给 Worker `amy-ai`。请安全解压并校验 `SKILL.md`，将完整 Skill 放入 `~/worker-skills/`，完成分发后检查最终分配结果。
+
+内置 Matrix 对话支持文件附件。Manager 会下载附件，拒绝存在不安全路径或包含多个 Skill 根目录的压缩包，在临时目录中解压并校验 Skill 元数据，然后才将完整目录放入 Worker Skill 库并开始分发。如果 Skill 还包含脚本或参考资料，应发送完整 ZIP，而不是分别发送多个文件。
+
+Manager 会依次校验 Skill 源文件、将完整目录上传到 Worker 的隔离存储、确认远端 `SKILL.md` 存在，然后才更新 Worker 的 Skill 分配。对于 QwenPaw Worker，运行时会拉取新的分配，将 Skill 复制到原生工作空间，刷新 Skill 列表并启用该 Skill，无需手动重启 QwenPaw。
+
+可以直接通过自然语言对话让 Manager 检查分配结果：
+
+> 请检查 Worker `amy-ai` 当前分配的 Skill，并确认其中是否包含 `alert-fusion`。
+
+如果需要验证的不只是分配记录，而是 Worker 运行时是否已经实际可用，可以继续询问：
+
+> 请让 Worker `amy-ai` 确认它能够发现并使用 `alert-fusion` Skill。
+
+如果需要从运维侧检查或排障，也可以在 Manager 或 controller 容器中执行等价查询：
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+如果 Manager 提示找不到源文件，请确认 `SKILL.md` 位于 `worker-skills/<skill-name>/` 下，而不是直接放在 `worker-skills/` 根目录。
 
 ### 管理 MCP Server
 

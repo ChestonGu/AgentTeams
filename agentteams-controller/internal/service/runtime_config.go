@@ -69,12 +69,14 @@ type memberRuntimeConfigMatrix struct {
 type memberRuntimeConfigDesired struct {
 	Model              *memberRuntimeConfigModel         `json:"model,omitempty"`
 	AgentPackage       *memberRuntimeConfigAgentPackage  `json:"agentPackage,omitempty"`
+	InlineConfig       *memberRuntimeConfigInlineConfig  `json:"inlineConfig,omitempty"`
 	SkillRegistry      *memberRuntimeConfigSkillRegistry `json:"skillRegistry,omitempty"`
 	MCPServers         []v1beta1.MCPServer               `json:"mcpServers,omitempty"`
 	ChannelPolicy      *v1beta1.ChannelPolicySpec        `json:"channelPolicy,omitempty"`
 	AgentIdentity      *v1beta1.AgentIdentitySpec        `json:"agentIdentity,omitempty"`
 	CredentialBindings []v1beta1.CredentialBinding       `json:"credentialBindings,omitempty"`
 	Channels           *memberRuntimeConfigChannels      `json:"channels,omitempty"`
+	Skills             []string                          `json:"skills,omitempty"`
 	State              string                            `json:"state"`
 }
 
@@ -87,6 +89,12 @@ type memberRuntimeConfigModel struct {
 
 type memberRuntimeConfigAgentPackage struct {
 	Ref string `json:"ref"`
+}
+
+type memberRuntimeConfigInlineConfig struct {
+	Identity string `json:"identity,omitempty"`
+	Soul     string `json:"soul,omitempty"`
+	Agents   string `json:"agents,omitempty"`
 }
 
 type memberRuntimeConfigSkillRegistry struct {
@@ -248,6 +256,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		ChannelPolicy:      req.Spec.ChannelPolicy,
 		AgentIdentity:      runtimeAgentIdentity(req.Spec),
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
+		Skills:             runtimeSkillNames(req.Spec),
 		State:              req.Spec.DesiredState(),
 	}
 	if req.Spec.Model != "" && !isNativeConfigModel(req.Spec.Model) {
@@ -264,6 +273,13 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	}
 	if req.Spec.Package != "" {
 		desired.AgentPackage = &memberRuntimeConfigAgentPackage{Ref: req.Spec.Package}
+	}
+	if req.Spec.Identity != "" || req.Spec.Soul != "" || req.Spec.Agents != "" {
+		desired.InlineConfig = &memberRuntimeConfigInlineConfig{
+			Identity: req.Spec.Identity,
+			Soul:     req.Spec.Soul,
+			Agents:   req.Spec.Agents,
+		}
 	}
 	if req.SkillRegistryURL != "" || req.SkillRegistryAuthType != "" {
 		desired.SkillRegistry = &memberRuntimeConfigSkillRegistry{
@@ -318,6 +334,31 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	applyRuntimeTeamContext(&doc, req)
 
 	return doc, nil
+}
+
+func runtimeSkillNames(spec v1beta1.WorkerSpec) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	for _, name := range spec.Skills {
+		add(name)
+	}
+	for _, source := range spec.RemoteSkills {
+		for _, skill := range source.Skills {
+			add(skill.Name)
+		}
+	}
+	return names
 }
 
 func isNativeConfigModel(model string) bool {

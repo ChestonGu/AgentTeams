@@ -348,6 +348,14 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 		Spec: v1beta1.WorkerSpec{
 			Model:   "qwen-plus",
 			Package: "nacos://registry/ns/dev-worker?version=1.2.0",
+			Skills:  []string{"competition-skill", "shared-skill"},
+			RemoteSkills: []v1beta1.RemoteSkillSource{{
+				Source: "nacos://registry/ns",
+				Skills: []v1beta1.RemoteSkill{{Name: "shared-skill"}, {Name: "remote-skill"}},
+			}},
+			Identity: "frontend specialist",
+			Soul:     "build accessible user interfaces",
+			Agents:   "follow the project workflow",
 			AgentIdentity: &v1beta1.AgentIdentitySpec{
 				WorkloadIdentityName: "wi-worker-a",
 			},
@@ -423,12 +431,26 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	}
 
 	desired := doc["desired"].(map[string]any)
+	skills := desired["skills"].([]any)
+	if got := fmt.Sprint(skills); got != "[competition-skill shared-skill remote-skill]" {
+		t.Fatalf("desired.skills=%s", got)
+	}
 	model := desired["model"].(map[string]any)
 	if got := fmt.Sprint(model["model"]); got != "qwen-plus" {
 		t.Fatalf("desired.model.model=%q", got)
 	}
 	if got := fmt.Sprint(model["gatewayUrl"]); got != "https://aigw.example.com" {
 		t.Fatalf("desired.model.gatewayUrl=%q", got)
+	}
+	inlineConfig := desired["inlineConfig"].(map[string]any)
+	if got := fmt.Sprint(inlineConfig["identity"]); got != "frontend specialist" {
+		t.Fatalf("desired.inlineConfig.identity=%q", got)
+	}
+	if got := fmt.Sprint(inlineConfig["soul"]); got != "build accessible user interfaces" {
+		t.Fatalf("desired.inlineConfig.soul=%q", got)
+	}
+	if got := fmt.Sprint(inlineConfig["agents"]); got != "follow the project workflow" {
+		t.Fatalf("desired.inlineConfig.agents=%q", got)
 	}
 	agentPackage := desired["agentPackage"].(map[string]any)
 	if got := fmt.Sprint(agentPackage["ref"]); got != "nacos://registry/ns/dev-worker?version=1.2.0" {
