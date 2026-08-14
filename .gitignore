@@ -16,6 +16,7 @@
 # Local tooling runtime artifacts
 .omo/
 plugins/.omo/
+.opencode/
 
 # Dependencies
 node_modules/
