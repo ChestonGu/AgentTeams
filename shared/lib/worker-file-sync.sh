@@ -36,6 +36,12 @@ worker_sync_should_push() {
 worker_sync_mirror_all() {
     local workspace="$1"
     local remote_prefix="$2"
+    # Exclude non-UTF-8 file names (S3 keys must be valid UTF-8; a single bad
+    # name would fail the whole push).
+    local _excl=()
+    while IFS= read -r _rel; do
+        [ -n "${_rel}" ] && _excl+=(--exclude "${_rel}")
+    done < <(collect_nonutf8_files "${workspace}")
 
     mc mirror "${workspace}/" "${remote_prefix}/" --overwrite \
         --exclude "openclaw.json" \
@@ -44,7 +50,8 @@ worker_sync_mirror_all() {
         --exclude ".cache/**" --exclude ".npm/**" \
         --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
         --exclude ".last-pull" \
-        --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**"
+        --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
+        "${_excl[@]}"
 }
 
 worker_sync_push_once() {
@@ -77,6 +84,7 @@ worker_sync_push_once() {
 
     while IFS= read -r -d '' file; do
         [ -f "${file}" ] || continue
+        is_utf8_name "${file##*/}" || continue
         relative_path="${file#"${workspace}"/}"
         worker_sync_should_push "${relative_path}" || continue
         printf '%s\0' "${file}" >> "${upload_manifest}"
@@ -95,6 +103,7 @@ worker_sync_push_once() {
     else
         while IFS= read -r -d '' file; do
             [ -f "${file}" ] || continue
+            is_utf8_name "${file##*/}" || continue
             relative_path="${file#"${workspace}"/}"
             if ! mc cp "${file}" "${remote_prefix}/${relative_path}"; then
                 rm -f "${cycle_start}" "${manifest}" "${upload_manifest}"

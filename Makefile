@@ -146,7 +146,7 @@ OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
 	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
 	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(SHARED_LIB_CTX) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
 	@rm -rf ./agentteams-controller/agent
@@ -291,7 +291,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building agentteams-controller for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 			--manifest $(CONTROLLER_TAG) \
 			./agentteams-controller/ && ) true
 	podman manifest push --all $(CONTROLLER_TAG) docker://$(CONTROLLER_TAG)
@@ -302,7 +302,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(CONTROLLER_TAG) \
 		$(if $(PUSH_LATEST),-t $(CONTROLLER_IMAGE):latest) \
 		--push \

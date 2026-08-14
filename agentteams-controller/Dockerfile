@@ -20,7 +20,16 @@ COPY go.mod go.sum ./
 RUN go mod download || true
 
 COPY . .
-RUN CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /agentteams-controller ./cmd/controller/
+# Debug-only pprof build: `make build-agentteams-controller DOCKER_BUILD_ARGS="--build-arg ENABLE_PPROF=true"`
+# compiles cmd/controller with `-tags pprof` so the image exposes
+# /debug/pprof on 6060 (AGENTTEAMS_PPROF_ADDR overridable). Default false keeps
+# the release image free of pprof code and its extra listener.
+ARG ENABLE_PPROF=false
+RUN if [ "$ENABLE_PPROF" = "true" ]; then \
+        CGO_ENABLED=1 go build -tags pprof -ldflags '-extldflags "-static"' -o /agentteams-controller ./cmd/controller/; \
+    else \
+        CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /agentteams-controller ./cmd/controller/; \
+    fi
 RUN CGO_ENABLED=0 go build -o /agt ./cmd/agt/
 
 # ============ Stage 2: mc (MinIO Client) ============
@@ -51,6 +60,7 @@ COPY --from=builder /agt /usr/local/bin/agt
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/agentteams/config/crd/
 COPY agent/ /opt/agentteams/agent/
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # Default endpoint + token-file for the bundled `agt` CLI. The controller process mints a
 # long-lived admin SA token at startup (see internal/app.bootstrapAdminCLIToken)

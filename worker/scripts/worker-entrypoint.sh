@@ -187,6 +187,34 @@ worker_sync_init "${WORKER_SYNC_STATE_DIR}" "${PULL_MARKER}"
             "${WORKER_SYNC_STATE_DIR}"; then
             log "WARNING: Local->Remote incremental sync failed; changes will be retried"
         fi
+
+        # Notify on new output files: if files appeared under outputs/ since
+        # the last notification, invoke the callback script. Opt-in and
+        # fire-and-forget (10s timeout) so a slow/dead endpoint never blocks
+        # the sync loop. The platform pulls artifacts from MinIO itself.
+        # Script resolution: prefer a workspace copy (editable via MinIO,
+        # no rebuild); fall back to the image-bundled default.
+        if [ -d "${WORKSPACE}/outputs" ]; then
+            NOTIFY_MARKER="${WORKSPACE}/.outputs-notify-marker"
+            NEW_OUTPUTS="$(find "${WORKSPACE}/outputs/" -type f -newer "${NOTIFY_MARKER}" 2>/dev/null)"
+            if [ -n "${NEW_OUTPUTS}" ]; then
+                NOTIFY_SCRIPT="${WORKSPACE}/scripts/notify-platform.sh"
+                if [ ! -f "${NOTIFY_SCRIPT}" ]; then
+                    NOTIFY_SCRIPT="/opt/agentteams/scripts/notify-platform.sh"
+                fi
+                if [ -f "${NOTIFY_SCRIPT}" ]; then
+                    REL_OUTPUTS="$(printf '%s\n' "${NEW_OUTPUTS}" | sed "s|^${WORKSPACE}/||")"
+                    export AGENTTEAMS_NOTIFY_WORKER="${WORKER_NAME}"
+                    export AGENTTEAMS_NOTIFY_MINIO_PREFIX="${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}"
+                    export AGENTTEAMS_NOTIFY_ROOM="$(jq -r '.channels.matrix.homeRoomId // .channels.matrix.userId // empty' "${WORKSPACE}/openclaw.json" 2>/dev/null)"
+                    export AGENTTEAMS_NOTIFY_OUTPUTS="${REL_OUTPUTS}"
+                    log "outputs: new artifacts detected, invoking notify-platform.sh"
+                    timeout 10 /bin/sh "${NOTIFY_SCRIPT}" >>/tmp/notify-platform.log 2>&1 \
+                        || log "WARNING: notify-platform.sh exited non-zero (see /tmp/notify-platform.log)"
+                fi
+                touch "${NOTIFY_MARKER}"
+            fi
+        fi
         sleep 5
     done
 ) &

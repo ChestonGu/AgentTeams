@@ -79,6 +79,10 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	defer func() { metrics.Observe("manager", start, reterr) }()
 
 	logger := log.FromContext(ctx)
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"manager", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
 
 	var mgr v1beta1.Manager
 	if err := r.Get(ctx, req.NamespacedName, &mgr); err != nil {
@@ -102,7 +106,7 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 			mgr.Status.ObservedGeneration = mgr.Generation
 			mgr.Status.Message = ""
 		} else {
-			mgr.Status.Message = reterr.Error()
+			mgr.Status.Message = conciseStatusMessage(reterr)
 		}
 		if mgr.Spec.Image != "" {
 			mgr.Status.Version = mgr.Spec.Image

@@ -24,7 +24,7 @@ import (
 
 // DefaultEntriesForWorker returns the CR-layer default AccessEntry set
 // applied when a Worker CR omits spec.accessEntries. Mirrors the
-// embedded-mode MinIO policy produced by oss.MinIOAdminClient.buildWorkerPolicy
+// embedded-mode MinIO policy produced by oss.buildWorkerPolicy
 // (for a standalone worker): read/write/list/delete on the worker's own
 // agent prefix and on the shared prefix, scoped to the workspace bucket.
 //
@@ -52,7 +52,7 @@ func DefaultEntriesForWorker() []v1beta1.AccessEntry {
 // DefaultEntriesForTeamMember returns the CR-layer default AccessEntry
 // set applied when a Worker referenced by a Team omits accessEntries.
 // Mirrors the embedded-mode policy produced by
-// oss.MinIOAdminClient.buildWorkerPolicy when teamName != "": read/
+// oss.buildWorkerPolicy when teamName != "": read/
 // write/list/delete on the member's own agent prefix, on the shared
 // prefix, and on the team-scoped prefix.
 //

@@ -476,6 +476,18 @@ type TeamStatus struct {
 	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
 	TotalWorkers   int    `json:"totalWorkers,omitempty"`
 	Message        string `json:"message,omitempty"`
+	// ObservedGeneration is the most recent generation observed by the
+	// controller. Used to detect spec changes and short-circuit expensive
+	// reconcile passes for unchanged Active teams after a controller restart
+	// or informer re-sync. Mirrors WorkerStatus.ObservedGeneration and
+	// ManagerStatus.ObservedGeneration.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// ConsecutiveFailures tracks consecutive reconcile failures for
+	// exponential backoff. Reset to 0 on any successful pass.
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+	// MaxRetriesReached stops automatic requeuing after maxTeamRetries.
+	// Reset when the user sets the hiclaw.io/retry annotation on the Team CR.
+	MaxRetriesReached bool `json:"maxRetriesReached,omitempty"`
 	// ReconcileAttempt is a monotonic counter incremented on each reconcile
 	// pass. Used to correlate log entries across passes and diagnose
 	// workqueue scheduling gaps (e.g., long gaps between attempts indicate
@@ -605,6 +617,21 @@ type HumanStatus struct {
 	Rooms                       []string `json:"rooms,omitempty"`
 	EmailSent                   bool     `json:"emailSent,omitempty"`
 	Message                     string   `json:"message,omitempty"`
+	// ObservedGeneration is the most recent generation observed by the
+	// controller. Mirrors WorkerStatus.ObservedGeneration / TeamStatus /
+	// ManagerStatus: it lets restarts and informer re-syncs distinguish
+	// spec changes from plain list-based requeues.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// ConsecutiveFailures tracks consecutive reconcile failures for
+	// exponential backoff. Reset to 0 on any successful pass.
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+	// MaxRetriesReached stops automatic requeuing after maxHumanRetries.
+	// Reset when the user sets the hiclaw.io/retry annotation on the Human CR.
+	MaxRetriesReached bool `json:"maxRetriesReached,omitempty"`
+	// PhaseTransitionTime records when the current Phase was last entered.
+	// Used by the backoff guard to skip passes arriving before the
+	// exponential backoff window from the last failure has elapsed.
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 }
 
 // EffectiveUsername returns the Matrix localpart for a Human.

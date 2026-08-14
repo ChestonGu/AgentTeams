@@ -3,6 +3,17 @@
 
 set -euo pipefail
 
+# Defensive log() fallback: agentteams-env.sh provides log() via base.sh or its
+# own fallback, but this script must keep working even when agentteams-env.sh
+# fails to load 閳?otherwise an mc failure below turns into a misleading
+# "log: command not found".
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[agentteams $(date '+%H:%M:%S')] $*"; }
+fi
+
+# ============================================================
+# Parse arguments
+# ============================================================
 WORKER_NAME=""
 SKILL_NAME=""
 ADD_SKILL=""

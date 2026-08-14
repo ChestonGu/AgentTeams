@@ -75,7 +75,7 @@ fi
 # Why: changing runtime requires destroying the old container and
 # starting a new one from a different image (openclaw vs copaw vs
 # hermes vs openhuman). The controller's reconcile loop is the only path that
-# does this correctly — see agentteams-controller/internal/controller/
+# does this correctly 閳?see agentteams-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
 # it in-place from the manager would double-write config files and
 # leave the running container on the old runtime.
@@ -110,7 +110,7 @@ if [ -n "${RUNTIME}" ]; then
     log "  ${CLI_OUT}"
 
     # Step 2: Poll for phase=Running. Container recreate typically takes
-    # 10-45s (openclaw 10-30, copaw 15-45, hermes 15-45 — see
+    # 10-45s (openclaw 10-30, copaw 15-45, hermes 15-45 閳?see
     # references/create-worker.md Step 2.5). Cap at 120s to absorb image
     # pull on a cold node.
     log "Step 2: Polling phase until Running (timeout 120s)..."
@@ -199,7 +199,7 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     log "Step 2: Deploying package contents..."
     AGENT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
 
-    # Copy config/ contents (SOUL.md, etc.) — overwrites existing
+    # Copy config/ contents (SOUL.md, etc.) 閳?overwrites existing
     # AGENTS.md is handled specially: user content wrapped with builtin markers
     if [ -d "${PACKAGE_DIR}/config" ]; then
         for f in "${PACKAGE_DIR}/config"/*; do
@@ -280,7 +280,7 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
 - **Coordinator**: @${_team_leader}:${MATRIX_DOMAIN} (Team Leader of ${_team_id})
 - Report task completion, blockers, and questions to your coordinator
 - Only respond to @mentions from your coordinator and Admin
-- Do NOT @mention Manager directly — all communication goes through your Team Leader
+- Do NOT @mention Manager directly 閳?all communication goes through your Team Leader
 <!-- agentteams-team-context-end -->
 TEAMCTX
     elif [ "${_role}" = "team_leader" ]; then
@@ -290,18 +290,18 @@ TEAMCTX
         _team_admin_mid=$(echo "${_team_json}" | jq -r '.admin.matrixUserId // empty')
         _worker_rooms=$(agt get workers --team "${_team_id}" -o json | jq -r '
             [.workers[] | select(.role == "worker") |
-             "  - @\(.name):__DOMAIN__ — Room: \(.roomID // "unknown")"] | join("\n")')
+             "  - @\(.name):__DOMAIN__ 閳?Room: \(.roomID // "unknown")"] | join("\n")')
         _worker_rooms=$(echo "${_worker_rooms}" | sed "s/__DOMAIN__/${MATRIX_DOMAIN}/g")
         cat > "${_ctx_tmp}" <<LEADERCTX
 
 <!-- agentteams-team-context-start -->
 ## Coordination
 
-- **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) — you receive tasks from Manager
-$([ -n "${_team_admin_mid}" ] && echo "- **Team Admin**: ${_team_admin_mid} — can assign tasks and make decisions within the team")
+- **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) 閳?you receive tasks from Manager
+$([ -n "${_team_admin_mid}" ] && echo "- **Team Admin**: ${_team_admin_mid} 閳?can assign tasks and make decisions within the team")
 - **Team**: ${_team_id}
-$([ -n "${_team_room_id}" ] && echo "- **Team Room**: ${_team_room_id} — @mention workers here for task assignment")
-$([ -n "${_leader_dm_room_id}" ] && echo "- **Leader DM**: ${_leader_dm_room_id} — Team Admin communicates with you here")
+$([ -n "${_team_room_id}" ] && echo "- **Team Room**: ${_team_room_id} 閳?@mention workers here for task assignment")
+$([ -n "${_leader_dm_room_id}" ] && echo "- **Leader DM**: ${_leader_dm_room_id} 閳?Team Admin communicates with you here")
 $([ -n "${_worker_rooms}" ] && echo "- **Team Workers**:" && echo "${_worker_rooms}")
 - You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers
 - @mention workers in the Team Room for task assignment
@@ -407,9 +407,18 @@ log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
 mc mirror "/root/agentteams-fs/agents/${WORKER_NAME}/" \
     "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
+# Exclude non-UTF-8 file names (S3 keys must be valid UTF-8; a single bad
+# name would fail the whole push).
+_excl=()
+while IFS= read -r _rel; do
+    [ -n "${_rel}" ] && _excl+=(--exclude "${_rel}")
+done < <(collect_nonutf8_files "/root/agentteams-fs/agents/${WORKER_NAME}")
+mc mirror "/root/agentteams-fs/agents/${WORKER_NAME}/" \
+    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \
+    "${_excl[@]}" \
     2>&1 | tail -3
 log "  Config synced (memory excluded)"
 

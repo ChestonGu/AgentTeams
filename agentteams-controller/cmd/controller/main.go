@@ -32,6 +32,10 @@ func main() {
 
 	fmt.Println("agentteams-controller is running. Press Ctrl+C to stop.")
 
+	// No-op in default builds; starts the /debug/pprof server when compiled
+	// with `-tags pprof` (Dockerfile ENABLE_PPROF=true, debug image only).
+	maybeStartPprof(ctx)
+
 	startErr := application.Start(ctx)
 
 	// Start returns once ctx is cancelled (signal) or the manager fails.

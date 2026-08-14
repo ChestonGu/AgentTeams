@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // HigressClient implements Client for self-hosted Higress gateway.
@@ -195,6 +197,16 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 	c.aiRouteMu.Lock()
 	defer c.aiRouteMu.Unlock()
 
+	logger := crlog.FromContext(ctx)
+	start := time.Now()
+	conflicts := 0
+	defer func() {
+		logger.Info("modifyAI routes complete",
+			"consumer", consumerName, "add", add,
+			"conflicts", conflicts,
+			"elapsed", time.Since(start).Truncate(time.Millisecond).String())
+	}()
+
 	respBody, statusCode, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes", nil)
 	if err != nil {
 		return fmt.Errorf("list AI routes: %w", err)
@@ -307,6 +319,7 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				break
 			}
 			if sc == http.StatusConflict {
+				conflicts++
 				lastErr = fmt.Errorf("put AI route %s: HTTP 409 (conflict)", routeInfo.Name)
 				time.Sleep(time.Duration(rand.Intn(3)+1) * time.Second)
 				continue

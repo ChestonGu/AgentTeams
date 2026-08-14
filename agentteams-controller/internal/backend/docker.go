@@ -389,6 +389,7 @@ func (d *DockerBackend) ensureImage(ctx context.Context, image string) error {
 
 	// Pull the image
 	log.Printf("[Docker] Image not found locally, pulling: %s", image)
+	pullStart := time.Now()
 	pullURL := fmt.Sprintf("http://localhost/images/create?fromImage=%s", url.QueryEscape(image))
 	pullReq, err := http.NewRequestWithContext(ctx, http.MethodPost, pullURL, nil)
 	if err != nil {
@@ -401,6 +402,10 @@ func (d *DockerBackend) ensureImage(ctx context.Context, image string) error {
 	// Read full body to wait for pull completion (Docker streams progress JSON)
 	io.Copy(io.Discard, pullResp.Body)
 	pullResp.Body.Close()
+	// The pull body stream can hang indefinitely on a stalled daemon (only the
+	// reconcile ctx bounds it); log completion so a slow/failed pull is
+	// visible in the controller logs instead of an unexplained step-4 delay.
+	log.Printf("[Docker] Image pull complete: %s (%s)", image, time.Since(pullStart).Truncate(time.Millisecond))
 
 	// Verify image is now available
 	verifyReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

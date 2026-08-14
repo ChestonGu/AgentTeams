@@ -12,8 +12,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// MinIOAdminClient implements StorageAdminClient for embedded-mode MinIO.
-// It uses the `mc admin` CLI to manage users and policies.
+// MinIOAdminClient implements StorageAdminClient for embedded-mode MinIO
+// using the `mc admin` CLI. It is the legacy provider, selected together
+// with the mc storage driver via HICLAW_STORAGE_DRIVER=mc; the default
+// HICLAW_STORAGE_DRIVER=sdk uses SDKAdminClient (madmin-go) instead.
 type MinIOAdminClient struct {
 	config     Config
 	aliasReady bool
@@ -50,7 +52,7 @@ func (c *MinIOAdminClient) EnsureUser(ctx context.Context, username, password st
 	}
 	logger := log.FromContext(ctx)
 	logger.Info("ensuring MinIO user", "user", username, "alias", c.config.Alias)
-	// mc admin user add is idempotent — updates password if user exists
+	// mc admin user add is idempotent 鈥?updates password if user exists
 	_, err := c.runMCAdmin(ctx, "user", "add", c.config.Alias, username, password)
 	if err != nil && !strings.Contains(err.Error(), "already") {
 		return fmt.Errorf("ensure minio user %s: %w", username, err)

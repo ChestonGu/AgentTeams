@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/accessresolver"
@@ -330,12 +331,29 @@ func (a *App) initInfraClients(_ context.Context) error {
 		logger.Info("gateway provider: higress", "url", cfg.HigressBaseURL)
 	}
 
-	// Storage client — provider-driven. The OSS client reuses the MinIO
-	// implementation (both speak the mc CLI); when talking to external
-	// OSS the mc credentials are sourced per-invocation from the
-	// credential-provider sidecar via a CredentialSource, and the admin
-	// API is unavailable (buckets/users/policies are provisioned externally).
-	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
+	// Storage client — driver-selectable via HICLAW_STORAGE_DRIVER:
+	//   sdk (default): minio-go SDK, S3 protocol with a connection-pooled
+	//                  HTTP client (static AccessKey/SecretKey, or a
+	//                  CredentialSource for dynamic STS when configured).
+	//   mc (legacy):   one `mc` subprocess per call.
+	// Both implement oss.StorageClient with identical Config semantics, so
+	// the driver is a drop-in swap. External OSS (cloud S3) uses static
+	// long-lived credentials from HICLAW_FS_ACCESS_KEY / HICLAW_FS_SECRET_KEY;
+	// the admin API is unavailable (buckets/users/policies are provisioned
+	// externally).
+	var storageClient oss.StorageClient
+	switch cfg.StorageDriver {
+	case "sdk":
+		sc, err := oss.NewSDKClient(cfg.OSSConfig())
+		if err != nil {
+			return fmt.Errorf("create sdk storage client: %w", err)
+		}
+		storageClient = sc
+	case "mc":
+		storageClient = oss.NewMinIOClient(cfg.OSSConfig())
+	default:
+		return fmt.Errorf("unknown HICLAW_STORAGE_DRIVER %q (want \"sdk\" or \"mc\")", cfg.StorageDriver)
+	}
 	if cfg.UsesExternalOSS() {
 		oc := cfg.OSSConfig()
 		if oc.Endpoint == "" {
@@ -353,25 +371,47 @@ func (a *App) initInfraClients(_ context.Context) error {
 				SessionName: "agentteams-controller",
 				Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
 			})
-			mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
-			a.oss = mcClient
-			logger.Info("storage provider: oss (external, dynamic STS credentials)", "bucket", cfg.OSSBucket)
+			switch sc := storageClient.(type) {
+			case *oss.SDKClient:
+				storageClient = sc.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			case *oss.MinIOClient:
+				storageClient = sc.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			}
+			a.oss = storageClient
+			logger.Info("storage provider: oss (external, dynamic STS credentials)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
 		case oc.AccessKey != "" && oc.SecretKey != "":
 			// Static credential path: external S3 with a long-lived appkey/secret
-			// (e.g. a company's own S3-compatible service). mc uses the AccessKey/
-			// SecretKey from OSSConfig via a persistent `mc alias set` — no sidecar.
-			a.oss = mcClient
-			logger.Info("storage provider: oss (external, static credentials)", "bucket", cfg.OSSBucket)
+			// (e.g. a company's own S3-compatible service). Both drivers use the
+			// AccessKey/SecretKey from OSSConfig — no sidecar.
+			a.oss = storageClient
+			logger.Info("storage provider: oss (external, static credentials)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
 		default:
 			return fmt.Errorf("oss provider requires either AGENTTEAMS_CREDENTIAL_PROVIDER_URL (dynamic STS) or static AGENTTEAMS_FS_ACCESS_KEY/AGENTTEAMS_FS_SECRET_KEY")
 		}
 	} else {
-		a.oss = mcClient
-		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)
+		a.oss = storageClient
+		logger.Info("storage provider: minio (embedded)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
+		// The admin provider (MinIO user/policy management) follows the same
+		// driver switch as the storage client: sdk uses the madmin-go Admin
+		// API (default), mc forks `mc admin` subprocesses.
 		if cfg.HasMinIOAdmin() {
-			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			switch cfg.StorageDriver {
+			case "sdk":
+				sc, err := oss.NewSDKAdminClient(cfg.OSSConfig())
+				if err != nil {
+					return fmt.Errorf("create sdk admin client: %w", err)
+				}
+				a.ossAdmin = sc
+			case "mc":
+				a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			}
 		}
 	}
+	// Package downloads go through the same StorageClient (SDK driver) so
+	// they inherit the connect timeout, retry window, and connection pool
+	// instead of forking `mc` subprocesses (whose CLI-level 30s dial timeout
+	// caused "deploy package ... mc: unable to prepare URL" failures).
+	a.packages.Storage = a.oss
 	return nil
 }
 

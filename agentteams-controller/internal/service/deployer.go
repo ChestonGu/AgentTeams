@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,11 +11,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -293,7 +297,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// runtime-mutated OSS state during reconcile; authoritative files are
 	// written explicitly below via the overwrite whitelist.
 	//
-	// Always exclude SOUL.md, AGENTS.md, HEARTBEAT.md from the mirror — each
+	// Always exclude SOUL.md, AGENTS.md, HEARTBEAT.md from the mirror 鈥?each
 	// has a dedicated authoritative writer below (PutObject for SOUL.md,
 	// prepareAndPushAgentsMD for AGENTS.md, pushBuiltinTopLevelFiles for
 	// HEARTBEAT.md). Mirroring them here would race with that writer when
@@ -305,13 +309,28 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := os.MkdirAll(localAgentDir, 0755); err != nil {
 		return fmt.Errorf("create agent dir: %w", err)
 	}
+
+	// --- Storage reachability probe ---
+	// A down or flaky storage endpoint otherwise burns the mc CLI's ~30s dial
+	// timeout on every subsequent OSS op, turning the config phase into
+	// minutes of hard waits. Probe once with a short timeout; a network-class
+	// failure aborts fast and the reconciler requeues instead of grinding
+	// through every op.
+	if err := d.probeStorage(ctx, agentPrefix); err != nil {
+		return fmt.Errorf("storage probe failed: %w", err)
+	}
+
+	phaseStart := time.Now()
 	logger.Info("syncing agent files to storage", "name", req.Name)
 	seedExcludes := map[string]struct{}{"SOUL.md": {}, "AGENTS.md": {}, "HEARTBEAT.md": {}}
 	if err := d.seedLocalAgentFiles(ctx, localAgentDir, agentPrefix, seedExcludes); err != nil {
 		logger.Error(err, "agent file sync failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: seed agent files", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- openclaw.json ---
+	phaseStart = time.Now()
 	var channelPolicy *agentconfig.ChannelPolicy
 	if req.Spec.ChannelPolicy != nil {
 		channelPolicy = &agentconfig.ChannelPolicy{
@@ -362,9 +381,11 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		"runtime", req.Spec.Runtime,
 		"team", req.TeamName,
 		"isUpdate", req.IsUpdate,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String(),
 	)
 
 	// --- SOUL.md (seed-only) ---
+	phaseStart = time.Now()
 	// Written once on first deploy; never overwritten so the agent owns it
 	// after startup. Team leaders are handled by renderAndPushSoulTemplate
 	// in InjectCoordinationContext, so skip here.
@@ -411,25 +432,37 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			}
 		}
 	}
+	logger.Info("deploy worker config: SOUL.md", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- config/mcporter.json ---
+	phaseStart = time.Now()
 	if len(req.McpServers) > 0 {
 		d.deployWorkerMcporterConfig(ctx, agentPrefix, req.GatewayKey, req.McpServers)
 	}
+	logger.Info("deploy worker config: mcporter", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Matrix password to storage for E2EE re-login ---
+	phaseStart = time.Now()
 	if req.MatrixPassword != "" {
 		if err := d.oss.PutObject(ctx, agentPrefix+"/credentials/matrix/password", []byte(req.MatrixPassword)); err != nil {
 			logger.Error(err, "failed to write Matrix password to storage (non-fatal)")
 		}
 	}
+	logger.Info("deploy worker config: matrix password", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Builtin top-level files (e.g. HEARTBEAT.md for team leaders) ---
+	phaseStart = time.Now()
 	if err := d.pushBuiltinTopLevelFiles(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
 		logger.Error(err, "builtin top-level file sync failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: builtin top-level files", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
+	phaseStart = time.Now()
 	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
@@ -456,11 +489,16 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			logger.Error(err, "leader coordination context inject failed (non-fatal)", "worker", req.Name)
 		}
 	}
+	logger.Info("deploy worker config: AGENTS.md", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	// --- Push builtin skills from worker-agent template ---
+	phaseStart = time.Now()
 	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
 		logger.Error(err, "builtin skills push failed (non-fatal)")
 	}
+	logger.Info("deploy worker config: builtin skills", "worker", req.Name,
+		"elapsed", time.Since(phaseStart).Truncate(time.Millisecond).String())
 
 	return nil
 }
@@ -736,8 +774,13 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.
-// Built-in skills are pushed via push-worker-skills.sh. Remote skills are
-// fetched from source registries (currently nacos://) and mirrored to OSS.
+// Remote skills are fetched from source registries (currently nacos://) and
+// mirrored to OSS. The local spec.skills path shells out to
+// push-worker-skills.sh, which reads the Manager's local workers-registry.json
+// 鈥?a file that does not exist in the controller container 鈥?so it is skipped
+// by default (HICLAW_LOCAL_SKILL_PUSH=true re-enables it for deployments
+// where the script's prerequisites are met). Skill distribution for local
+// skills is normally owned by the Manager Agent's worker-management skill.
 func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
 	logger := log.FromContext(ctx)
 	if len(skills) == 0 && len(remoteSkills) == 0 {
@@ -750,6 +793,11 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 	}
 
 	if len(skills) == 0 || d.executor == nil {
+		return nil
+	}
+	if !localSkillPushEnabled() {
+		logger.Info("local skill push skipped (AGENTTEAMS_LOCAL_SKILL_PUSH is not true)",
+			"worker", workerName, "skills", skills)
 		return nil
 	}
 	scriptPath := "/opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh"
@@ -858,6 +906,40 @@ func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
+// localSkillPushEnabled reports whether the controller-side local skill push
+// (spec.skills via push-worker-skills.sh) is enabled. Off by default: the
+// script reads the Manager's local workers-registry.json, which does not
+// exist in the controller container, so the push always failed there.
+func localSkillPushEnabled() bool {
+	return os.Getenv("AGENTTEAMS_LOCAL_SKILL_PUSH") == "true"
+}
+
+// The storage reachability probe bounds the check at the start of
+// DeployWorkerConfig. The storage layer already retries transient failures
+// within its retry window (AGENTTEAMS_STORAGE_RETRY_WINDOW_SECONDS, default 30s),
+// so the probe budget defaults to match: a short OSS blip recovers inside the
+// window and the config phase proceeds instead of requeuing; a permanently
+// dead endpoint still aborts after the budget and the reconciler requeues
+// with a concise status message. Configurable via
+// AGENTTEAMS_STORAGE_PROBE_TIMEOUT_SECONDS (see oss.StorageProbeTimeout).
+
+// probeStorage verifies object storage is reachable before the config phase
+// runs its many OSS operations. The probe reads openclaw.json, a key the
+// deployer itself writes; os.ErrNotExist means the endpoint answered and is
+// healthy. Any other error (network-class, or a short-timeout expiry) aborts
+// the config phase fast so the reconciler requeues instead of stalling per
+// subsequent op.
+func (d *Deployer) probeStorage(ctx context.Context, agentPrefix string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, oss.StorageProbeTimeout())
+	defer cancel()
+	_, err := d.oss.GetObject(probeCtx, agentPrefix+"/openclaw.json")
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	metrics.StorageProbeFailures.Inc()
+	return err
+}
+
 func (d *Deployer) seedLocalAgentFiles(ctx context.Context, localAgentDir, agentPrefix string, excludedTopLevel map[string]struct{}) error {
 	info, err := os.Stat(localAgentDir)
 	if err != nil {
@@ -893,6 +975,12 @@ func (d *Deployer) seedLocalAgentFiles(ctx context.Context, localAgentDir, agent
 		}
 
 		key := agentPrefix + "/" + rel
+		// S3 object keys must be valid UTF-8; skip files with non-UTF-8
+		// names so a single bad file does not abort the whole seed.
+		if !utf8.ValidString(key) {
+			logger.Info("skipping seed file with non-UTF-8 name", "path", path)
+			return nil
+		}
 		if _, err := d.oss.GetObject(ctx, key); err == nil {
 			return nil
 		} else if !os.IsNotExist(err) {
@@ -1314,13 +1402,52 @@ func (d *Deployer) pushBuiltinSkills(ctx context.Context, workerName, agentPrefi
 			continue
 		}
 		skillName := entry.Name()
-		src := skillsDir + "/" + skillName + "/"
-		dst := agentPrefix + "/skills/" + skillName + "/"
-		if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
+		src := skillsDir + "/" + skillName
+		dst := agentPrefix + "/skills/" + skillName
+		if err := d.pushDirWithCompare(ctx, src, dst); err != nil {
 			return fmt.Errorf("push skill %s: %w", skillName, err)
 		}
 	}
 	return nil
+}
+
+// pushDirWithCompare syncs a local directory tree to OSS under dstPrefix,
+// pushing each file only when missing or when its remote content differs.
+// Replaces the former `mc mirror --overwrite` per skill, which re-uploaded
+// every file on every reconcile (25-35s per member); unchanged files now cost
+// one GET-compare instead of a full re-upload. Unlike seed-only semantics,
+// content updates shipped by a new controller image still propagate. GET is
+// used for the comparison because on the mc CLI driver it is ~8x cheaper per
+// call than `mc stat` (bench_s3 data); the SDK driver can switch to Stat+ETag.
+func (d *Deployer) pushDirWithCompare(ctx context.Context, srcDir, dstPrefix string) error {
+	return filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		key := dstPrefix + "/" + filepath.ToSlash(rel)
+		existing, err := d.oss.GetObject(ctx, key)
+		if err == nil {
+			if bytes.Equal(existing, data) {
+				return nil
+			}
+			return d.oss.PutObject(ctx, key, data)
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		return d.oss.PutObject(ctx, key, data)
+	})
 }
 
 func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, agentPrefix, role, runtime string) error {
