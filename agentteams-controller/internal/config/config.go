@@ -57,6 +57,12 @@ type Config struct {
 	GatewayProvider string // "higress" | "ai-gateway"
 	StorageProvider string // "minio"   | "oss"
 
+	// StorageDriver selects the object-storage client implementation:
+	// "sdk" (default, minio-go SDK with connection pooling + bounded retries)
+	// or "mc" (legacy per-call mc CLI subprocess). Sourced from
+	// AGENTTEAMS_STORAGE_DRIVER.
+	StorageDriver string
+
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
 	HigressCookieFile    string
@@ -308,6 +314,7 @@ func LoadConfig() *Config {
 
 		GatewayProvider: envOrDefault("AGENTTEAMS_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
+		StorageDriver:   envOrDefault("AGENTTEAMS_STORAGE_DRIVER", "sdk"),
 
 		CredentialProviderURL: os.Getenv("AGENTTEAMS_CREDENTIAL_PROVIDER_URL"),
 
