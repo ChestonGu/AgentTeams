@@ -154,11 +154,6 @@ type Config struct {
 	MatrixE2EE              bool
 	MatrixProvider          string // "tuwunel" (default) or "synapse" — selects the matrix.Client implementation
 
-	// MatrixProvider selects the MatrixOps implementation. Valid values:
-	// "tuwunel" (default) or "synapse". Set from AGENTTEAMS_MATRIX_PROVIDER.
-	// Validated in LoadConfig; unknown values fail startup.
-	MatrixProvider string
-
 	// Matrix AppService mode
 	MatrixAppServiceEnabled            bool
 	MatrixAppServiceID                 string
