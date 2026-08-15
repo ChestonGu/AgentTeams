@@ -88,6 +88,26 @@ spec:
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ
               value: {{ .Values.controller.timezone | quote }}
+            {{- /*
+              Team reconciler tuning knobs (wiki/controller-tuning-sop.md).
+              Empty/zero values keep the controller's built-in defaults.
+            */}}
+            {{- if ne (int .Values.controller.teamTuning.maxConcurrentReconciles) 0 }}
+            - name: AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES
+              value: {{ .Values.controller.teamTuning.maxConcurrentReconciles | quote }}
+            {{- end }}
+            {{- if ne (int .Values.controller.teamTuning.reconcileTimeoutSeconds) 0 }}
+            - name: AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS
+              value: {{ .Values.controller.teamTuning.reconcileTimeoutSeconds | quote }}
+            {{- end }}
+            {{- if ne (int .Values.controller.teamTuning.reconcileIntervalSeconds) 0 }}
+            - name: AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.controller.teamTuning.reconcileIntervalSeconds | quote }}
+            {{- end }}
+            {{- if .Values.controller.teamTuning.activeNoRequeue }}
+            - name: AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
+              value: "true"
+            {{- end }}
             - name: AGENTTEAMS_STORAGE_PROVIDER
               value: {{ .Values.storage.provider | quote }}
             - name: AGENTTEAMS_FS_ENDPOINT

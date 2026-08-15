@@ -270,6 +270,14 @@ controller:
     annotations: {}
   env: {}
   timezone: "Asia/Shanghai"
+  # Team reconciler tuning (see wiki/controller-tuning-sop.md for the full
+  # symptom → diagnosis → tuning flow). Empty values keep the controller's
+  # built-in defaults (1 / 0 / 300 / false).
+  teamTuning:
+    maxConcurrentReconciles: 0    # AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES; 0 = controller default (1)
+    reconcileTimeoutSeconds: 0    # AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
+    reconcileIntervalSeconds: 0   # AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS; 0 = controller default (300)
+    activeNoRequeue: false        # AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
   uninstallHook:
     # When enabled, helm uninstall first runs a Job that deletes all
     # Manager/Worker/Team/Human CRs while the controller is still alive,
