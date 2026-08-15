@@ -36,11 +36,21 @@ WORKSPACE="${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}"
 # ============================================================
 # Step 1: Configure mc alias for centralized file system
 # ============================================================
-if ensure_mc_credentials && agentteams_mc_host_configured; then
+# Static S3 credentials (endpoint + AK/SK) take precedence — same behavior as
+# the Manager container (start-manager-agent.sh). This is the supported path
+# for external S3 / self-hosted MinIO with long-lived credentials, and is
+# provider-agnostic (works whether AGENTTEAMS_STORAGE_PROVIDER is "oss" or
+# "minio"). Controller-mediated STS remains available when no static
+# credentials are injected.
+if [ -n "${FS_ENDPOINT:-}" ] && [ -n "${FS_ACCESS_KEY:-}" ] && [ -n "${FS_SECRET_KEY:-}" ]; then
+    log "Configuring mc alias with static S3 credentials (${AGENTTEAMS_STORAGE_ALIAS:-agentteams})..."
+    mc alias set "${AGENTTEAMS_STORAGE_ALIAS:-agentteams}" "${FS_ENDPOINT}" \
+        "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
+elif ensure_mc_credentials && agentteams_mc_host_configured; then
     log "Configuring mc alias via controller-issued storage credentials (${AGENTTEAMS_STORAGE_ALIAS})..."
 else
     if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
-        log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
+        log "ERROR: OSS storage requires static S3 credentials (AGENTTEAMS_FS_ENDPOINT/ACCESS_KEY/SECRET_KEY) or controller-issued credentials, but none available"
         exit 1
     fi
     log "Configuring mc alias for static storage credentials (${AGENTTEAMS_STORAGE_ALIAS})..."

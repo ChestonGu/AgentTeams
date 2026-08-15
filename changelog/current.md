@@ -240,3 +240,5 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - Archive the v1.2.1 changelog before collecting the v1.2.2 release window. ([#1146](https://github.com/agentscope-ai/AgentTeams/pull/1146))
 - Add integration coverage for Manager-to-Worker Skill distribution through `Worker.spec.skills`, Worker storage, and the QwenPaw Skill API. ([#1156](https://github.com/agentscope-ai/AgentTeams/pull/1156))
+
+- **Worker static S3 credentials (endpoint + AK/SK)**: `worker-entrypoint.sh` Step 1 now configures the mc alias from `AGENTTEAMS_FS_ENDPOINT/ACCESS_KEY/SECRET_KEY` first — the same behavior as the Manager container — so `provider=oss` deployments with long-lived static credentials work without controller-mediated STS. Controller STS remains the fallback when no static credentials are injected.
