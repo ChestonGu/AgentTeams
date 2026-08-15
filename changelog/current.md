@@ -242,3 +242,5 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - Add integration coverage for Manager-to-Worker Skill distribution through `Worker.spec.skills`, Worker storage, and the QwenPaw Skill API. ([#1156](https://github.com/agentscope-ai/AgentTeams/pull/1156))
 
 - **Worker static S3 credentials (endpoint + AK/SK)**: `worker-entrypoint.sh` Step 1 now configures the mc alias from `AGENTTEAMS_FS_ENDPOINT/ACCESS_KEY/SECRET_KEY` first — the same behavior as the Manager container — so `provider=oss` deployments with long-lived static credentials work without controller-mediated STS. Controller STS remains the fallback when no static credentials are injected.
+
+- **Team worker room Manager removal (kick 403 fix)**: worker rooms now grant the Manager power level 50 (admin keeps 100), and when removing the Manager from a team-worker personal room fails with a kick 403 (same power level), `WorkerReconciler` falls back to `Provisioner.LeaveManagerRoom` — the Manager leaves with its own token, avoiding the Matrix power-level kick restriction entirely.

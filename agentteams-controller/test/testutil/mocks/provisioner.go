@@ -45,6 +45,7 @@ type MockProvisioner struct {
 	JoinRoomAsFn                   func(ctx context.Context, roomID, userToken string) error
 	KickFromRoomFn                 func(ctx context.Context, roomID, userID, reason string) error
 	ForceLeaveRoomFn               func(ctx context.Context, userID, roomID string) error
+	LeaveManagerRoomFn               func(ctx context.Context, roomID string) error
 	DeactivateHumanUserFn          func(ctx context.Context, userID string) error
 	ProvisionTeamRoomsFn           func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
 	ArchiveTeamRoomsFn             func(ctx context.Context, req service.TeamRoomArchiveRequest) error
@@ -86,6 +87,7 @@ type MockProvisioner struct {
 		JoinRoomAs                   []joinRoomAsCall
 		KickFromRoom                 []kickFromRoomCall
 		ForceLeaveRoom               []roomMembershipCall
+		LeaveManagerRoom               []string
 		DeactivateHumanUser          []string
 		ProvisionTeamRooms           []service.TeamRoomRequest
 		ArchiveTeamRooms             []service.TeamRoomArchiveRequest
@@ -187,6 +189,7 @@ func (m *MockProvisioner) Reset() {
 	m.JoinRoomAsFn = nil
 	m.KickFromRoomFn = nil
 	m.ForceLeaveRoomFn = nil
+	m.LeaveManagerRoomFn = nil
 	m.DeactivateHumanUserFn = nil
 	m.ProvisionTeamRoomsFn = nil
 	m.ArchiveTeamRoomsFn = nil
@@ -233,6 +236,7 @@ func (m *MockProvisioner) clearCallsLocked() {
 		JoinRoomAs                   []joinRoomAsCall
 		KickFromRoom                 []kickFromRoomCall
 		ForceLeaveRoom               []roomMembershipCall
+			LeaveManagerRoom               []string
 		DeactivateHumanUser          []string
 		ProvisionTeamRooms           []service.TeamRoomRequest
 		ArchiveTeamRooms             []service.TeamRoomArchiveRequest
@@ -628,6 +632,18 @@ func (m *MockProvisioner) ForceLeaveRoom(ctx context.Context, userID, roomID str
 	return nil
 }
 
+
+// LeaveManagerRoom records the call and invokes LeaveManagerRoomFn if set.
+func (m *MockProvisioner) LeaveManagerRoom(ctx context.Context, roomID string) error {
+	m.mu.Lock()
+	m.Calls.LeaveManagerRoom = append(m.Calls.LeaveManagerRoom, roomID)
+	fn := m.LeaveManagerRoomFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, roomID)
+	}
+	return nil
+}
 func (m *MockProvisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
 	m.mu.Lock()
 	m.Calls.DeactivateHumanUser = append(m.Calls.DeactivateHumanUser, userID)

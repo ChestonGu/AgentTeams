@@ -408,8 +408,14 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		authorityID = adminMatrixID
 	}
 
+	// Manager gets a lower power level than the admin (50 vs 100) so the
+	// controller can remove the Manager from a team-worker personal room:
+	// Matrix rejects kicking a user with the same power level as the kicker
+	// ("cannot kick user"), which previously blocked the Team-scoped access
+	// revocation with a 403. The admin (100) is the room authority; the
+	// Manager is a participant who can be re-invited on demand.
 	powerLevels := map[string]int{
-		managerMatrixID: 100,
+		managerMatrixID: 50,
 		adminMatrixID:   100,
 		authorityID:     100,
 		workerMatrixID:  0,

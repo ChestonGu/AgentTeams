@@ -432,6 +432,15 @@ func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta
 					w.Status.RoomID,
 				); err != nil {
 					logger.Error(err, "failed to remove Manager from Team worker personal room (non-fatal)", "worker", w.Name, "roomID", w.Status.RoomID)
+					// Fallback: worker rooms grant Manager and admin the same
+					// power level (both 100), so the admin kick 403s and even
+					// the Synapse make_room_admin escalation cannot exceed the
+					// Manager's level. Have the Manager leave with its own
+					// token instead — no power-level dependency.
+					if leaveErr := r.Provisioner.LeaveManagerRoom(ctx, w.Status.RoomID); leaveErr != nil {
+						logger.Error(leaveErr, "manager self-leave fallback also failed (non-fatal)",
+							"worker", w.Name, "roomID", w.Status.RoomID)
+					}
 				}
 			}
 			if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {

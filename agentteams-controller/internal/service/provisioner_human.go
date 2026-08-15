@@ -193,6 +193,40 @@ func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string)
 	return p.matrixOps.RemoveMember(ctx, roomID, userID, "force leave by admin")
 }
 
+// LeaveManagerRoom makes the Manager leave roomID using the Manager's own
+// token. Used as a fallback when kicking the Manager out of a team-worker
+// personal room 403s: worker rooms grant the Manager and the admin the same
+// power level (both 100), so an admin kick is rejected by Matrix ("cannot
+// kick user") and even the Synapse make_room_admin escalation cannot exceed
+// the Manager's level. The Manager leaving itself avoids the power-level
+// dependency entirely.
+func (p *Provisioner) LeaveManagerRoom(ctx context.Context, roomID string) error {
+	logger := log.FromContext(ctx)
+	token := ""
+	for _, key := range []string{"default", "manager"} {
+		creds, err := p.creds.Load(ctx, key)
+		if err == nil && creds != nil && creds.MatrixToken != "" {
+			token = creds.MatrixToken
+			break
+		}
+	}
+	if token == "" {
+		refresh, err := p.RefreshManagerCredentials(ctx, "default")
+		if err != nil {
+			return fmt.Errorf("refresh manager credentials: %w", err)
+		}
+		token = refresh.MatrixToken
+	}
+	if token == "" {
+		return fmt.Errorf("manager access token unavailable")
+	}
+	logger.Info("manager leaving room via own token", "room", roomID)
+	return p.matrixOps.LeaveRoom(ctx, roomID, matrix.MemberSpec{
+		UserID:     p.matrixOps.UserIDFor("manager"),
+		ActorToken: token,
+	})
+}
+
 // DeactivateHumanUser disables a Matrix account via MatrixOps.DeactivateUser.
 // The provider-specific admin operation (Tuwunel admin bot, Synapse admin
 // REST) is fire-and-forget; the controller treats a successful call as the

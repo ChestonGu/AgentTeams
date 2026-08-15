@@ -62,6 +62,11 @@ type WorkerProvisioner interface {
 	// ForceLeaveRoom removes a user whose room power level prevents a normal
 	// admin kick.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+	// LeaveManagerRoom makes the Manager leave roomID using the Manager's own
+	// token. Fallback for ForceLeaveRoom when an admin kick 403s because the
+	// Manager holds the same room power level as the admin (both 100 in worker
+	// rooms): the Manager leaving itself does not depend on kick power levels.
+	LeaveManagerRoom(ctx context.Context, roomID string) error
 	MatrixAppServiceEnabled() bool
 }
 
