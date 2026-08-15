@@ -188,6 +188,27 @@ type Config struct {
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
 
+	// Team reconciler tuning knobs. These bound the blast radius of a slow or
+	// failing Team so it cannot starve the rest of the workqueue (a single
+	// hung external call with MaxConcurrentReconciles=1 previously blocked
+	// every Team, including newly created ones, for the lifetime of the hang).
+	TeamMaxConcurrentReconciles int // AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES; 1 = serial
+	// TeamReconcileTimeoutSeconds bounds a single reconcile pass when > 0
+	// (default 0 = disabled, preserving legacy behavior). A hung external
+	// dependency (OSS upload, Matrix HTTP, credential refresh) would otherwise
+	// hold the worker slot until it returns.
+	TeamReconcileTimeoutSeconds int // AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
+	// TeamReconcileIntervalSeconds is the periodic requeue for a fully
+	// converged Active Team whose spec has not changed since the last
+	// successful pass. 0 = default 300 (5min). Positive jitter (0-10% of the
+	// interval) is added on every wakeup so concurrent Teams do not requeue
+	// in lockstep.
+	TeamReconcileIntervalSeconds int // AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS; 0 = default 300
+	// TeamActiveNoRequeue stops the periodic requeue for fully converged
+	// Active Teams whose spec is unchanged; they reconcile only on events
+	// (pod phase changes, spec edits) instead of on the periodic timer.
+	TeamActiveNoRequeue bool // AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE; true = no periodic requeue
+
 	// Locale used to render the first-boot Manager onboarding prompt
 	// (welcome message). Sourced from the install-time AGENTTEAMS_LANGUAGE
 	// (zh / en) and TZ env vars that the install script forwards into
@@ -405,6 +426,11 @@ func LoadConfig() *Config {
 		OpenAIBaseURL:              os.Getenv("AGENTTEAMS_OPENAI_BASE_URL"),
 		AIStreamIdleTimeoutSeconds: envOrDefaultInt("AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
 		ElementWebURL:              os.Getenv("AGENTTEAMS_ELEMENT_WEB_URL"),
+
+		TeamMaxConcurrentReconciles:  envOrDefaultInt("AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES", 1),
+		TeamReconcileTimeoutSeconds:  envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
+		TeamReconcileIntervalSeconds: envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS", 300),
+		TeamActiveNoRequeue:          envBool("AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE"),
 
 		UserLanguage: envOrDefault("AGENTTEAMS_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),

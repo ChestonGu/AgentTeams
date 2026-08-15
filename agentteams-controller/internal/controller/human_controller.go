@@ -13,6 +13,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +33,15 @@ type HumanReconciler struct {
 	Provisioner service.HumanProvisioner
 }
 
+// maxHumanRetries caps consecutive Infra failures before the Human stops
+// auto-requeuing (status.maxRetriesReached=true). Reset with
+// kubectl annotate human <name> agentteams.io/retry="".
+const maxHumanRetries = 5
+
+// humanRetryAnnotation re-arms automatic retries after maxHumanRetries.
+// Same annotation key as the Team reconciler's teamRetryAnnotation.
+const humanRetryAnnotation = "agentteams.io/retry"
+
 func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
 	start := time.Now()
 	defer func() { metrics.Observe("human", start, reterr) }()
@@ -41,6 +51,28 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 	var human v1beta1.Human
 	if err := r.Get(ctx, req.NamespacedName, &human); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Human exhausted its automatic retry budget: stop requeuing until an
+	// operator re-arms retries with the agentteams.io/retry annotation.
+	// Placed before finalizer handling so a retry-capped Human can still be
+	// deleted.
+	if human.Status.MaxRetriesReached {
+		if human.Annotations[humanRetryAnnotation] == "" {
+			return reconcile.Result{}, nil
+		}
+		delete(human.Annotations, humanRetryAnnotation)
+		human.Status.MaxRetriesReached = false
+		human.Status.ConsecutiveFailures = 0
+		if err := r.Update(ctx, &human); err != nil {
+			return reconcile.Result{}, err
+		}
+		// Status lives behind the status subresource; a plain Update does not
+		// persist it. Write the reset counters separately so the Human
+		// re-enters the normal reconcile path on the next pass.
+		if err := r.Status().Update(ctx, &human); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	patchBase := client.MergeFrom(human.DeepCopy())
@@ -67,7 +99,16 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		} else {
 			human.Status.Message = reterr.Error()
 		}
+		prevPhase := human.Status.Phase
 		human.Status.Phase = computeHumanPhase(&human, reterr)
+		if human.Status.Phase != prevPhase {
+			now := metav1.Now()
+			human.Status.PhaseTransitionTime = &now
+		}
+		if reterr == nil {
+			human.Status.ObservedGeneration = human.Generation
+			human.Status.ConsecutiveFailures = 0
+		}
 
 		// Status patch first: on an object with a status subresource the
 		// main-resource PATCH endpoint ignores status, so the status
@@ -123,6 +164,19 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		}
 	}
 
+	// Failed-Human backoff guard. failHuman patches status (which increments
+	// ConsecutiveFailures), so the informer re-enqueues the Human immediately;
+	// without this guard the exponential backoff schedule would never apply
+	// and a failing Human would hammer the queue out of order. Passes that
+	// arrive before the backoff window elapsed are dropped (no error, no
+	// requeue) — the original RequeueAfter wakeup re-triggers them later.
+	if human.Status.Phase == "Failed" && !human.Status.MaxRetriesReached &&
+		human.Status.ConsecutiveFailures > 0 && human.Status.PhaseTransitionTime != nil {
+		if time.Since(human.Status.PhaseTransitionTime.Time) < failBackoffFor(human.Status.ConsecutiveFailures) {
+			return reconcile.Result{}, nil
+		}
+	}
+
 	return r.reconcileHumanNormal(ctx, s)
 }
 
@@ -143,11 +197,46 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 				"name", s.human.Name)
 			return reconcile.Result{RequeueAfter: appServiceNotReadyRequeue}, nil
 		}
-		return reconcile.Result{RequeueAfter: reconcileInterval}, err
+		return r.failHuman(ctx, s, err.Error())
 	}
 	r.reconcileHumanRooms(ctx, s)
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+// failHuman records the Infra failure with an explicit exponential backoff
+// (30s → 1m → 2m → ... capped at maxFailBackoff) and stops requeuing entirely
+// after maxHumanRetries consecutive failures. Returns Result-only (nil error)
+// so the workqueue rate limiter does not additionally requeue the Human with
+// its own unpredictable backoff on top of the intended RequeueAfter — the
+// D-02 double-requeue pattern. Status writes happen through the Reconcile
+// defer, not here.
+func (r *HumanReconciler) failHuman(ctx context.Context, s *humanScope, msg string) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+	h := s.human
+	h.Status.Message = msg
+	h.Status.ConsecutiveFailures++
+	now := metav1.Now()
+	h.Status.PhaseTransitionTime = &now
+
+	if h.Status.ConsecutiveFailures > maxHumanRetries {
+		h.Status.MaxRetriesReached = true
+		logger.Info("human failed (max retries reached)",
+			"name", h.Name, "username", s.username,
+			"consecutiveFailures", h.Status.ConsecutiveFailures,
+			"message", msg)
+		// No error, no requeue: the Reconcile MaxRetriesReached guard keeps
+		// the Human out of the queue until an operator re-arms it.
+		return reconcile.Result{}, nil
+	}
+
+	delay := failBackoffFor(h.Status.ConsecutiveFailures)
+	logger.Info("human reconcile failed, backing off",
+		"name", h.Name, "username", s.username,
+		"consecutiveFailures", h.Status.ConsecutiveFailures,
+		"backoff", delay,
+		"message", msg)
+	return reconcile.Result{RequeueAfter: delay}, nil
 }
 
 func (r *HumanReconciler) resolveHumanScope(s *humanScope) error {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/accessresolver"
@@ -633,13 +634,17 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if _, err := (&controller.TeamReconciler{
-		Client:          a.mgr.GetClient(),
-		Provisioner:     a.provisioner,
-		Deployer:        a.deployer,
-		ManagerConfig:   a.managerConfig,
-		DefaultRuntime:  a.cfg.DefaultWorkerRuntime,
-		GatewayClient:   a.gateway,
-		SystemAdminUser: a.cfg.MatrixAdminUser,
+		Client:                  a.mgr.GetClient(),
+		Provisioner:             a.provisioner,
+		Deployer:                a.deployer,
+		ManagerConfig:           a.managerConfig,
+		DefaultRuntime:          a.cfg.DefaultWorkerRuntime,
+		GatewayClient:           a.gateway,
+		SystemAdminUser:         a.cfg.MatrixAdminUser,
+		ReconcileTimeout:        time.Duration(a.cfg.TeamReconcileTimeoutSeconds) * time.Second,
+		ReconcileInterval:       time.Duration(a.cfg.TeamReconcileIntervalSeconds) * time.Second,
+		MaxConcurrentReconciles: a.cfg.TeamMaxConcurrentReconciles,
+		ActiveNoRequeue:         a.cfg.TeamActiveNoRequeue,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
