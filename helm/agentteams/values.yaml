@@ -90,6 +90,12 @@ matrix:
     serverName: ""               # Matrix server_name;空 = synapse service FQDN
     adminUser: "admin"           # bootstrap 建;应与 credentials.adminUser 一致
     registrationSharedSecret: "" # 驱动 register_new_matrix_user(建 admin);空则生成
+    enableAuthenticatedMedia: false
+      # Synapse >= 1.121 上传默认把媒体标为 authenticated(MSC4016),而
+      # /_matrix/media/v3/download 的 DownloadResource 固定用 allow_authenticated=False,
+      # 未带 access_token 的下载(Element Web 附件 URL 只带 allow_redirect=true)会被
+      # raise NotFoundError → 404,即使 DB 记录与本地文件都完好。
+      # 私有集群无 federation 场景,authenticated media 无意义,默认关闭。
     service:
       type: ClusterIP
       port: 8008

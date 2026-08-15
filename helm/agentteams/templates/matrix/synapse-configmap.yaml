@@ -36,6 +36,10 @@ data:
       allow_unsafe_locale: true   # Synapse 级选项(与 args 同级,非 psycopg2 连接参数);postgres 默认 locale 非 C
 
     media_store_path: /data/media
+    # 见 values.matrix.synapse.enableAuthenticatedMedia:Synapse 默认开启 MSC4016
+    # authenticated media,但 /_matrix/media/v3/download 无 token 下载会被 404
+    # (raise NotFoundError),即使文件与 DB 记录完好。私有集群默认关闭。
+    enable_authenticated_media: {{ .Values.matrix.synapse.enableAuthenticatedMedia | default false }}
     enable_registration: true
     enable_registration_without_verification: true   # 私有集群:controller 是唯一注册方;否则 Synapse 拒启动("开注册无验证")
     trusted_key_servers:
