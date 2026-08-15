@@ -17,6 +17,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// isAlreadyInRoomError reports whether err represents a Matrix 403
+// "already in the room" response. Synapse returns M_FORBIDDEN with an
+// error string containing "already" when the user is already a member
+// (e.g. the admin room creator re-invited during CreateRoom).
+func isAlreadyInRoomError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "403") && strings.Contains(msg, "already")
+}
+
 // --- Request / Result types ---
 
 // WorkerProvisionRequest describes the infrastructure to provision for a worker.
@@ -442,7 +454,25 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	}
 	roomInfo, err := p.matrixOps.CreateRoom(ctx, roomSpec)
 	if err != nil {
-		return nil, fmt.Errorf("Matrix room creation failed: %w", err)
+		// Leftover room: a previous create left the alias + room behind (e.g.
+		// a deleted Worker/Team whose Matrix room was never dissolved), and the
+		// admin (room creator) is already a member — Synapse rejects the invite
+		// of an already-present user with M_FORBIDDEN "already in the room".
+		// Treat it as an existing-room resolution instead of failing the whole
+		// provision: resolve the alias to its room ID and continue so the
+		// gateway consumer and downstream phases are still provisioned.
+		if isAlreadyInRoomError(err) {
+			alias := p.roomAliasFull(roomSpec.AliasLocalpart)
+			roomID, ok, resolveErr := p.matrixOps.ResolveRoomAlias(ctx, alias)
+			if resolveErr != nil || !ok {
+				return nil, fmt.Errorf("Matrix room creation failed (%v) and alias %s resolution failed: %w", err, alias, resolveErr)
+			}
+			logger.Info("worker room already exists (403 already-in-room); resolved alias",
+				"alias", alias, "roomID", roomID)
+			roomInfo = &matrix.RoomRef{RoomID: roomID, Created: false}
+		} else {
+			return nil, fmt.Errorf("Matrix room creation failed: %w", err)
+		}
 	}
 	if generatedCreds && !roomInfo.Created {
 		alias := p.roomAliasFull(roomSpec.AliasLocalpart)
