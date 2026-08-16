@@ -28,6 +28,7 @@ type DockerConfig struct {
 	HermesWorkerImage    string // default hermes worker image (AGENTTEAMS_HERMES_WORKER_IMAGE)
 	OpenHumanWorkerImage string // default openhuman worker image (AGENTTEAMS_OPENHUMAN_WORKER_IMAGE)
 	QwenPawWorkerImage   string // default qwenpaw worker image (AGENTTEAMS_QWENPAW_WORKER_IMAGE)
+	CimicodeWorkerImage  string // default cimicode worker image (AGENTTEAMS_CIMICODE_WORKER_IMAGE)
 	DefaultNetwork       string // default Docker network (default "agentteams-net")
 }
 
@@ -119,6 +120,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && d.config.QwenPawWorkerImage != "":
 			image = d.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeCimicode && d.config.CimicodeWorkerImage != "":
+			image = d.config.CimicodeWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}

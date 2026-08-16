@@ -96,7 +96,7 @@ func updateWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Matrix profile)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|cimicode)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content")

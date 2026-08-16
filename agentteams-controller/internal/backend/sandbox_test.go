@@ -548,6 +548,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			wantImage: "qwenpaw:v4",
 		},
 		{
+			name:      "cimicode runtime",
+			runtime:   RuntimeCimicode,
+			config:    SandboxConfig{WorkerImage: "default:latest", CimicodeWorkerImage: "cimicode:v5"},
+			wantImage: "cimicode:v5",
+		},
+		{
 			name:      "default worker image",
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",

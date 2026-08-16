@@ -82,6 +82,8 @@ spec:
               value: {{ include "agentteams.worker.copawImage" . | quote }}
             - name: AGENTTEAMS_HERMES_WORKER_IMAGE
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
+            - name: AGENTTEAMS_CIMICODE_WORKER_IMAGE
+              value: {{ include "agentteams.worker.cimicodeImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME

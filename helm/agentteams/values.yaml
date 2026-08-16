@@ -355,6 +355,9 @@ worker:
     hermes:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
+    cimicode:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-cimicode-worker
+      tag: ""                 # defaults to global.imageTag
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag

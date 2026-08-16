@@ -32,6 +32,7 @@ type K8sConfig struct {
 	HermesWorkerImage    string
 	OpenHumanWorkerImage string
 	QwenPawWorkerImage   string
+	CimicodeWorkerImage  string
 	WorkerCPU            string
 	WorkerMemory         string
 
@@ -264,6 +265,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
 			image = k.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeCimicode && k.config.CimicodeWorkerImage != "":
+			image = k.config.CimicodeWorkerImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -281,11 +284,12 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			}
 			req.Env["HOME"] = req.WorkingDir
 		default:
-			// Both openclaw and hermes use the same workspace layout:
+			// openclaw, hermes and cimicode use the same workspace layout:
 			// HOME == WorkingDir == /root/agentteams-fs/agents/<name> (== MinIO
 			// mirror root). The hermes entrypoint anchors its install_dir to
 			// the same location so workspace_dir == HOME and HERMES_HOME ==
-			// $HOME/.hermes.
+			// $HOME/.hermes. The cimicode bridge keeps only small state
+			// (session/sandbox mapping, memory) in the same mirror.
 			if home := req.Env["HOME"]; home != "" {
 				req.WorkingDir = home
 			} else {
@@ -746,6 +750,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeHermes
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
+	case RuntimeCimicode:
+		return RuntimeCimicode
 	default:
 		return RuntimeOpenClaw
 	}

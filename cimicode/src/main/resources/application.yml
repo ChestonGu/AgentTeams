@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: cimicode-bridge
+  threads:
+    virtual:
+      enabled: true
+  main:
+    banner-mode: off
+
+server:
+  port: ${BRIDGE_HTTP_PORT:7788}
+
+bridge:
+  # HOME 由 controller 注入为 agent workspace（/root/agentteams-fs/agents/<name>）
+  workspace: ${HOME:/root}
+  worker-name: ${AGENTTEAMS_WORKER_NAME:}
+  matrix:
+    homeserver-url: ${AGENTTEAMS_MATRIX_URL:}
+    domain: ${AGENTTEAMS_MATRIX_DOMAIN:}
+    # 完整 user ID（@name:domain）；为空时由 localpart+domain 推导
+    user-id: ${AGENTTEAMS_MATRIX_USER_ID:}
+    localpart: ${AGENTTEAMS_WORKER_NAME:}
+    # 密码优先级：password env > password-file（AgentTeams 约定 credentials/matrix/password）
+    password: ${BRIDGE_MATRIX_PASSWORD:}
+    password-file: ${BRIDGE_MATRIX_PASSWORD_FILE:${HOME:/root}/credentials/matrix/password}
+    require-mention: true
+    sync-timeout-ms: 30000
+  cimicode:
+    base-url: ${BRIDGE_CIMICODE_BASEURL:}
+    # SSE 流总时长上限（长任务兜底）
+    request-timeout-ms: 600000
+    # 断流重试次数（R1 语义：全量 context 重放）
+    max-retries: 1
+  sandbox:
+    base-url: ${BRIDGE_SANDBOX_BASEURL:}
+    template: ${BRIDGE_SANDBOX_TEMPLATE:default}
+    ttl-seconds: ${BRIDGE_SANDBOX_TTL_SECONDS:3600}
+    # done 后空闲 N 秒 -> pause（对冲 TTL 到期回收丢代码，R4）
+    idle-pause-seconds: ${BRIDGE_SANDBOX_IDLE_PAUSE_SECONDS:900}
+    enabled: true
+  session:
+    state-file: ${HOME:/root}/bridge-state.json
+    history-dir: ${HOME:/root}/sessions
+    max-history-messages: 200
+  reply:
+    max-chunk-chars: 3500
+    max-chunks: 6
+  readiness:
+    enabled: true
+    agt-path: agt
+    timeout-seconds: 300
+
+logging:
+  level:
+    root: info
+    io.agentteams.cimicode: info

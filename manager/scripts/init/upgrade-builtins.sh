@@ -172,6 +172,8 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /
                 _worker_agent_src="${AGENT_SRC}/copaw-worker-agent"
             elif [ "${_worker_runtime}" = "hermes" ]; then
                 _worker_agent_src="${AGENT_SRC}/hermes-worker-agent"
+            elif [ "${_worker_runtime}" = "cimicode" ]; then
+                _worker_agent_src="${AGENT_SRC}/cimicode-worker-agent"
             else
                 _worker_agent_src="${WORKER_AGENT_SRC}"
             fi

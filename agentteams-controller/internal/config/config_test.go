@@ -146,6 +146,22 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsIncludeCimicodeWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CIMICODE_WORKER_IMAGE", "agentteams/cimicode-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().CimicodeWorkerImage,
+		"k8s":     cfg.K8sConfig().CimicodeWorkerImage,
+		"sandbox": cfg.SandboxConfig().CimicodeWorkerImage,
+	} {
+		if want := "agentteams/cimicode-worker:test"; got != want {
+			t.Fatalf("%s CimicodeWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 

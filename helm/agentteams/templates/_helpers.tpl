@@ -208,6 +208,11 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .Values.worker.defaultImage.hermes.repository $tag }}
 {{- end }}
 
+{{- define "agentteams.worker.cimicodeImage" -}}
+{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.cimicode.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.cimicode.repository $tag }}
+{{- end }}
+
 {{- define "agentteams.worker.openhumanImage" -}}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}

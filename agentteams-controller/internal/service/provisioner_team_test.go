@@ -331,9 +331,9 @@ func TestRefreshManagerCredentialsRestoresMinIOAccess(t *testing.T) {
 		},
 	}
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:   newFakeTeamMatrix(),
-		Creds:    creds,
-		OSSAdmin: admin,
+		MatrixOps: matrix.NewLegacyClientOps(newFakeTeamMatrix(), matrix.Config{Domain: "localhost"}),
+		Creds:     creds,
+		OSSAdmin:  admin,
 	})
 
 	result, err := p.RefreshManagerCredentials(context.Background(), "default")

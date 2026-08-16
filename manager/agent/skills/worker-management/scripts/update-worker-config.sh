@@ -250,6 +250,8 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
         _agent_src="/opt/agentteams/agent/copaw-worker-agent"
     elif [ "${_runtime}" = "hermes" ]; then
         _agent_src="/opt/agentteams/agent/hermes-worker-agent"
+    elif [ "${_runtime}" = "cimicode" ]; then
+        _agent_src="/opt/agentteams/agent/cimicode-worker-agent"
     else
         _agent_src="/opt/agentteams/agent/worker-agent"
     fi

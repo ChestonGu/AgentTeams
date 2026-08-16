@@ -1068,10 +1068,12 @@ bash "$RENDER" /root/manager-workspace/worker-skills
 bash "$RENDER" /root/manager-workspace/worker-agent
 bash "$RENDER" /root/manager-workspace/copaw-worker-agent
 bash "$RENDER" /root/manager-workspace/hermes-worker-agent
+bash "$RENDER" /root/manager-workspace/cimicode-worker-agent
 bash "$RENDER" /opt/agentteams/agent/worker-skills
 bash "$RENDER" /opt/agentteams/agent/worker-agent
 bash "$RENDER" /opt/agentteams/agent/copaw-worker-agent
 bash "$RENDER" /opt/agentteams/agent/hermes-worker-agent
+bash "$RENDER" /opt/agentteams/agent/cimicode-worker-agent
 log "Agent doc templates rendered"
 
 # Cloud mode: start background file sync (workspace ↔ OSS) and initial push

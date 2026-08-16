@@ -18,6 +18,8 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
+		{"empty_uses_fallback_cimicode", "", RuntimeCimicode, RuntimeCimicode},
+		{"explicit_cimicode_preserved", RuntimeCimicode, RuntimeCopaw, RuntimeCimicode},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,6 +41,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
+		{RuntimeCimicode, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {

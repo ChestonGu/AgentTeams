@@ -178,7 +178,7 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | cimicode (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
@@ -696,7 +696,7 @@ type Manager struct {
 type ManagerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | qwenpaw
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | qwenpaw | cimicode
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	Soul          string                     `json:"soul,omitempty"`          // custom SOUL.md content
 	Agents        string                     `json:"agents,omitempty"`        // custom AGENTS.md content
