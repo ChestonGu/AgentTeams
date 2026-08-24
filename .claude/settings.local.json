@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git ls-tree *)"
+      "Bash(git ls-tree *)",
+      "mcp__web-reader__webReader"
     ]
   }
 }

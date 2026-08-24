@@ -14,6 +14,8 @@
 #   HIGRESS_REGISTRY  - base image registry (default: cn-hangzhou)
 #   APT_MIRROR        - APT mirror host (default: empty; set to mirrors.aliyun.com for China)
 #   OPENCLAW_REPO_URL - OpenClaw git repository URL (default: https://github.com/shepherd-aaa/hiclaw-openclaw.git — 二开 fork)
+#   OPENCLAW_COMMIT   - OpenClaw commit to pin, fetched with --depth 1
+#                       (default: 4452716 — child of 2f35b6f; matrix reconnect fix + textChunkLimit 32000)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -30,7 +32,7 @@ ARG https_proxy
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG OPENCLAW_REPO_URL=https://github.com/shepherd-aaa/hiclaw-openclaw.git
 ARG OPENCLAW_BRANCH=hiclaw-2026.4.14-custom
-ARG OPENCLAW_COMMIT=
+ARG OPENCLAW_COMMIT=4452716de0cfe9a1822474d462ab3a4e2eb3a8bf
 
 # Set proxy as environment variables to ensure all tools can use them
 ENV HTTP_PROXY=${HTTP_PROXY} \
@@ -70,7 +72,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \
-    git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \
+    git fetch --depth 1 origin ${OPENCLAW_COMMIT} && \
     git checkout --detach FETCH_HEAD && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && \
