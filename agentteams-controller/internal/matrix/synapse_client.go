@@ -95,6 +95,15 @@ func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayNa
 // submission". The admin API (PUT /_synapse/admin/v2/users/{id}) creates the
 // user directly with a password — no registration_token / session needed.
 // Idempotent: PUT sets the password whether the user is new or already exists.
+//
+// The PUT deliberately does NOT carry a displayname field. The profile display
+// name is owned by the business layer (ProvisionWorker sets spec.displayName
+// right after registration; ProvisionManager pins the Manager identity; the
+// member displayName sync keeps it converged), and this method is re-invoked
+// on every idempotent password-mode re-provision — hardcoding
+// "displayname": req.Username here previously clobbered any controller-set
+// friendly display name on the next re-provision, resurrecting the raw
+// localpart in rooms until the next generation-gated sync fired.
 func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
@@ -114,7 +123,6 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
 	body := map[string]interface{}{
 		"password":       password,
-		"displayname":    req.Username,
 		"logout_devices": false,
 	}
 	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
