@@ -30,7 +30,14 @@ type fakeTeamMatrix struct {
 	roomNames    []roomNameCall
 	roomStates   []roomStateCall
 	tokenInvites []roomUserCall
+	setNames     []displayNameCall
 	created      bool
+}
+
+type displayNameCall struct {
+	userID      string
+	token       string
+	displayName string
 }
 
 type roomUserCall struct {
@@ -140,7 +147,10 @@ func (f *fakeTeamMatrix) SendMessageAsAdmin(context.Context, string, string) err
 
 func (f *fakeTeamMatrix) Login(context.Context, string, string) (string, error) { return "", nil }
 
-func (f *fakeTeamMatrix) SetDisplayName(context.Context, string, string, string) error { return nil }
+func (f *fakeTeamMatrix) SetDisplayName(_ context.Context, userID, token, displayName string) error {
+	f.setNames = append(f.setNames, displayNameCall{userID: userID, token: token, displayName: displayName})
+	return nil
+}
 
 func (f *fakeTeamMatrix) AdminCommand(_ context.Context, cmd string) error {
 	f.adminCmds = append(f.adminCmds, cmd)
@@ -433,6 +443,50 @@ func TestProvisionWorkerTeamMemberRoomMeta(t *testing.T) {
 	}
 	if got := leader["workerName"]; got != "lead" {
 		t.Fatalf("leader workerName=%v, want lead", got)
+	}
+}
+
+func TestProvisionWorkerSetsDisplayNameAtAccountCreation(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps:    matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
+		Gateway:      fakeGateway{},
+		Creds:        fakeCredentialStore{},
+		MatrixDomain: "localhost",
+		AdminUser:    "admin",
+	})
+
+	_, err := p.ProvisionWorker(context.Background(), WorkerProvisionRequest{
+		Name:        "alice",
+		DisplayName: "Alice Wang",
+	})
+	if err != nil {
+		t.Fatalf("ProvisionWorker: %v", err)
+	}
+	if len(matrixClient.setNames) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1 (at account creation)", len(matrixClient.setNames))
+	}
+	got := matrixClient.setNames[0]
+	if got.userID != "@alice:localhost" || got.displayName != "Alice Wang" || got.token != "matrix-token" {
+		t.Fatalf("SetDisplayName=%+v, want userID @alice:localhost, displayName Alice Wang, token matrix-token", got)
+	}
+}
+
+func TestProvisionWorkerSkipsDisplayNameWhenUnset(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps:    matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost"}),
+		Gateway:      fakeGateway{},
+		Creds:        fakeCredentialStore{},
+		MatrixDomain: "localhost",
+		AdminUser:    "admin",
+	})
+
+	if _, err := p.ProvisionWorker(context.Background(), WorkerProvisionRequest{Name: "bob"}); err != nil {
+		t.Fatalf("ProvisionWorker: %v", err)
+	}
+	if len(matrixClient.setNames) != 0 {
+		t.Fatalf("SetDisplayName calls=%d, want 0 when displayName unset", len(matrixClient.setNames))
 	}
 }
 

@@ -339,6 +339,7 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		Name:           m.RuntimeName,
 		CredentialName: m.Name,
 		Role:           m.Role.String(),
+		DisplayName:    m.DisplayName,
 	})
 	if err != nil {
 		// Idempotent: Synapse may return 403 M_FORBIDDEN when the admin
