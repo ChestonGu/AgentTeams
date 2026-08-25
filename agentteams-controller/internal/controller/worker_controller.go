@@ -733,6 +733,12 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	if maxConcurrent < 1 {
 		maxConcurrent = 1
 	}
+	// Startup visibility: prints the effective concurrency so a missing or
+	// mis-set AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES (or a stale image)
+	// is visible in `kubectl logs` without checking metrics.
+	mgr.GetLogger().Info("worker reconciler registered",
+		"maxConcurrentReconciles", maxConcurrent,
+		"source", "AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES")
 	bldr := ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Worker{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent})
