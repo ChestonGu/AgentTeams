@@ -42,9 +42,10 @@ const (
 	appServiceNotReadyRequeue = 5 * time.Second
 )
 
-// WorkerReconciler reconciles standalone Worker resources. Team members are
-// owned by Team CRs and are reconciled by TeamReconciler through the shared
-// member_reconcile helpers, not by WorkerReconciler.
+// WorkerReconciler reconciles Worker resources — both standalone Workers and
+// team members referenced by Team CRs — through the shared member_reconcile
+// helpers (infra, config, container). TeamReconciler layers team-level
+// coordination/policy config on top; it does not re-run the member phases.
 type WorkerReconciler struct {
 	client.Client
 
@@ -87,6 +88,13 @@ type WorkerReconciler struct {
 	WorkerDepsStorageEndpoint string
 	MountAuthType             string
 	MountRoleName             string
+
+	// MaxConcurrentReconciles is the Worker controller's worker parallelism.
+	// 0 or 1 keeps the controller-runtime default of 1 (legacy behavior);
+	// raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so a slow/hung
+	// Worker stops starving every other Worker — and every Team, whose Active
+	// gate waits on Worker readiness.
+	MaxConcurrentReconciles int
 }
 
 func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -702,8 +710,17 @@ func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr e
 }
 
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
+	// Default parallelism is 1 (controller-runtime default, legacy behavior).
+	// Operators may raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so
+	// a slow/hung Worker stops starving every other Worker — and every Team,
+	// whose Active gate waits on Worker readiness.
+	maxConcurrent := r.MaxConcurrentReconciles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
 	bldr := ctrl.NewControllerManagedBy(mgr).
-		For(&v1beta1.Worker{})
+		For(&v1beta1.Worker{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent})
 
 	if r.Backend != nil {
 		ctx := context.Background()

@@ -278,6 +278,13 @@ controller:
     reconcileTimeoutSeconds: 0    # AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
     reconcileIntervalSeconds: 0   # AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS; 0 = controller default (300)
     activeNoRequeue: false        # AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
+  # Worker reconciler tuning. The Worker controller runs the per-member
+  # provisioning chain (Matrix account/room, OSS config push, container
+  # create) for every Worker CR — the heaviest reconcile in the system, and
+  # the gate every Team's Active status waits on. Empty values keep the
+  # controller's built-in defaults.
+  workerTuning:
+    maxConcurrentReconciles: 0    # AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES; 0 = controller default (1)
   uninstallHook:
     # When enabled, helm uninstall first runs a Job that deletes all
     # Manager/Worker/Team/Human CRs while the controller is still alive,

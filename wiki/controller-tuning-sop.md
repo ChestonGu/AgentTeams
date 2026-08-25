@@ -27,6 +27,7 @@
 | 环境变量 | 默认 | 语义 | 建议 |
 |----------|------|------|------|
 | `HICLAW_TEAM_MAX_CONCURRENT_RECONCILES` | `1`（串行） | Team 调谐并发 worker 数 | 慢/挂起 Team 阻塞全队列时调大（建议 3~5） |
+| `AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES`（agentteams 分支；helm 值 `controller.workerTuning.maxConcurrentReconciles`） | `1`（串行） | Worker 调谐并发 worker 数。Worker controller 为每个 Worker CR 跑完整成员供给链（Matrix 账号/房间、OSS 配置推送、容器创建），是全系统最重的调谐，也是各 Team Active 判定的依赖 | Worker 数量多、成批扩容时调大（建议 3~5）；单个挂起 Worker 阻塞全队列时立即调大 |
 | `HICLAW_TEAM_RECONCILE_TIMEOUT_SECONDS` | `0`（关闭） | 单次调谐超时上限 | 外部依赖（OSS/Matrix）偶发挂起时开启（如 300~600） |
 | `HICLAW_TEAM_RECONCILE_INTERVAL_SECONDS` | `300`（5min） | 已收敛 Active Team 的周期 requeue（带 0~10% 正向抖动） | 减少无谓调谐时可调大（600~1800） |
 | `HICLAW_TEAM_ACTIVE_NO_REQUEUE` | `false` | 已收敛且 spec 未变的 Active Team 只按事件调谐，不再周期 requeue | 需要极低队列负载时置 `true` |

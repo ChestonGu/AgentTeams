@@ -629,6 +629,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
 		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
 		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
+		MaxConcurrentReconciles:     a.cfg.WorkerMaxConcurrentReconciles,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}

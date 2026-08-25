@@ -108,6 +108,15 @@ spec:
             - name: AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
               value: "true"
             {{- end }}
+            {{- /*
+              Worker reconciler tuning knob. The Worker controller runs the
+              per-member provisioning chain for every Worker CR; raise the
+              concurrency so one slow/hung Worker stops starving the rest.
+            */}}
+            {{- if ne (int .Values.controller.workerTuning.maxConcurrentReconciles) 0 }}
+            - name: AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES
+              value: {{ .Values.controller.workerTuning.maxConcurrentReconciles | quote }}
+            {{- end }}
             - name: AGENTTEAMS_STORAGE_PROVIDER
               value: {{ .Values.storage.provider | quote }}
             - name: AGENTTEAMS_FS_ENDPOINT
