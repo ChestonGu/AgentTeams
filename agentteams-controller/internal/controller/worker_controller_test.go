@@ -467,6 +467,25 @@ func TestWorkerMemberContext_MergesMetadataAndSpecLabels(t *testing.T) {
 	}
 }
 
+// TestWorkerMemberContext_DisplayNameFallsBackToWorkerName verifies the CRD
+// contract "friendly display name ... falls back to workerName": an empty
+// spec.displayName resolves to the Worker CR name so accounts born without a
+// display name do not show only their raw Matrix localpart.
+func TestWorkerMemberContext_DisplayNameFallsBackToWorkerName(t *testing.T) {
+	r := &WorkerReconciler{}
+	w := &v1beta1.Worker{}
+	w.Name = "alice"
+
+	if got := r.workerMemberContext(w).DisplayName; got != "alice" {
+		t.Fatalf("DisplayName with empty spec.displayName = %q, want worker name %q", got, "alice")
+	}
+
+	w.Spec.DisplayName = "Alice Wang"
+	if got := r.workerMemberContext(w).DisplayName; got != "Alice Wang" {
+		t.Fatalf("DisplayName with spec.displayName = %q, want %q", got, "Alice Wang")
+	}
+}
+
 // TestWorkerMemberContext_SystemLabelsOverrideUser verifies reserved
 // keys are silently overridden by controller system labels. Users
 // cannot spoof agentteams.io/controller or agentteams.io/role by stuffing them

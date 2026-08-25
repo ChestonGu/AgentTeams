@@ -1426,6 +1426,19 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 		creds.MatrixToken = userCreds.AccessToken
 	}
 
+	// Step 2b: Pin the Manager profile displayname. The homeserver user
+	// creation step (Synapse admin EnsureUser) no longer hardcodes a
+	// displayname, so the business layer owns the profile name — the Manager
+	// has no spec.displayName, so write the stable "manager" identity here
+	// once. Non-fatal: a profile-write failure must not block provisioning,
+	// and this is never re-applied (RefreshManagerCredentials is
+	// displayname-agnostic), so it cannot clobber a later rename.
+	if err := p.matrixOps.SetUserDisplayName(ctx, managerMatrixID, userCreds.AccessToken, "manager"); err != nil {
+		logger.Error(err, "failed to set Manager displayName (non-fatal)", "userID", managerMatrixID)
+	} else {
+		logger.Info("Manager displayName set", "userID", managerMatrixID, "displayName", "manager")
+	}
+
 	// Step 3: Create MinIO user (embedded mode only)
 	if p.ossAdmin != nil {
 		logger.Info("creating MinIO user for Manager", "name", managerName)

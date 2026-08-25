@@ -341,9 +341,9 @@ func TestRefreshManagerCredentialsRestoresMinIOAccess(t *testing.T) {
 		},
 	}
 	p := NewProvisioner(ProvisionerConfig{
-		Matrix:   newFakeTeamMatrix(),
-		Creds:    creds,
-		OSSAdmin: admin,
+		MatrixOps: matrix.NewLegacyClientOps(newFakeTeamMatrix(), matrix.Config{Domain: "localhost"}),
+		Creds:     creds,
+		OSSAdmin:  admin,
 	})
 
 	result, err := p.RefreshManagerCredentials(context.Background(), "default")
@@ -505,6 +505,15 @@ func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 	}
 	if result.RoomID != "!manager:localhost" {
 		t.Fatalf("manager room=%q, want !manager:localhost", result.RoomID)
+	}
+	// The Manager profile displayname must be pinned by the provisioning step
+	// (Step 2b) — EnsureUser no longer supplies it, so ProvisionManager owns it.
+	if len(matrixClient.setNames) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1 (Manager profile pin)", len(matrixClient.setNames))
+	}
+	gotName := matrixClient.setNames[0]
+	if gotName.userID != "@manager:localhost" || gotName.displayName != "manager" || gotName.token != "matrix-token" {
+		t.Fatalf("SetDisplayName=%+v, want userID @manager:localhost, displayName manager, token matrix-token", gotName)
 	}
 	state := requireRoomState(t, matrixClient, "!manager:localhost")
 	if got := state.content["roomKind"]; got != "direct_room" {
