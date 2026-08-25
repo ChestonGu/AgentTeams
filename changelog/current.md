@@ -39,6 +39,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **Worker displayName applied at Matrix account creation**: `ProvisionWorker` now carries `spec.displayName` through to the Matrix profile the moment the account is registered (using the freshly issued access token, with the provider's admin-identity fallback when no token is available), instead of relying only on the later generation-guarded profile sync — a Worker created with a display name no longer appears as its raw user ID in rooms, and the display name is in place before `matrixId` is recorded into Worker status.
+- **Synapse EnsureUser no longer clobbers displayname**: `SynapseClient.EnsureUser` (the admin `PUT /_synapse/admin/v2/users/{id}` path) dropped the hardcoded `displayname: <username>` field. The method is idempotent and re-invoked on every password-mode re-provision, so writing the raw localpart there silently resurrected the runtime name over any controller-set friendly `spec.displayName` on the next provision/reconcile cycle (the room flicker between `leader` and `t-<team>-leader`). The display name is now owned solely by the business layer — `ProvisionWorker` Step 2b, the member displayName sync, and a new explicit `ProvisionManager` step that pins the Manager profile to `manager` (previously supplied implicitly by EnsureUser). Human accounts were already re-set by the human reconcile; behavior on Tuwunel (which never wrote a displayname at creation) is unchanged.
+- **Worker displayName falls back to the Worker name**: An empty `spec.displayName` now resolves to the Worker CR `metadata.name`, honoring the CRD comment ("friendly display name ... falls back to workerName") and the `agt --display-name` flag help ("defaults to worker name") that the controller previously never implemented — a Worker created without a display name keeps its room/listing identity (e.g. `alice`) instead of showing only its raw Matrix localpart.
 - **Script `log` fallback**: `hiclaw-env.sh` now defines a minimal `log()` when `base.sh` is absent (controller/worker images), so scripts fail on the real error instead of `log: command not found` (exit 127).
 
 - **QwenPaw-first local install flow**: The installer now presents QwenPaw as the default worker runtime, supports keep-all upgrades with enter-to-keep prompts for existing parameters, and improves non-interactive guardrails for scripted installs.
@@ -121,6 +124,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **闁活喗娼欏鏍箑瑜嶈ぐ澶愬即?/ 闁告娲ㄦ鍥╂嫚鐎涙ɑ顫?*
 
+- **Worker 创建时即应用 Matrix displayName**：`ProvisionWorker` 在注册 Matrix 账号后立即用新签发的访问令牌（令牌不可用时回退到 homeserver 管理员身份）将 `spec.displayName` 写入账号 profile，不再只依赖后续的 generation 门控 profile 同步——带 displayName 创建的 Worker 不会再以原始 user ID 显示在房间中，且 displayName 会在 `matrixId` 写入 Worker status 之前完成配置。
+- **Worker displayName 回退到 Worker 名**：`spec.displayName` 为空时现在回退到 Worker CR 的 `metadata.name`，兑现 CRD 注释（"friendly display name ... falls back to workerName"）与 `agt --display-name` 帮助（"defaults to worker name"）中 controller 此前一直未实现的行为——未配置 displayName 的 Worker 在房间/列表中保持其身份名（如 `alice`），而不是只显示原始 Matrix localpart。
+- **Synapse EnsureUser 不再覆写 displayname**：`SynapseClient.EnsureUser`（admin `PUT /_synapse/admin/v2/users/{id}` 路径）移除了硬编码的 `displayname: <username>` 字段。该方法是幂等的、每次密码模式重新配平都会重放，写入原始 localpart 会让运行时名在下一次 provision/reconcile 时重新盖掉 controller 设置的友好 `spec.displayName`（房间内 `leader` 与 `t-<team>-leader` 闪烁的根因）。displayname 现在完全由业务层负责——`ProvisionWorker` Step 2b、成员 displayName 同步，以及新增的 `ProvisionManager` 步骤（将 Manager profile 固定为 `manager`，此前由 EnsureUser 隐式提供）。Human 账号此前已由 human reconcile 重写；Tuwunel（创建时从不写 displayname）行为不变。
 - **AgentTeams 闁告稖妫勯幃鏇㈠箣閹邦亣绀嬮柛鐑嗗灟缁旀挳鎮介悢鍛婃珡闁汇劌瀚换宥囨偘鐏炵偓顦у┑鍌涘灩鐎?*闁挎稒鑹鹃悾銊ф啑閸涱厽鐝ゅ☉?Helm 闁稿繈鍎辫ぐ娑㈠Υ娑撳攷ntroller 闁告牕鎳岄埀顑挎agt` CLI闁靛棔鑳堕獮鍡樻櫠閸愩劌缍侀梺鎻掔箞閳ь兛娴囩换宥囨偘鐏炵偓顦ч悹渚灠缁剁偤濡存担鐣屻偒婵犙勫姇閹洜绮旈弶鎸庡閻庢稒锚閸嬪秹宕滃鍥╃；鐎规瓕灏欓顒勫礆閹殿噮浼傜紓浣哄枍缁斿瓨绋?AgentTeams闁靛棗鍊瑰Λ?HiClaw wrapper 闁告粌鏈璺ㄦ崉閸愨晝鐖遍柣顔绘閼垫垿鎯冮崟顐㈡倯閻庡湱鎳撻崹搴ㄥ绩椤栨艾鍤掔紒澶婎煼濞呭酣鏁嶅☉妤冪煠闁哄唲鍕伕闁告娲橀崹銊╂嚇濮橆厽鎷遍柛妤€娲ㄦ鍥籍鐠鸿櫣绠戝銈堫嚙閸ㄥ繘骞戦姀鐘茬厒 AgentTeams 闁告稖妫勯幃鏇㈠Υ?[#1063](https://github.com/agentscope-ai/AgentTeams/pull/1063), [#1065](https://github.com/agentscope-ai/AgentTeams/pull/1065))
 - **Team 濞?Worker 閻犙冨缁喗鎷呯捄銊︽殢 v1.2 闁哄牃鍋撶紓浣哥墕椤ㄦ牜鐥?*闁挎稒鐡杄am 闂侇偅淇虹换?`spec.workerMembers` 鐎殿喗娲滈弫銈夋偑椤掑倻褰岀紒鐙呯磿閹﹪鎯?Worker CR闁挎稒绋愮粭澶愬礃瀹ュ棙鏆滈柟闀愮閸炴挳鎳?Worker 闁瑰瓨鍔曢幉鎶藉Υ娑旂gistry 閺夆晙鑳朵簺閻犱警鍨扮欢鐐哄矗婵犲倸寰撳〒姘箚缁傚棝鎯冮崟顒侊紜闁煎瓨纰嶅﹢浼村Υ?[#1072](https://github.com/agentscope-ai/AgentTeams/pull/1072))
 
@@ -169,6 +175,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **pprof 閻犲鍟抽惁顖炲几閸曨偆绱︾€殿喒鍋撻柛?*: 闁硅矇鍐ㄧ厬闁革絻鍔戦弳鍛村磽韫囨梻鈧垰顕欓悜妯绘殰闁?`ENABLE_PPROF=true`闁挎稑娼?-build-arg`闁挎稑顧€缁辨繃绂?`-tags pprof` 缂傚倹鐗為惁?`cmd/controller`闁挎稑鏈В姘舵?6060 缂佹棏鍨拌ぐ?`/debug/pprof`闁挎稑鐗嗚ぐ鏌ユ偨?`HICLAW_PPROF_ADDR` 閻熸洖妫涘ú濠囨晬婢跺﹨瀚欑€殿喒鍋撻柛?block/mutex 闂佹彃娲﹂悧閬嶅Υ閸岀偟甯涢悹浣靛€栭悗顖氼嚈閾忓湱妞介悹?no-op stub闁炽儲鏌￠埀顒佹煣缁楀宕?pprof 濞寸媴绲块悥婊堝Υ娴ｉ鐟濈€殿喒鍋撳Λ鐗堢箓椤﹁崵绮╅姘稉闁挎稑鑻ぐ鍌滄暜閸愵喗娈旈柛宥呯箻濞村倻鎷崘顓犳Ц闂傚牜娼块埀?
 
 - **Human 閻犲鍟抽惃顓㈡焻閳ь剟鏌嗘径鍝ョ憿閻庢稒顨嗛宀€鈧潧缍婄紞?*: `HumanStatus` 闁哄倹婢橀·?`observedGeneration`闁挎稑鐗呯粭?Worker/Team/Manager 閻庨潧缍婄紞鍫ユ晬婢跺绨伴柛?`consecutiveFailures` / `maxRetriesReached` / `phaseTransitionTime`闁靛棔鐥塶fra 濠㈡儼绮剧憴锕傚绩闁稖绀嬮柟绋挎处閺嗙喖鏌呴埀顒勬焼閸栵紕绀?0s 闁?10min 閻忓繋绶氶妴濠囨晬婢舵稓绀夐弶鈺冨仧閻㈢粯寰勬潏顐バ?5 婵炲棌鈧櫕鍊甸柛瀣矋椤掓盯鎳涢鍕楅梺鎻掔Х閻︻垶鏁嶅畝鍕ㄥ亾濮樺磭绠?`hiclaw.io/retry` 婵炲鍔忚闂佹彃绉甸弻濠囧触椤栨粍鏆忛柨娑欑◥閹便劍寰勫鍕晩闁告鍠庨崢?`RequeueAfter` + error 闁汇劌瀚濠氭煂?requeue 婵☆垪鈧磭纭€闁?
+
 
 ---
 

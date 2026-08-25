@@ -637,13 +637,18 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		// Workers go through StatusNotFound create instead of a transient
 		// spec-change delete. CurrentSpecHash lets sandbox read managerConfig live
 		// annotations only when Worker.status.specHash is empty.
-		SpecChanged:                 specChanged,
-		AppliedSpecHash:             appliedSpecHash,
-		CurrentSpecHash:             w.Status.SpecHash,
-		IsUpdate:                    w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		ExistingMatrixUserID:        w.Status.MatrixUserID,
-		ExistingRoomID:              w.Status.RoomID,
-		DisplayName:                 spec.DisplayName,
+		SpecChanged:          specChanged,
+		AppliedSpecHash:      appliedSpecHash,
+		CurrentSpecHash:      w.Status.SpecHash,
+		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
+		ExistingMatrixUserID: w.Status.MatrixUserID,
+		ExistingRoomID:       w.Status.RoomID,
+		// DisplayName falls back to the Worker CR name when spec.displayName
+		// is empty, honoring the CRD contract ("friendly display name ...
+		// falls back to workerName") and the agt --display-name flag help
+		// ("defaults to worker name"). The fallback keeps accounts born
+		// without a displayname from showing only their raw Matrix localpart.
+		DisplayName:                 effectiveWorkerDisplayName(spec.DisplayName, w.Name),
 		DisplayNameSyncedGeneration: w.Status.DisplayNameSyncedGeneration,
 		CurrentExposedPorts:         w.Status.ExposedPorts,
 		Owner:                       w,
@@ -653,6 +658,16 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		BackendRuntime:              backendRuntime,
 		StatusBackendRuntime:        w.Status.BackendRuntime,
 	}
+}
+
+// effectiveWorkerDisplayName resolves the Matrix profile display name for a
+// Worker: spec.displayName wins, otherwise the Worker CR name (the
+// "workerName" contract in the CRD comment and agt --display-name help).
+func effectiveWorkerDisplayName(specDisplayName, workerCRName string) string {
+	if specDisplayName != "" {
+		return specDisplayName
+	}
+	return workerCRName
 }
 
 // applyMemberStateToWorker copies runtime state into Worker.Status fields.
