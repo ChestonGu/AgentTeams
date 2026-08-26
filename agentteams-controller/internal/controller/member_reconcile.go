@@ -319,6 +319,16 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
 
+		// Gateway state can be lost independently of the stored credentials
+		// (e.g. Higress restart with fresh console state). RefreshWorkerCredentials
+		// never touches the gateway, so re-ensure the consumer exactly like the
+		// Manager refresh path does — otherwise the worker's model calls 401
+		// forever with no self-heal path. Errors propagate so controller-runtime
+		// requeues with backoff.
+		if err := d.Provisioner.EnsureWorkerGatewayAuth(ctx, m.RuntimeName, refreshResult.GatewayKey); err != nil {
+			return reconcile.Result{}, fmt.Errorf("restore worker gateway auth: %w", err)
+		}
+
 		state.MatrixUserID = m.ExistingMatrixUserID
 		state.RoomID = m.ExistingRoomID
 		state.ProvResult = &service.WorkerProvisionResult{
@@ -351,6 +361,12 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 			refreshResult, refreshErr := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
 			if refreshErr != nil {
 				return reconcile.Result{}, fmt.Errorf("refresh credentials after already-in-room: %w", refreshErr)
+			}
+			// ProvisionWorker aborted before Step 5 on the already-in-room
+			// error, so the gateway consumer may not exist yet — same restore
+			// as the existing-worker branch above.
+			if err := d.Provisioner.EnsureWorkerGatewayAuth(ctx, m.RuntimeName, refreshResult.GatewayKey); err != nil {
+				return reconcile.Result{}, fmt.Errorf("restore worker gateway auth: %w", err)
 			}
 			state.MatrixUserID = d.Provisioner.MatrixUserID(m.RuntimeName)
 			state.RoomID = m.ExistingRoomID
