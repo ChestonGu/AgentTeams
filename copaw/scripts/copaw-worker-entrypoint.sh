@@ -48,7 +48,11 @@ if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
-    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
+    # provider=oss only blocks startup when static credentials are ALSO
+    # absent — K8s deployments inject the static trio directly (provider=oss
+    # + shared appkey), which must take the static path below.
+    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ] \
+        && { [ -z "${AGENTTEAMS_FS_ENDPOINT:-}" ] || [ -z "${AGENTTEAMS_FS_ACCESS_KEY:-}" ] || [ -z "${AGENTTEAMS_FS_SECRET_KEY:-}" ]; }; then
         log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
         exit 1
     fi
