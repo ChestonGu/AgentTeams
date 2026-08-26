@@ -39,7 +39,7 @@ fi
 # ── Credential setup ─────────────────────────────────────────────────────────
 # Controller-mediated OSS: STS credentials via MC_HOST_${AGENTTEAMS_STORAGE_ALIAS:-agentteams}.
 # Local MinIO: explicit FS endpoint/key/secret passed via CLI args.
-if ensure_mc_credentials && agentteams_mc_host_configured; then
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     log "Configuring OSS credentials via controller-issued STS..."
     # CLI requires --fs/--fs-key/--fs-secret but they are unused when the mc host is set.
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
@@ -59,6 +59,11 @@ else
     [ -n "${FS_ENDPOINT}" ] || { log "ERROR: AGENTTEAMS_FS_ENDPOINT is required"; exit 1; }
     [ -n "${FS_ACCESS_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_ACCESS_KEY is required"; exit 1; }
     [ -n "${FS_SECRET_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_SECRET_KEY is required"; exit 1; }
+    # Set mc alias with static credentials (same as openclaw worker-entrypoint.sh)
+    log "Configuring mc alias for local S3..."
+    mc alias set "${AGENTTEAMS_STORAGE_ALIAS:-agentteams}" "${FS_ENDPOINT}" "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
+    # Also set MC_HOST_<alias> so Python mc-wrapper (checks MC_HOST, not mc config) works in k8s mode
+    export "MC_HOST_${AGENTTEAMS_STORAGE_ALIAS:-agentteams}"="${FS_ENDPOINT%%://*}://${FS_ACCESS_KEY}:${FS_SECRET_KEY}@${FS_ENDPOINT#*://}"
 fi
 
 # Set up skills CLI symlink: ~/.agents/skills -> worker's skills directory
