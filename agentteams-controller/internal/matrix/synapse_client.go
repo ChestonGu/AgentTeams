@@ -120,10 +120,19 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	// re-applies to an already-provisioned user (idempotent reconcile). Synapse
 	// 1.127 defaults logout_devices to true on UserRestServletV2, which would
 	// silently kill running worker/human sessions on every re-provision.
+	// deactivated=false reactivates a leftover account: Synapse cannot hard-delete
+	// users (deactivate keeps the row), so an account deactivated by a prior
+	// delete flow (or an admin) still occupies the ID. Without an explicit
+	// "deactivated": false the PUT leaves the deactivation state unchanged
+	// ("If unspecified, deactivation state will be left unchanged"), and a
+	// same-named re-created Worker/Human either gets M_USER_IN_USE on older
+	// Synapse or stays deactivated and fails login on newer versions. This makes
+	// recreate-after-delete converge like the Tuwunel orphan-recovery path.
 	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
 	body := map[string]interface{}{
 		"password":       password,
 		"logout_devices": false,
+		"deactivated":    false,
 	}
 	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
 		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)
