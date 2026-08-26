@@ -1002,6 +1002,14 @@ func TestSynapseOps_ProvisionUser_UsesAdminUsersEndpoint(t *testing.T) {
 	if ld, ok := putBody["logout_devices"].(bool); !ok || ld {
 		t.Errorf("users body logout_devices = %v, want false", putBody["logout_devices"])
 	}
+	// deactivated must be false: Synapse leaves the deactivation state unchanged
+	// unless the field is explicit, so a same-named Worker/Human re-created after
+	// its account was deactivated by a prior delete (Synapse cannot hard-delete
+	// users) would stay deactivated and fail login — or hit M_USER_IN_USE on the
+	// create branch of older Synapse versions. Explicit false reactivates it.
+	if deact, ok := putBody["deactivated"].(bool); !ok || deact {
+		t.Errorf("users body deactivated = %v, want false", putBody["deactivated"])
+	}
 	if ref.UserID != "@alice:d" || !ref.Created {
 		t.Errorf("UserRef = %+v, want UserID=@alice:d Created=true", ref)
 	}
