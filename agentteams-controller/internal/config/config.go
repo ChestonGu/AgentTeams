@@ -209,6 +209,13 @@ type Config struct {
 	// (pod phase changes, spec edits) instead of on the periodic timer.
 	TeamActiveNoRequeue bool // AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE; true = no periodic requeue
 
+	// Worker reconciler tuning. The Worker controller runs the full
+	// per-member provisioning chain (Matrix account/room, OSS config push,
+	// container create) for every Worker CR, so with
+	// MaxConcurrentReconciles=1 a single hung Worker starves every other
+	// Worker — and every Team, whose Active gate waits on Worker readiness.
+	WorkerMaxConcurrentReconciles int // AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES; 1 = serial
+
 	// Locale used to render the first-boot Manager onboarding prompt
 	// (welcome message). Sourced from the install-time AGENTTEAMS_LANGUAGE
 	// (zh / en) and TZ env vars that the install script forwards into
@@ -427,10 +434,11 @@ func LoadConfig() *Config {
 		AIStreamIdleTimeoutSeconds: envOrDefaultInt("AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
 		ElementWebURL:              os.Getenv("AGENTTEAMS_ELEMENT_WEB_URL"),
 
-		TeamMaxConcurrentReconciles:  envOrDefaultInt("AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES", 1),
-		TeamReconcileTimeoutSeconds:  envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
-		TeamReconcileIntervalSeconds: envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS", 300),
-		TeamActiveNoRequeue:          envBool("AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE"),
+		TeamMaxConcurrentReconciles:   envOrDefaultInt("AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES", 1),
+		TeamReconcileTimeoutSeconds:   envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
+		TeamReconcileIntervalSeconds:  envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS", 300),
+		TeamActiveNoRequeue:           envBool("AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE"),
+		WorkerMaxConcurrentReconciles: envOrDefaultInt("AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES", 1),
 
 		UserLanguage: envOrDefault("AGENTTEAMS_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),

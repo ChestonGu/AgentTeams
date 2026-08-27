@@ -157,7 +157,7 @@ ensure_mc_credentials() {
     # container entrypoint. Do not mistake the controller URL and bearer token
     # (which are also present in local/K8s deployments) for proof that STS is
     # available. Cloud deployments must opt into STS explicitly with "oss".
-    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" != "oss" ]; then
+    if [ "${AGENTTEAMS_RUNTIME:-}" != "oss" ]; then
         return 0
     fi
 

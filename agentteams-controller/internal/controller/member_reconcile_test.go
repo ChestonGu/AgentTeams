@@ -125,6 +125,57 @@ func TestReconcileMemberInfraSyncsDisplayNameWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberInfraRestoresWorkerGatewayAuth(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                 "leader-cr",
+		RuntimeName:          "leader",
+		ExistingMatrixUserID: "@leader:localhost",
+		ExistingRoomID:       "!leader:localhost",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	calls := prov.Calls.EnsureWorkerGatewayAuth
+	if len(calls) != 1 {
+		t.Fatalf("EnsureWorkerGatewayAuth calls=%d, want 1", len(calls))
+	}
+	if got := calls[0]; got.Name != "leader" || got.GatewayKey != "mock-gw-key-leader" {
+		t.Fatalf("EnsureWorkerGatewayAuth call=%+v, want name leader key mock-gw-key-leader", got)
+	}
+}
+
+func TestReconcileMemberInfraRestoresWorkerGatewayAuthOnAlreadyInRoom(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	prov.ProvisionWorkerFn = func(context.Context, service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error) {
+		return nil, errors.New("HTTP 403 ... already in the room")
+	}
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:        "leader-cr",
+		RuntimeName: "leader",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	calls := prov.Calls.EnsureWorkerGatewayAuth
+	if len(calls) != 1 {
+		t.Fatalf("EnsureWorkerGatewayAuth calls=%d, want 1", len(calls))
+	}
+	if got := calls[0]; got.Name != "leader" || got.GatewayKey != "mock-gw-key-leader" {
+		t.Fatalf("EnsureWorkerGatewayAuth call=%+v, want name leader key mock-gw-key-leader", got)
+	}
+}
+
 func TestReconcileMemberInfraSkipsDisplayNameSyncWhenGenerationSynced(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}

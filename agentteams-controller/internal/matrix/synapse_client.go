@@ -95,6 +95,15 @@ func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayNa
 // submission". The admin API (PUT /_synapse/admin/v2/users/{id}) creates the
 // user directly with a password — no registration_token / session needed.
 // Idempotent: PUT sets the password whether the user is new or already exists.
+//
+// The PUT deliberately does NOT carry a displayname field. The profile display
+// name is owned by the business layer (ProvisionWorker sets spec.displayName
+// right after registration; ProvisionManager pins the Manager identity; the
+// member displayName sync keeps it converged), and this method is re-invoked
+// on every idempotent password-mode re-provision — hardcoding
+// "displayname": req.Username here previously clobbered any controller-set
+// friendly display name on the next re-provision, resurrecting the raw
+// localpart in rooms until the next generation-gated sync fired.
 func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
@@ -111,11 +120,19 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	// re-applies to an already-provisioned user (idempotent reconcile). Synapse
 	// 1.127 defaults logout_devices to true on UserRestServletV2, which would
 	// silently kill running worker/human sessions on every re-provision.
+	// deactivated=false reactivates a leftover account: Synapse cannot hard-delete
+	// users (deactivate keeps the row), so an account deactivated by a prior
+	// delete flow (or an admin) still occupies the ID. Without an explicit
+	// "deactivated": false the PUT leaves the deactivation state unchanged
+	// ("If unspecified, deactivation state will be left unchanged"), and a
+	// same-named re-created Worker/Human either gets M_USER_IN_USE on older
+	// Synapse or stays deactivated and fails login on newer versions. This makes
+	// recreate-after-delete converge like the Tuwunel orphan-recovery path.
 	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
 	body := map[string]interface{}{
 		"password":       password,
-		"displayname":    req.Username,
 		"logout_devices": false,
+		"deactivated":    false,
 	}
 	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
 		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)

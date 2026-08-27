@@ -42,9 +42,10 @@ const (
 	appServiceNotReadyRequeue = 5 * time.Second
 )
 
-// WorkerReconciler reconciles standalone Worker resources. Team members are
-// owned by Team CRs and are reconciled by TeamReconciler through the shared
-// member_reconcile helpers, not by WorkerReconciler.
+// WorkerReconciler reconciles Worker resources — both standalone Workers and
+// team members referenced by Team CRs — through the shared member_reconcile
+// helpers (infra, config, container). TeamReconciler layers team-level
+// coordination/policy config on top; it does not re-run the member phases.
 type WorkerReconciler struct {
 	client.Client
 
@@ -87,6 +88,13 @@ type WorkerReconciler struct {
 	WorkerDepsStorageEndpoint string
 	MountAuthType             string
 	MountRoleName             string
+
+	// MaxConcurrentReconciles is the Worker controller's worker parallelism.
+	// 0 or 1 keeps the controller-runtime default of 1 (legacy behavior);
+	// raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so a slow/hung
+	// Worker stops starving every other Worker — and every Team, whose Active
+	// gate waits on Worker readiness.
+	MaxConcurrentReconciles int
 }
 
 func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -629,13 +637,18 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		// Workers go through StatusNotFound create instead of a transient
 		// spec-change delete. CurrentSpecHash lets sandbox read managerConfig live
 		// annotations only when Worker.status.specHash is empty.
-		SpecChanged:                 specChanged,
-		AppliedSpecHash:             appliedSpecHash,
-		CurrentSpecHash:             w.Status.SpecHash,
-		IsUpdate:                    w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		ExistingMatrixUserID:        w.Status.MatrixUserID,
-		ExistingRoomID:              w.Status.RoomID,
-		DisplayName:                 spec.DisplayName,
+		SpecChanged:          specChanged,
+		AppliedSpecHash:      appliedSpecHash,
+		CurrentSpecHash:      w.Status.SpecHash,
+		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
+		ExistingMatrixUserID: w.Status.MatrixUserID,
+		ExistingRoomID:       w.Status.RoomID,
+		// DisplayName falls back to the Worker CR name when spec.displayName
+		// is empty, honoring the CRD contract ("friendly display name ...
+		// falls back to workerName") and the agt --display-name flag help
+		// ("defaults to worker name"). The fallback keeps accounts born
+		// without a displayname from showing only their raw Matrix localpart.
+		DisplayName:                 effectiveWorkerDisplayName(spec.DisplayName, w.Name),
 		DisplayNameSyncedGeneration: w.Status.DisplayNameSyncedGeneration,
 		CurrentExposedPorts:         w.Status.ExposedPorts,
 		Owner:                       w,
@@ -645,6 +658,16 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		BackendRuntime:              backendRuntime,
 		StatusBackendRuntime:        w.Status.BackendRuntime,
 	}
+}
+
+// effectiveWorkerDisplayName resolves the Matrix profile display name for a
+// Worker: spec.displayName wins, otherwise the Worker CR name (the
+// "workerName" contract in the CRD comment and agt --display-name help).
+func effectiveWorkerDisplayName(specDisplayName, workerCRName string) string {
+	if specDisplayName != "" {
+		return specDisplayName
+	}
+	return workerCRName
 }
 
 // applyMemberStateToWorker copies runtime state into Worker.Status fields.
@@ -702,8 +725,23 @@ func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr e
 }
 
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
+	// Default parallelism is 1 (controller-runtime default, legacy behavior).
+	// Operators may raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so
+	// a slow/hung Worker stops starving every other Worker — and every Team,
+	// whose Active gate waits on Worker readiness.
+	maxConcurrent := r.MaxConcurrentReconciles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	// Startup visibility: prints the effective concurrency so a missing or
+	// mis-set AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES (or a stale image)
+	// is visible in `kubectl logs` without checking metrics.
+	mgr.GetLogger().Info("worker reconciler registered",
+		"maxConcurrentReconciles", maxConcurrent,
+		"source", "AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES")
 	bldr := ctrl.NewControllerManagedBy(mgr).
-		For(&v1beta1.Worker{})
+		For(&v1beta1.Worker{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent})
 
 	if r.Backend != nil {
 		ctx := context.Background()

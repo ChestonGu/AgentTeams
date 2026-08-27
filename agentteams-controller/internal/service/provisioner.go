@@ -38,6 +38,11 @@ type WorkerProvisionRequest struct {
 	Role           string // "standalone" | "team_leader" | "worker"
 	TeamName       string
 	TeamLeaderName string
+	// DisplayName is the Matrix profile displayname applied to the account
+	// immediately after registration. Empty means no profile write happens at
+	// provisioning time (the controller keeps the default user ID as the
+	// displayname until a later profile sync).
+	DisplayName string
 }
 
 // WorkerProvisionResult contains all outputs from a successful provision.
@@ -384,6 +389,24 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// gateway restart).
 	if userCreds.AccessToken != "" {
 		creds.MatrixToken = userCreds.AccessToken
+	}
+
+	// Step 2b: Apply spec.displayName to the Matrix profile at account
+	// creation, so the account is born with its friendly display name instead
+	// of appearing as the raw user ID until a later profile sync. This runs
+	// before ProvisionWorker returns, so the display name is already in place
+	// by the time the caller records matrixId into the CRD status. Failure is
+	// non-fatal (profile writes must not block infrastructure provisioning) —
+	// the generation-guarded displayName sync in ReconcileMemberInfra retries
+	// on every subsequent reconcile until it succeeds.
+	if req.DisplayName != "" {
+		if err := p.matrixOps.SetUserDisplayName(ctx, workerMatrixID, userCreds.AccessToken, req.DisplayName); err != nil {
+			logger.Error(err, "failed to set Matrix displayName at account creation (non-fatal)",
+				"name", workerName, "userID", workerMatrixID, "displayName", req.DisplayName)
+		} else {
+			logger.Info("Matrix displayName set at account creation",
+				"name", workerName, "userID", workerMatrixID, "displayName", req.DisplayName)
+		}
 	}
 
 	// Step 3: Create MinIO user (embedded mode only)
@@ -872,9 +895,9 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrixOps.UserIDFor)
-	teamRoomName := fmt.Sprintf("Team: %s", req.TeamName)
+	teamRoomName := req.TeamName
 	if req.DisplayName != "" {
-		teamRoomName = fmt.Sprintf("Team: %s", req.DisplayName)
+		teamRoomName = req.DisplayName
 	}
 	teamRoom, err := p.matrixOps.CreateRoom(ctx, matrix.RoomSpec{
 		Name:           teamRoomName,
@@ -1401,6 +1424,19 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 	// trigger a gateway restart).
 	if userCreds.AccessToken != "" {
 		creds.MatrixToken = userCreds.AccessToken
+	}
+
+	// Step 2b: Pin the Manager profile displayname. The homeserver user
+	// creation step (Synapse admin EnsureUser) no longer hardcodes a
+	// displayname, so the business layer owns the profile name — the Manager
+	// has no spec.displayName, so write the stable "manager" identity here
+	// once. Non-fatal: a profile-write failure must not block provisioning,
+	// and this is never re-applied (RefreshManagerCredentials is
+	// displayname-agnostic), so it cannot clobber a later rename.
+	if err := p.matrixOps.SetUserDisplayName(ctx, managerMatrixID, userCreds.AccessToken, "manager"); err != nil {
+		logger.Error(err, "failed to set Manager displayName (non-fatal)", "userID", managerMatrixID)
+	} else {
+		logger.Info("Manager displayName set", "userID", managerMatrixID, "displayName", "manager")
 	}
 
 	// Step 3: Create MinIO user (embedded mode only)

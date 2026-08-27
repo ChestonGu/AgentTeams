@@ -954,8 +954,8 @@ func TestTuwunelOps_HealthCheck_ServerUp(t *testing.T) {
 
 // TestSynapseOps_ProvisionUser_UsesAdminUsersEndpoint verifies ProvisionUser
 // goes through the Synapse admin REST users endpoint (PUT
-// /_synapse/admin/v2/users/{id} with password + displayname) followed by a
-// password login for the access token. The admin API has no
+// /_synapse/admin/v2/users/{id} with password, without touching displayname)
+// followed by a password login for the access token. The admin API has no
 // register-vs-login distinction, so Created is always reported true.
 func TestSynapseOps_ProvisionUser_UsesAdminUsersEndpoint(t *testing.T) {
 	var putBody map[string]interface{}
@@ -990,13 +990,25 @@ func TestSynapseOps_ProvisionUser_UsesAdminUsersEndpoint(t *testing.T) {
 	if putBody["password"] != "pw" {
 		t.Errorf("users body password = %v, want pw", putBody["password"])
 	}
-	if putBody["displayname"] != "alice" {
-		t.Errorf("users body displayname = %v, want alice", putBody["displayname"])
+	// displayname must be ABSENT: the user-creation step is idempotent and
+	// re-invoked on every password-mode re-provision, so it must not clobber
+	// the controller-set friendly display name. The display name is owned by
+	// the business layer (ProvisionWorker / ProvisionManager / member sync).
+	if _, ok := putBody["displayname"]; ok {
+		t.Errorf("users body displayname = %v, want absent (EnsureUser must not own the display name)", putBody["displayname"])
 	}
 	// logout_devices must be false: re-provisioning an existing user (idempotent
 	// reconcile) must not invalidate the running worker/human device sessions.
 	if ld, ok := putBody["logout_devices"].(bool); !ok || ld {
 		t.Errorf("users body logout_devices = %v, want false", putBody["logout_devices"])
+	}
+	// deactivated must be false: Synapse leaves the deactivation state unchanged
+	// unless the field is explicit, so a same-named Worker/Human re-created after
+	// its account was deactivated by a prior delete (Synapse cannot hard-delete
+	// users) would stay deactivated and fail login — or hit M_USER_IN_USE on the
+	// create branch of older Synapse versions. Explicit false reactivates it.
+	if deact, ok := putBody["deactivated"].(bool); !ok || deact {
+		t.Errorf("users body deactivated = %v, want false", putBody["deactivated"])
 	}
 	if ref.UserID != "@alice:d" || !ref.Created {
 		t.Errorf("UserRef = %+v, want UserID=@alice:d Created=true", ref)
