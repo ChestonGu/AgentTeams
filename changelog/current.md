@@ -10,6 +10,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **Worker CRD session/sandbox/template IDs**: `Worker.spec` gains three informational string fields — `sessionId`, `sandboxId`, `templateId` — letting users bind a Worker to an external session, sandbox/environment, and agent template for integration/traceability. They are excluded from the worker pod-spec hash so they do not trigger pod churn.
+
 - **Optional AgentTeams Dashboard**: Local installation can deploy the AgentTeams Dashboard for visual Worker, Team, Human, Manager, and Matrix management. Dashboard versioning remains independent from the AgentTeams release. ([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
 - **Worker push skips non-UTF-8 file names**: `base.sh` gains `is_utf8_name` / `collect_nonutf8_files` helpers (python3-based, safe for invalid byte sequences). The worker change-triggered sync loop and `update-worker-config.sh` build `mc mirror --exclude` lists from them, so a single non-UTF-8 file name no longer fails the whole push; the sync loop also ignores such files so it cannot spin on unpushable ones.
 

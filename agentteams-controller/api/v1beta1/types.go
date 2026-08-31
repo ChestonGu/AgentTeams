@@ -182,6 +182,20 @@ type WorkerSpec struct {
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
+
+	// SessionId is the external session identifier this worker is bound to
+	// (for example an AgentLoop session). Informational; does not affect the
+	// worker pod spec.
+	SessionId string `json:"sessionId,omitempty"`
+
+	// SandboxId is the external sandbox/environment identifier this worker
+	// runs in. Informational; does not affect the worker pod spec.
+	SandboxId string `json:"sandboxId,omitempty"`
+
+	// TemplateId is the agent template ID this worker was created from.
+	// Informational; does not affect the worker pod spec.
+	TemplateId string `json:"templateId,omitempty"`
+
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
 	Agents        string                     `json:"agents,omitempty"`

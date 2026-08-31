@@ -38,6 +38,15 @@ spec:
                 workerName:
                   type: string
                   description: Business/runtime identity for Matrix localpart and OSS path key (fallback to metadata.name)
+                sessionId:
+                  type: string
+                  description: External session identifier this worker is bound to (e.g. an AgentLoop session). Informational; does not affect the pod spec.
+                sandboxId:
+                  type: string
+                  description: External sandbox/environment identifier this worker runs in. Informational; does not affect the pod spec.
+                templateId:
+                  type: string
+                  description: Agent template ID this worker was created from. Informational; does not affect the pod spec.
                 identity:
                   type: string
                   description: Worker public identity (generates IDENTITY.md; merged into SOUL.md for copaw and hermes)
