@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cimicode-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cimicode-bridge
+  template:
+    metadata:
+      labels:
+        app: cimicode-bridge
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: bridge
+          image: agentteams-cimicode-bridge:latest
+          ports:
+            - name: http
+              containerPort: 8081
+          envFrom:
+            - secretRef:
+                name: agentteams-worker-env
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cimicode-bridge
+spec:
+  selector:
+    app: cimicode-bridge
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

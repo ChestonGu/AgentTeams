@@ -1,0 +1,15 @@
+matrix:
+  homeserver_url: "${AGENTTEAMS_MATRIX_URL}"
+  token_env: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  sync_timeout_seconds: 30
+runtime:
+  adapter: cimicode
+  base_url: http://cimicode-gateway
+  auth_type: none
+filter:
+  require_mention: true
+  allow_unknown: false
+history:
+  max_entries: 50
+store:
+  backend: memory
