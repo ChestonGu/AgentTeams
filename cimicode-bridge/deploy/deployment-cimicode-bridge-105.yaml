@@ -24,7 +24,7 @@ spec:
         kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
       containers:
         - name: bridge
-          image: agentteams/cimicode-bridge:v0.0.3
+          image: agentteams/cimicode-bridge:v0.0.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -69,7 +69,7 @@ spec:
             - name: COORDINATION_LEADER
               value: "@web-team-lead:agentteams-synapse.agentos.svc.cluster.local"
             - name: COORDINATION_ADMIN
-              value: ""
+              value: "@admin:agentteams-synapse.agentos.svc.cluster.local"
             - name: COORDINATION_WORKERS
               value: "@frontend-agent:agentteams-synapse.agentos.svc.cluster.local,@product-agent:agentteams-synapse.agentos.svc.cluster.local"
 

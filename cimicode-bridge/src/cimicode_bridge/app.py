@@ -171,6 +171,11 @@ class BridgeApp:
     ) -> None:
         body = str(content.get("body", ""))
         decision = self.mention_filter.evaluate(body, sender, content=content)
+        if not decision.accepted:
+            logger.info(
+                "message filtered event_id=%s sender=%s role=%s reason=%s mentions=%s body=%r",
+                event_id, sender, decision.role, decision.reason, decision.mentions, body[:80],
+            )
         history = self.history_stores.setdefault(
             room_id,
             HistoryStore(capacity=self.config.history.max_entries),
