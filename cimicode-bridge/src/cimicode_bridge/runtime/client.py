@@ -36,21 +36,23 @@ class HttpSseRuntime:
         if self.auth is not None:
             headers = await self.auth.attach(headers)
 
+        # httpx-sse 的 aconnect_sse 返回 AsyncIterator[EventSource]，
+        # 直接 async for 迭代即可（不要套 async with，会报 context manager 协议错误）。
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            async with aconnect_sse(
+            async for event in aconnect_sse(
                 client,
                 method,
                 f"{self.base_url}{path}",
                 json=json_body,
                 headers=headers,
-            ) as event_source:
-                event_source.response.raise_for_status()
-                async for event in event_source.aiter_sse():
-                    if event.data:
-                        yield {
-                            "event": event.event,
-                            "data": event.json(),
-                        }
+            ):
+                if event.response.status_code >= 400:
+                    event.response.raise_for_status()
+                if event.data:
+                    yield {
+                        "event": event.event,
+                        "data": event.json(),
+                    }
 
     async def chat(
         self,
