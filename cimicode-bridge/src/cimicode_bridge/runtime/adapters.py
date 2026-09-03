@@ -14,10 +14,16 @@ class CimicodeDialect:
         self.part_order: list[str] = []
 
     def translate(self, raw_event: dict[str, Any]) -> list[RuntimeEvent]:
-        event_name = str(raw_event.get("event") or raw_event.get("kind") or "")
         data = raw_event.get("data", raw_event)
         if not isinstance(data, dict):
             data = {"value": data}
+        # event 名可能在顶层（httpx-sse 风格）或内嵌于 data.event（手写解析/gateway 契约）
+        event_name = str(
+            raw_event.get("event")
+            or data.get("event")
+            or data.get("kind")
+            or ""
+        )
         if event_name in {"message", "message.part.delta", "message.updated"}:
             text = data.get("delta", data.get("content", data.get("text", "")))
             kind = RuntimeEventKind.TEXT_DELTA

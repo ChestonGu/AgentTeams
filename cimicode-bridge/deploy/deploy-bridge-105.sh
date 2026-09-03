@@ -7,7 +7,7 @@
 # =====================================================================
 set -euo pipefail
 
-VERSION="${1:-v0.0.6}"
+VERSION="${1:-v0.0.7}"
 REPO_DIR="${REPO_DIR:-/home/extvdiadmin/workbach/AgentTeams}"
 SUDO_PW="${SUDO_PW:-Cxmt@20250730}"
 BRANCH=feature/stateless_cimicode_docking
@@ -27,8 +27,15 @@ echo "$SUDO_PW" | sudo -S k3s ctr images import /tmp/cim-bridge.tar 2>&1 | grep 
 sudo k3s ctr images ls 2>/dev/null | grep "cimicode-bridge:$VERSION" | head -1
 
 echo "==> [4/6] 更新 deployment 镜像 tag → $VERSION"
-cp cimicode-bridge/deploy/deployment-cimicode-bridge-105.yaml "$DEPLOY_DIR/"
-sed -i "s|cimicode-bridge:v0\.[0-9]\+\.[0-9]\+|cimicode-bridge:$VERSION|" "$DEPLOY_DIR/deployment-cimicode-bridge-105.yaml"
+python3 - cimicode-bridge/deploy/deployment-cimicode-bridge-105.yaml "$VERSION" <<'PYEOF'
+import re, sys
+src, tag = sys.argv[1], sys.argv[2]
+dst = "/home/extvdiadmin/agentteams-deploy/deployment-cimicode-bridge-105.yaml"
+s = open(src).read().replace("\r\n", "\n")
+s = re.sub(r"cimicode-bridge:v\d+\.\d+\.\d+([-\w.]*)", f"cimicode-bridge:{tag}\\1", s)
+open(dst, "w").write(s)
+print("yaml image ->", tag)
+PYEOF
 
 echo "==> [5/6] 应用 deployment"
 kubectl apply -f "$DEPLOY_DIR/deployment-cimicode-bridge-105.yaml"
