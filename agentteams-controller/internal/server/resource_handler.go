@@ -360,7 +360,25 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
+	resp := teamToResponse(&team)
+	// Enrich member details with resolved displayName and Matrix user ID.
+	if len(team.Spec.WorkerMembers) > 0 {
+		for _, ref := range team.Spec.WorkerMembers {
+			var wk v1beta1.Worker
+			detail := TeamWorkerDetail{Name: ref.Name, Role: ref.Role}
+			if err := h.client.Get(r.Context(), client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &wk); err == nil {
+				if wk.Spec.DisplayName != "" {
+					detail.DisplayName = wk.Spec.DisplayName
+				} else {
+					detail.DisplayName = ref.Name
+				}
+				detail.MatrixUserID = wk.Status.MatrixUserID
+			}
+			resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
+		}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +390,25 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 
 	teams := make([]TeamResponse, 0, len(list.Items))
 	for i := range list.Items {
-		teams = append(teams, teamToResponse(&list.Items[i]))
+		resp := teamToResponse(&list.Items[i])
+		// Enrich per-member details so callers can show displayName without
+		// issuing extra requests.
+		if len(list.Items[i].Spec.WorkerMembers) > 0 {
+			for _, ref := range list.Items[i].Spec.WorkerMembers {
+				var wk v1beta1.Worker
+				detail := TeamWorkerDetail{Name: ref.Name, Role: ref.Role}
+				if err := h.client.Get(r.Context(), client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &wk); err == nil {
+					if wk.Spec.DisplayName != "" {
+						detail.DisplayName = wk.Spec.DisplayName
+					} else {
+						detail.DisplayName = ref.Name
+					}
+					detail.MatrixUserID = wk.Status.MatrixUserID
+				}
+				resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
+			}
+		}
+		teams = append(teams, resp)
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})

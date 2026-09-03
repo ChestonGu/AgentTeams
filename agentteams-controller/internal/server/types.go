@@ -128,6 +128,10 @@ type TeamResponse struct {
 	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
 	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
 	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
+	// WorkerMemberDetails exposes per-member resolved metadata such as
+	// displayName and Matrix user id so API callers can show friendly names
+	// without fetching each referenced Worker separately.
+	WorkerMemberDetails []TeamWorkerDetail `json:"workerMemberDetails,omitempty"`
 	LeaderName         string                       `json:"leaderName"`
 	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
 	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
@@ -143,6 +147,14 @@ type TeamResponse struct {
 type TeamListResponse struct {
 	Teams []TeamResponse `json:"teams"`
 	Total int            `json:"total"`
+}
+
+// TeamWorkerDetail provides resolved information for one Team worker member.
+type TeamWorkerDetail struct {
+	Name        string `json:"name"`
+	Role        string `json:"role,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
 }
 
 // --- Human API types ---
