@@ -7,21 +7,14 @@ import uvicorn
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="cimicode-bridge")
-    subparsers = parser.add_subparsers(dest="command")
-
-    run_parser = subparsers.add_parser("run", help="Run the bridge service")
-    run_parser.add_argument("--config", default="config/bridge.example.yaml", help="Path to YAML config")
-    run_parser.add_argument("--host", default="0.0.0.0", help="Host interface for uvicorn")
-    run_parser.add_argument("--port", type=int, default=8081, help="Port for uvicorn")
-    run_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    run_parser.add_argument("--reload", action="store_true", help="Enable uvicorn autoreload")
-
-    # Backward-compatible: allow flags directly without the run subcommand.
-    parser.add_argument("--config", default="config/bridge.example.yaml", help=argparse.SUPPRESS)
-    parser.add_argument("--host", default="0.0.0.0", help=argparse.SUPPRESS)
-    parser.add_argument("--port", type=int, default=8081, help=argparse.SUPPRESS)
-    parser.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--reload", action="store_true", help=argparse.SUPPRESS)
+    # 兼容历史入口词：entrypoint/CMD 可能传入 0 个、1 个甚至重复的 "run"，
+    # 全部作为多余位置参数吞掉，避免 "unrecognized arguments: run"。
+    parser.add_argument("legacy", nargs="*", help=argparse.SUPPRESS)
+    parser.add_argument("--config", default="config/bridge.example.yaml", help="Path to YAML config")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface for uvicorn")
+    parser.add_argument("--port", type=int, default=8081, help="Port for uvicorn")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--reload", action="store_true", help="Enable uvicorn autoreload")
     return parser
 
 
@@ -29,16 +22,11 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    config = getattr(args, "config", "config/bridge.example.yaml")
-    host = getattr(args, "host", "0.0.0.0")
-    port = getattr(args, "port", 8081)
-    reload = getattr(args, "reload", False)
-
     uvicorn.run(
         "cimicode_bridge.app:create_app",
-        host=host,
-        port=port,
-        reload=reload,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
         factory=True,
     )
     return 0

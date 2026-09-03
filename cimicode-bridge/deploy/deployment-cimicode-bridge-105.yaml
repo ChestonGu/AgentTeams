@@ -1,0 +1,118 @@
+# cimicode-bridge @105 最终部署清单（值来自 2026-09-03 实地勘察）
+# S3: minio-sim.s3-sim:9000 / bucket agentteams-storage / prefix agentteams/agentteams-storage
+# Matrix: agentteams-synapse.agentos:8008  domain=agentteams-synapse.agentos.svc.cluster.local
+# gateway baseUrl 为模拟占位，sessionId/sandboxId 由 setup-105.sh 写入 S3（调谐上线后接管）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cimicode-bridge
+  namespace: agentos
+  labels:
+    app: cimicode-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cimicode-bridge
+  template:
+    metadata:
+      labels:
+        app: cimicode-bridge
+    spec:
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+      containers:
+        - name: bridge
+          image: agentteams/cimicode-bridge:v0.0.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            # ---------- S3/MinIO（与现有 worker 一致） ----------
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: "http://minio-sim.s3-sim.svc.cluster.local:9000"
+            - name: AGENTTEAMS_FS_SECURE
+              value: "false"
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              value: "minio-sim-root"
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              value: "MinioSim#2026"
+            - name: AGENTTEAMS_FS_BUCKET
+              value: "agentteams-storage"
+            - name: AGENTTEAMS_STORAGE_PREFIX
+              value: "agentteams/agentteams-storage"
+            - name: AGENTTEAMS_WORKER_NAME
+              value: "cimicode-agent"
+
+            # ---------- Matrix ----------
+            - name: AGENTTEAMS_MATRIX_URL
+              value: "http://agentteams-synapse.agentos.svc.cluster.local:8008"
+            - name: AGENTTEAMS_MATRIX_DOMAIN
+              value: "agentteams-synapse.agentos.svc.cluster.local"
+            - name: AGENTTEAMS_WORKER_MATRIX_USER_ID
+              value: "@cimicode-agent:agentteams-synapse.agentos.svc.cluster.local"
+            - name: AGENTTEAMS_WORKER_ROOM_ID
+              value: "!oCOZLhucNczxLoAoUU:agentteams-synapse.agentos.svc.cluster.local"
+            # token 主来源是 S3 openclaw.json；此处留空
+            - name: AGENTTEAMS_WORKER_MATRIX_TOKEN
+              value: ""
+
+            # ---------- 协作上下文 ----------
+            - name: COORDINATION_ROLE
+              value: "worker"
+            - name: COORDINATION_TEAM
+              value: "frontend-team"
+            - name: COORDINATION_ROOM
+              value: "!oCOZLhucNczxLoAoUU:agentteams-synapse.agentos.svc.cluster.local"
+            - name: COORDINATION_LEADER
+              value: "@web-team-lead:agentteams-synapse.agentos.svc.cluster.local"
+            - name: COORDINATION_ADMIN
+              value: ""
+            - name: COORDINATION_WORKERS
+              value: "@frontend-agent:agentteams-synapse.agentos.svc.cluster.local,@product-agent:agentteams-synapse.agentos.svc.cluster.local"
+
+            # ---------- controller（401 刷新用，与现有 worker 一致） ----------
+            - name: AGENTTEAMS_CONTROLLER_URL
+              value: "http://agentteams-controller.agentos.svc.cluster.local:8090"
+            - name: AGENTTEAMS_AUTH_TOKEN_FILE
+              value: ""
+
+            # ---------- StateStore ----------
+            - name: BRIDGE_REDIS_URL
+              value: ""
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cimicode-bridge
+  namespace: agentos
+  labels:
+    app: cimicode-bridge
+spec:
+  selector:
+    app: cimicode-bridge
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
