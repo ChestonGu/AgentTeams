@@ -15,18 +15,30 @@
 
 ## 2. 部署侧剩余事项（非 controller 代码）
 
-1. **opencode worker 的 Member 必须落在写 runtime.yaml 的调谐分支**
-   （`runtime=qwenpaw` 或 `deployMode=edge`——`ReconcileMemberConfig` 的
-   分支条件，member_reconcile.go:454）。生产 worker 真件已确认同型
-   部署；新 opencode worker 沿用同型即可。若走非该分支，runtime.yaml
-   不存在，§6 生成器没有输入（fail-loud，bridge 拒开会话）。
-2. **pod 镜像选择零改动路径**：镜像优先级 `Worker CR spec.image >
-   按 runtime 配置镜像 > 全局 WorkerImage`（backend/kubernetes.go
-   image 链）——测试 worker 的 CR 直接写 `spec.image: <opencode镜像>`。
-3. **opencode 沙箱镜像构建**：预装清单见契约 §2（mc / python3 / jq /
-   **PyYAML** / skills 集 + scripts / PATH wrapper / 源模板 +
-   生成器）。镜像内 skills 文件与仓库
-   `template/opencode-worker-agent/skills/` 逐字节一致，构建时从本仓库取。
+1. **显式部署配方（两条约束的组合，缺一不可）**：
+
+   ```yaml
+   # Worker CR —— runtime 字段保持 qwenpaw（或 Member deployMode: edge），
+   # 镜像用 spec.image 覆盖成 opencode 沙箱镜像
+   spec:
+     runtime: qwenpaw                # 别填新值：runtime.yaml 只在
+                                     # qwenpaw/edge 调谐分支写入
+                                     # （member_reconcile.go:454）
+     image: <opencode-sandbox:tag>   # 镜像优先级最高：spec.image >
+                                     # per-runtime 配置 > 全局 WorkerImage
+                                     # （backend/kubernetes.go），
+                                     # controller 零改动
+   ```
+
+   直觉做法 `runtime: opencode` 会**不落 runtime.yaml 写入分支** →
+   §6 生成器无输入（fail-loud 兜住、bridge 拒开会话，但排障困惑）。
+   生产 worker 真件已确认同型部署（qwenpaw/edge 分支）。
+2. **镜像构建（两个目标）**：worker 沙箱镜像预装清单见契约 §2
+   （mc / python3 / jq / skills 集 + scripts / PATH wrapper）；
+   **bridge 侧**（daemon 容器）预装生成器 + 源模板 + PyYAML（契约 §2
+   bridge 段——生成器不进沙箱镜像）。镜像内 skills 文件与仓库
+   `opencode/template/opencode-worker-agent/skills/` 逐字节一致，构建时
+   从本仓库取。
 
 ## 3. controller 保留的数据义务
 
@@ -56,8 +68,8 @@
 ## 5. 验收钩子（部署侧自检）
 
 - 镜像内抽查 `<skills-root>/task-management/scripts/taskflow.py` 与
-  `opencode-worker-migration/cli/taskflow/taskflow.py` 逐字节一致
-  （`verify/simulator.py` 已内置全部 11 个部署副本的漂移检查）。
+  `opencode/cli/taskflow/taskflow.py` 逐字节一致
+  （`verify/simulator.py` 已内置全部 12 个部署副本的漂移检查）。
 - worker pod 起来后：`taskflow check <任意已分配任务>` 能跑（env 齐全、
   alias 三模式其一生效）。
 - bridge 下发的 prompt 为 `bridge/generate_agent_md.py` 的输出：以
@@ -70,8 +82,11 @@
   退出码 1 且 stderr 有 `member.name`（bridge 据此拒开会话）。
 - **统一日志**（契约 §5.5）：跑一轮任务后
   `$AGENTTEAMS_FS_ROOT/logs/agentteams.log` 存在且为 JSONL，同文件内
-  既有 `tool: taskflow` 也有（leader 同 pod 时）`tool: projectflow` 与
-  `tool: generate_agent_md` 记录；每条命令首尾是 `cmd_start`/`cmd_end`。
+  既有 `tool: taskflow` 也有（leader 同 pod 时）`tool: projectflow`
+  记录；每条命令首尾是 `cmd_start`/`cmd_end`。生成器日志在 **bridge
+  侧日志文件**（调用方经 `AGENTTEAMS_LOG_FILE` 指定，与沙箱日志分属
+  两个进程/容器，见契约 §2 bridge 段）：`tool: generate_agent_md` 的
+  `generated` 事件在场即可。
 
 ---
 

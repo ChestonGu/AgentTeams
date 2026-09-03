@@ -60,7 +60,7 @@
 
 ## §2 沙箱布局契约（v2：镜像预装 + 运行时仅 shared/）
 
-**镜像预装**（部署侧构建时固化，所有 opencode worker 相同）：
+**worker 沙箱镜像预装**（部署侧构建时固化，所有 opencode worker 相同）：
 
 ```
 /usr/local/bin/taskflow            ← PATH wrapper → python3 <skills>/task-management/scripts/taskflow.py
@@ -71,12 +71,26 @@
 ├── communication/SKILL.md
 ├── organization/SKILL.md
 └── mcporter/SKILL.md
-+ mc / python3 / jq / PyYAML（generate_agent_md.py 结构化解析 runtime.yaml）
++ mc / python3 / jq
+```
+
+**bridge 侧预装**（bridge daemon 容器；生成器在 bridge 进程运行，§5.5，
+**不进 worker 沙箱镜像**）：
+
+```
+bridge/generate_agent_md.py        ← agent.md 生成工具（§6）
+bridge/agentteams_log.py           ← 与 skills 副本逐字节同源（§5.5）
+template/opencode-worker-agent/AGENTS.md ← 源模板（§6；生成器默认模板路径是
+                                     相对自身的 ../template/opencode-worker-agent/
+                                     AGENTS.md——两处须保持仓库相对布局成对
+                                     部署，布局不同则显式传 --template）
++ python3 / PyYAML（safe_load 结构化解析 runtime.yaml）
 ```
 
 skill 文档已写明无 wrapper 时的 `python3 <全路径>` 兜底，两条路都必须可用。
-`agentteams_log.py` 为统一日志模块（§5.5），随各 scripts 目录部署（逐字节
-相同的副本；`verify/simulator.py` 启动时校验全部部署副本与 `cli/` 源一致）。
+`agentteams_log.py` 为统一日志模块（§5.5），随各 scripts 目录 + bridge/
+部署（逐字节相同的 12 份副本；`verify/simulator.py` 启动时校验全部部署
+副本与 `cli/` 源一致）。
 
 **运行时**（$AGENTTEAMS_FS_ROOT，唯一同步区）：
 
@@ -263,8 +277,8 @@ system prompt 传给 opencode**——"调谐合成 AGENTS.md"这件事（静态�
   含 leader/coordinator 角色）、storage 段（sharedPrefix）。
 - **SOUL.md / PROFILE.md**（MinIO `agents/<name>/` 下存在时）：persona
   逐字合并。
-- **源模板**：镜像内 `template/opencode-worker-agent/AGENTS.md`（与生成器
-  同仓部署；`--template` 可覆盖）。
+- **源模板**：bridge 容器内 `template/opencode-worker-agent/AGENTS.md`
+  （与生成器同仓部署，§2 bridge 段；`--template` 可覆盖）。
 
 ### 6.1 生成规则（模板固化骨架 + 两个占位符）
 

@@ -1,8 +1,10 @@
-# opencode Worker 运行时迁移 — 实施仓库
+# opencode Worker 运行时迁移 — 实施目录
 
 将普通 team worker 从 copaw 迁到 opencode（**leader 保持 copaw 不迁移**；
 leader 侧 CLI 已预置未部署，见 `cli/projectflow/`）。
 设计文档：[docs/opencode-worker运行时迁移方案.md](docs/opencode-worker运行时迁移方案.md)（D0 总原则：一切以 copaw 机制为准，唯一改变是工具载体）。
+本目录随 **AgentTeams 主仓库**管理（分支 `dev-v1.2.2-opencode-ben`；
+2026-09-03 前曾独立存放于仓库外目录，现以主仓库为唯一权威）。
 
 **架构 v2.4（契约 §0/§6）**：无独立编排层；沙箱无状态（无 SOUL/memory/heartbeat
 文件，拉推仅 `shared/`；persona 内容经生成器合并进 prompt）；skills/CLI
@@ -46,11 +48,11 @@ JSONL 文件**（契约 §5.5，`agentteams_log.py`）。
 ## 本地验证
 
 ```bash
-# 单测（共 111 个；开发机需 pip install pyyaml——bridge 生成工具做结构化解析）
+# 单测（共 113 个；开发机需 pip install pyyaml——bridge 生成工具做结构化解析）
 cd cli/taskflow && python -m unittest discover -s tests   # 40 个（taskflow + mc_sync + 统一日志）
 cd cli/sync && python -m unittest discover -s tests       # 10 个（agentteams-sync）
 cd cli/projectflow && python -m unittest discover -s tests # 20 个（leader core + CLI + 与 worker 闭环）
-cd bridge && python -m unittest discover -s tests         # 41 个（生成工具：golden×2 + coordination.go 文案对齐 + 解析器/Persona/CLI）
+cd bridge && python -m unittest discover -s tests         # 43 个（生成工具：golden×2 + coordination.go 文案对齐 + 解析器/Persona/CLI）
 
 # 模拟器（本地无 MinIO；含部署副本漂移检查 + 统一日志单文件检查）
 python verify/simulator.py --mode none

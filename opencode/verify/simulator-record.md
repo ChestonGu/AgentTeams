@@ -191,3 +191,40 @@ controller 调谐写入、worker sync 每 60s 刷新——`runtime_config.go` �
 **前提备忘**：opencode worker 的 Member 须落 qwenpaw/edge 调谐分支
 （`member_reconcile.go:454`，生产同型部署已确认）——runtime.yaml 才会被
 写入；该分支本就不跑 canonical AGENTS.md 合成，与生成架构天然契合。
+
+## 复盘修复（2026-09-03，v2.4 全仓复盘）
+
+v2.4 落地当日整体复盘，修复 4 项代码/测试缺陷 + 2 项契约缺口；同时
+**仓库纳入 AgentTeams 主仓库 git 管理**（`opencode/` 目录，分支
+`dev-v1.2.2-opencode-ben`；此前为仓库外裸目录，无版本控制）：
+
+1. **P1 role 白名单**：role=coordinator（名册真实取值）曾绕过
+   worker-only 的 leader 守卫，渲染出 `**Coordinator**: None (Team
+   Leader of t1)`——改为 worker/standalone 白名单，其余角色 fail-loud
+   （+回归测试，本机演示抓出）。
+2. **P2 模板 CRLF 规范化**：persona 有规范化而模板没有——Windows
+   autocrlf checkout / Windows 构建机上 COPY 模板会静默产出全 CRLF
+   prompt。生成器读入后统一 LF（+回归测试：CRLF 模板输出==LF golden）。
+3. **P3 日志护栏第 12 副本**：`bridge/agentteams_log.py`（生成器日志
+   依赖）不在部署副本漂移检查内，与契约"全部副本受检"的说法不符——
+   DEPLOY_COPIES 11→12。
+4. **P4 降级测试跨平台**：`test_unwritable_file_never_breaks_setup`
+   用 `\\?\nonexistent-drive` 构造不可写路径，Windows 成立、Linux 上是
+   合法相对名——测试实际**写文件成功**（服务器 `\\?` 残留目录即铁证），
+   该用例在 Linux 假绿。改为按平台构造（win32 保留 UNC / Linux chmod
+   0o500 只读目录 + root 跳过；清理顺序 LIFO 先 chmod 后 rmtree——
+   首版顺序反了在服务器上报 FileNotFoundError，当场修）。
+5. **P6 契约 §2 定稿镜像归属**：生成器 + 源模板 + PyYAML 归 **bridge
+   容器**（§5.5 本就注明 bridge 侧运行），worker 沙箱镜像只装
+   mc/python3/jq + skills——消除 §2 与 §5.5 的表述矛盾；并注明生成器
+   默认模板相对布局约束（不成对部署则显式 `--template`）。
+6. **P7 handover 显式部署配方**：`runtime: qwenpaw`（保住 runtime.yaml
+   写入分支）+ `spec.image: <opencode镜像>`（优先级最高）的组合配方
+   YAML；点名 `runtime: opencode` 直觉填法会踩"无 runtime.yaml 输入"。
+
+### 重跑结果（双环境）
+
+| 项 | Windows 开发机 | 10.254.254.105 |
+|---|---|---|
+| 单测 | 113 全绿（taskflow 40 / sync 10 / projectflow 20 / bridge 43） | 同 113 全绿 |
+| 模拟器 | none ✅ | none ✅ + mc ✅（隔离 team，远端清理零残留、零测试残留） |
