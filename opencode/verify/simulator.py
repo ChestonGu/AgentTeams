@@ -41,9 +41,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "..", "template", "opencode-worker-agent")
 GENERATOR = os.path.join(HERE, "..", "bridge", "generate_agent_md.py")
 
-# Deployment copies (contract §2: skills preinstalled in the image). Each
-# template script must stay byte-identical to its cli/ source — a stale
-# copy here means the sandbox image ships old behavior.
+# Deployment copies (contract §2: skills preinstalled in the image; the
+# bridge-side logger copy feeds generate_agent_md.py). Each must stay
+# byte-identical to its cli/ source — a stale copy means the sandbox image
+# (or the bridge generator) ships old behavior.
 REPO = os.path.join(HERE, "..")
 W_TMPL = os.path.join(REPO, "template", "opencode-worker-agent",
                       "skills", "task-management", "scripts")
@@ -51,6 +52,7 @@ W_SHARE = os.path.join(REPO, "template", "opencode-worker-agent",
                        "skills", "file-sharing", "scripts")
 L_TMPL = os.path.join(REPO, "template", "opencode-leader-agent",
                       "skills", "task-management", "scripts")
+BRIDGE = os.path.join(REPO, "bridge")
 DEPLOY_COPIES = [
     (os.path.join(REPO, "cli", "taskflow", "taskflow.py"),
      os.path.join(W_TMPL, "taskflow.py")),
@@ -74,6 +76,8 @@ DEPLOY_COPIES = [
      os.path.join(L_TMPL, "mc_sync.py")),
     (os.path.join(REPO, "cli", "projectflow", "agentteams_log.py"),
      os.path.join(L_TMPL, "agentteams_log.py")),
+    (os.path.join(REPO, "cli", "taskflow", "agentteams_log.py"),
+     os.path.join(BRIDGE, "agentteams_log.py")),
 ]
 
 # contract §4 — byte-identical to copaw matrix_channel.py:154-158

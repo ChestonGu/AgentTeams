@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -93,8 +94,23 @@ class ModuleTest(unittest.TestCase):
                          clipped)
 
     def test_unwritable_file_never_breaks_setup(self):
-        os.environ["AGENTTEAMS_LOG_FILE"] = os.path.join(
-            "\\\\?", "nonexistent-drive", "agentteams.log")
+        # an unwritable log target must degrade, never raise. The path is
+        # constructed per platform: the \\?\ UNC trick is Windows-only — on
+        # Linux it is a legal relative name, so the test would silently
+        # WRITE a stray file instead of exercising the fallback (exactly
+        # the "\\?" residue the 105 server runs left behind).
+        if sys.platform == "win32":
+            bad = os.path.join("\\\\?", "nonexistent-drive", "agentteams.log")
+        else:
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                self.skipTest("running as root: read-only dirs stay writable")
+            ro = tempfile.mkdtemp(prefix="log-ro-")
+            # addCleanup is LIFO: restore 0o700 first, then rmtree
+            self.addCleanup(shutil.rmtree, ro, ignore_errors=True)
+            self.addCleanup(os.chmod, ro, 0o700)
+            os.chmod(ro, 0o500)
+            bad = os.path.join(ro, "agentteams.log")
+        os.environ["AGENTTEAMS_LOG_FILE"] = bad
         os.environ["AGENTTEAMS_LOG_STDERR"] = "0"
         err = io.StringIO()
         try:

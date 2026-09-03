@@ -134,9 +134,9 @@ def parse_runtime_config(text):
         'storage_prefix',                                # storage.sharedPrefix
       }
     Worker identity is required (GenerateError when absent). role defaults
-    from team presence (team -> worker, no team -> standalone); an explicit
-    role=this worker is a team leader is rejected — the leader template is
-    future work, not silent degradation."""
+    from team presence (team -> worker, no team -> standalone); any explicit
+    role other than worker/standalone (team_leader, coordinator, ...) is
+    rejected — the leader template is future work, not silent degradation."""
     if yaml is None:
         raise GenerateError(
             "PyYAML is required to parse the MemberRuntimeConfig document "
@@ -174,11 +174,16 @@ def parse_runtime_config(text):
 
     has_team = bool(team.get("name"))
     role = member.get("role") or ("worker" if has_team else "standalone")
-    if role == "team_leader":
+    if role not in ("worker", "standalone"):
+        # whitelist, not a team_leader special case: any other role (e.g.
+        # coordinator, a real roster value) would slip past the worker-only
+        # leader guard below and render a Coordination block with
+        # leader_id=None
         raise GenerateError(
-            "member.role=team_leader: the leader agent.md template is not "
-            "built yet (future leader migration); refusing to render a "
-            "worker-shaped prompt for a leader")
+            f"member.role={role}: unsupported role (worker/standalone only; "
+            "the team_leader template is future work; a coordinator member "
+            "is not a worker agent) — refusing to render a malformed "
+            "Coordination block")
 
     admin = team.get("admin") or {}
     admin_id = admin.get("matrixUserId") or ""
@@ -289,6 +294,9 @@ def generate(cfg, template, date=None, soul_text="", profile_text=""):
     {{ENVIRONMENT}} placeholder; after substitution the output must be
     free of any residual braces. SOUL.md/PROFILE.md are appended verbatim
     after the rendered content."""
+    # a CRLF checkout (git autocrlf on a Windows build host) must not leak
+    # into the prompt — normalize the template like the persona files
+    template = template.replace("\r\n", "\n").replace("\r", "\n")
     for placeholder, name in ((PLACEHOLDER_COORDINATION, "COORDINATION"),
                               (PLACEHOLDER_ENVIRONMENT, "ENVIRONMENT")):
         count = template.count(placeholder)

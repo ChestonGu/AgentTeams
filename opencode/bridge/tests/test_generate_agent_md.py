@@ -135,6 +135,15 @@ class TemplateTest(unittest.TestCase):
         with self.assertRaisesRegex(gen.GenerateError, "residual"):
             gen.generate(cfg, read(TEMPLATE), date=DATE)
 
+    def test_crlf_template_normalized(self):
+        # a CRLF checkout (git autocrlf on a Windows build host) must not
+        # leak into the prompt — the render matches the LF golden byte for
+        # byte instead of silently shipping \r\n to the model
+        crlf = read(TEMPLATE).replace("\n", "\r\n")
+        out = gen.generate(cfg_team(), crlf, date=DATE)
+        self.assertNotIn("\r", out)
+        self.assertEqual(out, read(GOLDEN_TEAM))
+
 
 class ParserTest(unittest.TestCase):
     def test_real_fixture_fields(self):
@@ -190,6 +199,22 @@ class ParserTest(unittest.TestCase):
                 "  matrixUserId: '@l1:example.org'\n"
                 "  role: team_leader\n")
         with self.assertRaisesRegex(gen.GenerateError, "team_leader"):
+            gen.parse_runtime_config(text)
+
+    def test_coordinator_role_rejected(self):
+        # regression: role=coordinator slipped past the worker-only leader
+        # guard and rendered "**Coordinator**: None (Team Leader of t1)" —
+        # coordinator is a real roster value, so it must fail loudly too
+        text = ("member:\n"
+                "  name: c1\n"
+                "  matrixUserId: '@c1:example.org'\n"
+                "  role: coordinator\n"
+                "team:\n"
+                "  name: t1\n"
+                "  members:\n"
+                "  - matrixUserId: '@w9:example.org'\n"
+                "    role: worker\n")
+        with self.assertRaisesRegex(gen.GenerateError, "unsupported role"):
             gen.parse_runtime_config(text)
 
     def test_missing_identity_rejected(self):
