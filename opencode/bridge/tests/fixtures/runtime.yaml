@@ -1,0 +1,67 @@
+apiVersion: agentteams.io/v1beta1
+credentials:
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  serviceAccountTokenPath: /var/run/secrets/agentteams/token
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY
+desired:
+  agentPackage:
+    ref: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7/t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7.zip
+  model:
+    model: glm-5.2
+    providerId: agentteams-gateway
+  state: Running
+kind: MemberRuntimeConfig
+member:
+  matrixUserId: '@t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org'
+  name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+  personalRoomId: '!lLybQDJXFYjcenbOjZ:example.org'
+  role: worker
+  runtime: copaw
+  runtimeName: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+metadata:
+  generation: 1
+  updatedAt: "2026-09-02T11:26:46Z"
+storage:
+  globalSharedPrefix: shared
+  memberPrefix: agents/t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+  sharedPrefix: teams/t-8a3f2c/shared
+  teamPrefix: teams/t-8a3f2c
+team:
+  admin:
+    matrixUserId: '@u1234:example.org'
+    name: u1234
+  leaderDmRoomId: '!noibZmfMPcxqgCjVEG:example.org'
+  leaderName: t-8a3f2c-leader
+  leaderRuntimeName: t-8a3f2c-leader
+  members:
+  - matrixUserId: '@t-8a3f2c-leader:example.org'
+    name: t-8a3f2c-leader
+    personalRoomId: '!zPPIHODHIjLCdyrWih:example.org'
+    role: team_leader
+    runtimeName: t-8a3f2c-leader
+  - matrixUserId: '@t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8:example.org'
+    name: t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8
+    personalRoomId: '!rqdYRKBDqkdsOMeHsg:example.org'
+    role: worker
+    runtimeName: t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8
+  - matrixUserId: '@t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org'
+    name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+    personalRoomId: '!lLybQDJXFYjcenbOjZ:example.org'
+    role: worker
+    runtimeName: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+  - matrixUserId: '@t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7:example.org'
+    name: t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7
+    personalRoomId: '!jieRczOpKrgLxDBPla:example.org'
+    role: worker
+    runtimeName: t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7
+  - matrixUserId: '@u5678:example.org'
+    name: u5678
+    role: coordinator
+  - matrixUserId: '@u1234:example.org'
+    name: u1234
+    role: coordinator
+  name: t-8a3f2c
+  storageId: t-8a3f2c
+  teamRoomId: '!NyMMkalUgstKfFlBod:example.org'
