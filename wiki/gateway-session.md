@@ -58,9 +58,11 @@ Gateway 作为外部系统，负责为配置型专家（Agent）初始化 **Sand
 
 ### 2.2 认证
 
-- 所有接口需携带认证信息，默认 Header：`X-Access-Token`
+- **当前 AgentTeams bridge 集成阶段不启用认证**：create/chat/destroy 接口不要求认证 Header。
+- bridge 侧配置固定使用 `runtime.auth.type: none`，不注入、不持久化任何 Gateway token。
+- 后续如果 Gateway 开启认证，需要先冻结认证协议，再由 bridge 增加对应的 AuthProvider 和 token 配置。
 
-> 具体认证方案（SSO Token / eid）由 Gateway 团队确认后补充。
+> 这不影响未来扩展认证；在认证协议冻结前，禁止 bridge 假设 `X-Access-Token`、SSO Token 或 eid 的具体格式。
 
 ### 2.3 响应包裹结构（非 SSE 接口）
 
@@ -92,11 +94,13 @@ Gateway 作为外部系统，负责为配置型专家（Agent）初始化 **Sand
 
 ## 3. 接口清单
 
+> **AgentTeams bridge 当前只调用 chat**。Session 的 create/destroy 由调谐或平台生命周期负责，并将已创建 Session 的 `sessionId`、`sandboxId` 写入 S3 的 `openclaw.json.bridge.runtime`；bridge 启动时读取后复用。
+
 | 接口         | 方法 | 路径                          | 说明                        |
 | ------------ | ---- | ----------------------------- | --------------------------- |
-| 创建 session | POST | `/v1/gateway/session/create`  | 初始化 Sandbox 并安装 Skill |
-| 对话 session | POST | `/v1/gateway/session/chat`    | 流式对话，SSE 返回          |
-| 销毁 session | POST | `/v1/gateway/session/destroy` | 释放 Sandbox                |
+| 创建 session | POST | `/v1/gateway/session/create`  | 平台/调谐调用，初始化 Sandbox 并安装 Skill |
+| 对话 session | POST | `/v1/gateway/session/chat`    | **bridge 调用**，流式对话，SSE 返回       |
+| 销毁 session | POST | `/v1/gateway/session/destroy` | 平台/调谐调用，释放 Sandbox                |
 
 > 路径前缀 `/v1/gateway` 为建议值，最终以 Gateway 实际路由为准。
 
@@ -382,7 +386,7 @@ Content-Type: application/json
 | **对话**                 | 反复调用「对话 Session」（SSE，带 turnId 幂等）       |
 | **Team 解散**            | 「销毁 Session」释放 Sandbox，重复调用幂等处理      |
 
-> 调用方异常恢复路径（供参考）：bridge 进程重启 -> 用 idempotencyKey 重调 create 找回 Session -> 从本地/存储恢复 history 继续对话。全程不依赖 Gateway 存对话状态。
+> 调用方异常恢复路径（供参考）：bridge 进程重启 -> 重新从 S3 拉取调谐下发的 `sessionId`/`sandboxId` -> 从本地/存储恢复 history 继续对话。bridge 不重调 create。
 
 ---
 
@@ -390,7 +394,7 @@ Content-Type: application/json
 
 | #    | 问题                                       | 说明                                                         |
 | ---- | ------------------------------------------ | ------------------------------------------------------------ |
-| 1    | 认证头字段                                 | 是否沿用 `X-Access-Token` + `eid`，由 Gateway 确认           |
+| 1    | ~~认证头字段~~                             | **当前 bridge 集成阶段不鉴权**；未来若启用认证，需另行冻结协议后再改 bridge |
 | 2    | SSE 协议字段                               | `message/done/error` 事件名与字段（含 v0.2 的 error 结构化字段），需与 Gateway 冻结 |
 | 3    | 路径前缀                                   | `/v1/gateway` 是否为最终路由前缀                             |
 | 4    | ~~sessionId 不存在时的销毁行为~~           | **v0.2 已冻结：幂等返回成功**（§6.4），不再是 open question  |
