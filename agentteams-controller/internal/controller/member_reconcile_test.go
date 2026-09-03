@@ -724,6 +724,52 @@ func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *
 	}
 }
 
+func TestReconcileMemberConfigOpenCodeWritesRuntimeConfig(t *testing.T) {
+	// runtime=opencode rides the same managed-runtime projection as qwenpaw:
+	// the bridge pod boots from runtime/runtime.yaml, never from the legacy
+	// openclaw.json file path.
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@worker-oc:matrix.local",
+		RoomID:       "!worker-dm:matrix.local",
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:        "worker-cr-oc",
+		RuntimeName: "worker-oc",
+		Role:        RoleStandalone,
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "opencode",
+			Model:   "native-config",
+			Soul:    "Be terse.",
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Name != "worker-cr-oc" || req.RuntimeName != "worker-oc" || req.Runtime != "opencode" {
+		t.Fatalf("unexpected runtime config request: %#v", req)
+	}
+	if req.MatrixAccessToken != "" {
+		t.Fatalf("opencode worker takes the matrix token via env, not the runtime config: %#v", req)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("opencode must skip the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
 func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{

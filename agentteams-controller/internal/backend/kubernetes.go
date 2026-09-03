@@ -32,8 +32,13 @@ type K8sConfig struct {
 	HermesWorkerImage    string
 	OpenHumanWorkerImage string
 	QwenPawWorkerImage   string
-	WorkerCPU            string
-	WorkerMemory         string
+	// OpenCodeBridgeImage is the cimicode-bridge image used for
+	// runtime=opencode workers: the pod masquerades as the worker (same
+	// identity labels, env, runtime.yaml projection) while the conversation
+	// loop lives in an external opencode server the bridge calls.
+	OpenCodeBridgeImage string
+	WorkerCPU           string
+	WorkerMemory        string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -264,6 +269,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
 			image = k.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeOpenCode && k.config.OpenCodeBridgeImage != "":
+			image = k.config.OpenCodeBridgeImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -274,6 +281,11 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 
 	if req.WorkingDir == "" {
 		switch {
+		case req.Runtime == RuntimeOpenCode:
+			// The bridge image anchors its config to its own WORKDIR
+			// (/opt/bridge, relative "config/bridge.example.yaml"); overriding
+			// it here would silently strand the config lookup. The bridge has
+			// no local workspace — files live in the sandbox pod.
 		case req.Runtime == RuntimeCopaw:
 			req.WorkingDir = fmt.Sprintf("/root/agentteams-fs/agents/%s", req.Name)
 			if req.Env == nil {
@@ -746,6 +758,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeHermes
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
+	case RuntimeOpenCode:
+		return RuntimeOpenCode
 	default:
 		return RuntimeOpenClaw
 	}

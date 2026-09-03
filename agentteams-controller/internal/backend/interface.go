@@ -36,6 +36,11 @@ const (
 	RuntimeHermes    = "hermes"
 	RuntimeOpenHuman = "openhuman"
 	RuntimeQwenPaw   = "qwenpaw"
+	// RuntimeOpenCode workers are fronted by a controller-managed bridge pod
+	// (cimicode-bridge) that masquerades as the worker: same Matrix identity,
+	// same runtime.yaml projection, but the conversation loop lives in a
+	// standalone opencode server the bridge calls over HTTP.
+	RuntimeOpenCode = "opencode"
 )
 
 const (
@@ -60,7 +65,17 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeOpenCode
+}
+
+// IsManagedRuntime reports whether the runtime consumes the
+// MemberRuntimeConfig projection (agents/<name>/runtime/runtime.yaml) as its
+// sole desired-state input, instead of the openclaw.json-style per-key
+// injections (coordination context, channel policy, leader assets, heartbeat).
+// QwenPaw and OpenCode both ride this path; OpenCode additionally runs as a
+// bridge pod rather than a self-contained worker image.
+func IsManagedRuntime(r string) bool {
+	return r == RuntimeQwenPaw || r == RuntimeOpenCode
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.

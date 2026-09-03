@@ -18,6 +18,7 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
+		{"explicit_opencode_preserved", RuntimeOpenCode, RuntimeCopaw, RuntimeOpenCode},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,11 +40,31 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
+		{RuntimeOpenCode, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
 		if got := ValidRuntime(tc.in); got != tc.want {
 			t.Fatalf("ValidRuntime(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestIsManagedRuntime(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{RuntimeQwenPaw, true},
+		{RuntimeOpenCode, true},
+		{RuntimeCopaw, false},
+		{RuntimeOpenClaw, false},
+		{RuntimeHermes, false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := IsManagedRuntime(tc.in); got != tc.want {
+			t.Fatalf("IsManagedRuntime(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }

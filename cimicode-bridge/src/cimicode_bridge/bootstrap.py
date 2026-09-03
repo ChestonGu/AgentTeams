@@ -111,8 +111,16 @@ class S3Bootstrap:
                 break
             if attempt + 1 < retries:
                 time.sleep(retry_interval_seconds)
+        # Managed runtimes (qwenpaw projection path) never write openclaw.json;
+        # runtime/runtime.yaml alone is a complete bootstrap for them (matrix
+        # token arrives via AGENTTEAMS_WORKER_MATRIX_TOKEN, opencode endpoints
+        # via BRIDGE_RUNTIME_* env). openclaw.json remains the carrier for the
+        # legacy cimicode path (bridge.runtime session/sandbox binding).
+        runtime_yaml = self.read_text("runtime/runtime.yaml") or ""
         if not openclaw_text:
-            return None
+            if not runtime_yaml:
+                return None
+            return WorkerBootstrapConfig(openclaw={}, runtime_yaml=runtime_yaml)
         try:
             openclaw = json.loads(openclaw_text)
         except json.JSONDecodeError as exc:
@@ -125,5 +133,5 @@ class S3Bootstrap:
             # v2.4 generator input: agents/<name>/runtime/runtime.yaml
             # (MemberRuntimeConfig snapshot written by the qwenpaw/opencode
             # member reconcile branch)
-            runtime_yaml=self.read_text("runtime/runtime.yaml") or "",
+            runtime_yaml=runtime_yaml,
         )

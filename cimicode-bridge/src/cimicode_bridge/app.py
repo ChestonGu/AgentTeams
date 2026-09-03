@@ -48,6 +48,7 @@ class BridgeApp:
     def start(self) -> None:
         config_path = Path(self.config_path)
         self.config = load_config(config_path)
+        self._apply_env_overrides()
         bootstrap = S3Bootstrap.from_environment()
         if bootstrap is not None:
             self.worker_files = bootstrap.load(retries=6, retry_interval_seconds=5)
@@ -102,6 +103,23 @@ class BridgeApp:
         if self.debug:
             print(f"Loaded bridge config from {config_path}")
         print(f"Bridge started with runtime adapter: {self.config.runtime.adapter}")
+
+    def _apply_env_overrides(self) -> None:
+        """Deployment-level runtime routing overrides (pod env).
+
+        The baked bridge config stays adapter-agnostic; a controller-managed
+        bridge pod for runtime=opencode receives its endpoints through
+        Worker CR spec.env (BRIDGE_RUNTIME_ADAPTER / _BASE_URL / _HELPER_URL).
+        S3 bootstrap values, when present, still win (checked later in start()).
+        """
+        overrides = {
+            "adapter": os.getenv("BRIDGE_RUNTIME_ADAPTER", ""),
+            "base_url": os.getenv("BRIDGE_RUNTIME_BASE_URL", ""),
+            "helper_url": os.getenv("BRIDGE_RUNTIME_HELPER_URL", ""),
+        }
+        for key, value in overrides.items():
+            if value:
+                setattr(self.config.runtime, key, value)
 
     def _build_state_store(self) -> Any:
         backend = self.config.store.backend
