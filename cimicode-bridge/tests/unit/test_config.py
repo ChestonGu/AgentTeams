@@ -7,7 +7,7 @@ def test_default_config_loads():
     cfg = load_config(Path("does-not-exist.yaml"))
     assert isinstance(cfg, BridgeConfig)
     assert cfg.runtime.adapter == "cimicode"
-    assert cfg.history.max_entries == 200
+    assert cfg.history.max_entries == 50
 
 
 def test_runtime_fields_are_present():

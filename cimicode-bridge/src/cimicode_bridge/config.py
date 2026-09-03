@@ -23,7 +23,7 @@ class FilterConfig(BaseModel):
 
 
 class HistoryConfig(BaseModel):
-    max_entries: int = 200
+    max_entries: int = 50
     record_interrupted: bool = False
     persist: bool = False
     rebuild_limit: int = 50

@@ -13,6 +13,9 @@ from cimicode_bridge.store.base import StateStore
 logger = logging.getLogger(__name__)
 MessageHandler = Callable[[str, str, str, dict[str, Any]], Awaitable[None]]
 
+MAX_TOKEN_REFRESH_RETRIES = 3
+TOKEN_REFRESH_BACKOFF_S = 5
+
 
 class MatrixGateway:
     """Small matrix-nio transport, keeping Matrix protocol out of app.py."""
@@ -84,12 +87,22 @@ class MatrixGateway:
                     raise
                 except Exception as exc:
                     self.connected = False
-                    if self.refresh_token is not None and "401" in str(exc):
-                        token = await self.refresh_token()
-                        if token:
-                            self.client.access_token = token
-                            if await self.authenticate():
-                                continue
+                    err_str = str(exc)
+                    if "M_UNKNOWN_TOKEN" in err_str or "401" in err_str:
+                        logger.warning("Matrix sync received 401, attempting token refresh")
+                        refreshed = False
+                        if self.refresh_token is not None:
+                            for _attempt in range(MAX_TOKEN_REFRESH_RETRIES):
+                                token = await self.refresh_token()
+                                if token:
+                                    self.client.access_token = token
+                                    if await self.authenticate():
+                                        refreshed = True
+                                        break
+                                await asyncio.sleep(TOKEN_REFRESH_BACKOFF_S)
+                        if not refreshed:
+                            logger.error("Matrix token refresh exhausted, sync will keep retrying")
+                        continue
                     logger.warning("Matrix sync failed; retrying in %.1fs: %s", backoff, exc)
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
