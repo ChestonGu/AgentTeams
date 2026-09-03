@@ -56,6 +56,8 @@ LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_CIMICODE_BRIDGE = agentteams/cimicode-bridge:$(VERSION)
+LOCAL_OPENCODE_SANDBOX = agentteams/opencode-sandbox:$(VERSION)
+LOCAL_OPENCODE_RUNTIME = agentteams/opencode-runtime:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
@@ -217,8 +219,23 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 build-cimicode-bridge: ## Build cimicode-bridge Worker image
 	@echo "==> Building cimicode-bridge image: $(LOCAL_CIMICODE_BRIDGE)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-f cimicode-bridge/Dockerfile \
 		-t $(LOCAL_CIMICODE_BRIDGE) \
-		./cimicode-bridge/
+		.
+
+build-opencode-sandbox: ## Build opencode worker sandbox image (context: repo root)
+	@echo "==> Building opencode-sandbox image: $(LOCAL_OPENCODE_SANDBOX)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-f opencode/sandbox-image/Dockerfile \
+		-t $(LOCAL_OPENCODE_SANDBOX) \
+		.
+
+build-opencode-runtime: ## Build opencode service image (context: repo root)
+	@echo "==> Building opencode-runtime image: $(LOCAL_OPENCODE_RUNTIME)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-f opencode/runtime-image/Dockerfile \
+		-t $(LOCAL_OPENCODE_RUNTIME) \
+		.
 
 # ---------- Tag ----------
 

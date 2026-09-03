@@ -15,8 +15,9 @@ from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig
 from cimicode_bridge.config import BridgeConfig, load_config
 from cimicode_bridge.matrix_client import MentionFilter, RoleResolver
 from cimicode_bridge.matrix.gateway import MatrixGateway
+from cimicode_bridge.prompt import GenerateAgentMdError, build_agent_md_via_generator
 from cimicode_bridge.render import build_agent_md
-from cimicode_bridge.runtime.client import HttpSseRuntime
+from cimicode_bridge.runtime.registry import build_runtime_adapter
 from cimicode_bridge.session import HistoryStore, SessionManager
 from cimicode_bridge.store.file import FileStore
 from cimicode_bridge.store.memory import MemoryStore
@@ -40,7 +41,7 @@ class BridgeApp:
     history_stores: dict[str, HistoryStore] = field(default_factory=dict)
     mention_filter: MentionFilter = field(default_factory=MentionFilter)
     matrix_gateway: MatrixGateway | None = field(default=None, init=False)
-    runtime_client: HttpSseRuntime | None = field(default=None, init=False)
+    runtime_client: Any | None = field(default=None, init=False)
     matrix_task: asyncio.Task[None] | None = field(default=None, init=False)
     state_store: Any | None = field(default=None, init=False)
 
@@ -58,6 +59,7 @@ class BridgeApp:
             runtime = self.worker_files.bridge_runtime_config
             self.config.runtime.base_url = str(runtime.get("baseUrl") or runtime.get("base_url") or self.config.runtime.base_url)
             self.config.runtime.template_id = str(runtime.get("templateId") or runtime.get("template_id") or self.config.runtime.template_id)
+            self.config.runtime.helper_url = self.worker_files.runtime_helper_url or self.config.runtime.helper_url
             self.config.runtime.session_id = self.worker_files.gateway_session_id
             self.config.runtime.sandbox_id = self.worker_files.gateway_sandbox_id
         self.mention_filter = MentionFilter(
@@ -73,16 +75,19 @@ class BridgeApp:
             ),
         )
         self.phase = "bootstrap"
-        self.runtime_client = HttpSseRuntime(
-            self.config.runtime.base_url,
-            timeout_seconds=self.config.runtime.turn_timeout_seconds,
-        )
+        # Runtime SPI factory: cimicode (SSE gateway) / opencode (REST+poll).
+        # The adapter choice also decides the session-binding contract below.
+        self.runtime_client = build_runtime_adapter(self.config.runtime)
         self.state_store = self._build_state_store()
         matrix_config = self.worker_files.matrix_config if self.worker_files else {}
         homeserver = str(matrix_config.get("homeserver") or self.config.matrix.homeserver_url)
         if homeserver.startswith("${"):
             homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "")
-        if homeserver and self.matrix_access_token and self.config.runtime.session_id:
+        # Only the cimicode adapter requires a pre-created gateway session id
+        # (openclaw.json bridge.runtime.sessionId); the opencode adapter owns
+        # its session lifecycle itself.
+        session_required = self.config.runtime.adapter == "cimicode"
+        if homeserver and self.matrix_access_token and (self.config.runtime.session_id or not session_required):
             self.matrix_gateway = MatrixGateway(
                 homeserver,
                 self.matrix_access_token,
@@ -147,7 +152,8 @@ class BridgeApp:
             self.mention_filter.user_id = self.matrix_gateway.user_id
             self.mention_filter.role_resolver.self_user_id = self.matrix_gateway.user_id
         self.runtime_healthy = self.matrix_gateway.connected
-        self.ready = self.matrix_connected and bool(self.config.runtime.session_id)
+        session_required = self.config.runtime.adapter == "cimicode"
+        self.ready = self.matrix_connected and (bool(self.config.runtime.session_id) or not session_required)
         self.phase = "listening" if self.ready else "bootstrap"
 
     def stop(self) -> None:
@@ -161,6 +167,9 @@ class BridgeApp:
         if self.matrix_task is not None:
             self.matrix_task.cancel()
             await asyncio.gather(self.matrix_task, return_exceptions=True)
+        closer = getattr(self.runtime_client, "close", None)
+        if closer is not None:
+            await closer()
 
     async def handle_matrix_message(
         self,
@@ -181,17 +190,36 @@ class BridgeApp:
             return
         if self.runtime_client is None or self.matrix_gateway is None:
             return
-        if not self.config.runtime.session_id or not self.config.runtime.sandbox_id:
+        if self.config.runtime.adapter == "cimicode" and (
+            not self.config.runtime.session_id or not self.config.runtime.sandbox_id
+        ):
             logger.error("Gateway session binding is missing from S3 configuration")
             return
 
         user_message = history.build_context(f"{sender}: {body}")
         try:
-            events = await self.runtime_client.chat(
-                session_id=self.config.runtime.session_id,
-                sandbox_id=self.config.runtime.sandbox_id,
-                turn_id=event_id,
-                agent_md=build_agent_md(
+            if self.config.runtime.adapter == "opencode":
+                # v2.4: render agent.md from runtime.yaml + SOUL/PROFILE via
+                # the generator shipped in the bridge image (fail-loud — a
+                # failed render refuses the turn instead of sending a
+                # half-configured system prompt to the sandbox).
+                if self.worker_files is None or not self.worker_files.runtime_yaml:
+                    logger.error(
+                        "opencode adapter requires runtime/runtime.yaml in the "
+                        "worker bootstrap (agents/<name>/runtime/runtime.yaml); refusing turn"
+                    )
+                    return
+                try:
+                    agent_md = build_agent_md_via_generator(
+                        runtime_yaml=self.worker_files.runtime_yaml,
+                        soul_md=self.worker_files.soul_md,
+                        profile_md=self.worker_files.profile_md,
+                    )
+                except GenerateAgentMdError as exc:
+                    logger.error("agent.md generation failed: %s", exc)
+                    return
+            else:
+                agent_md = build_agent_md(
                     agents_md=self.worker_files.agents_md if self.worker_files else "",
                     soul_md=self.worker_files.soul_md if self.worker_files else "",
                     role=os.getenv("COORDINATION_ROLE", "worker"),
@@ -200,7 +228,12 @@ class BridgeApp:
                     room=os.getenv("COORDINATION_ROOM", room_id),
                     admin=os.getenv("COORDINATION_ADMIN", ""),
                     workers=os.getenv("COORDINATION_WORKERS", ""),
-                ),
+                )
+            events = await self.runtime_client.chat(
+                session_id=self.config.runtime.session_id,
+                sandbox_id=self.config.runtime.sandbox_id,
+                turn_id=event_id,
+                agent_md=agent_md,
                 history=[],
                 user_message=user_message,
             )

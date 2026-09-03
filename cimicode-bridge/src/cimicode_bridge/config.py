@@ -32,11 +32,15 @@ class HistoryConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     adapter: str = "cimicode"
     base_url: str = "http://cimicode-gateway"
+    # opencode adapter: sandbox AGENTS.md helper endpoint (defaults to
+    # base_url — the helper ships in the same sandbox image on :4097)
+    helper_url: str = ""
     template_id: str = "default-template"
     session_id: str = ""
     sandbox_id: str = ""
     auth_type: str = "none"
     turn_timeout_seconds: int = 600
+    poll_interval_seconds: float = 1.0
     submit_max_retries: int = 3
     queue_max_pending: int = 8
 

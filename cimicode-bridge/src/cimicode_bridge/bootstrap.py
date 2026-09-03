@@ -17,6 +17,8 @@ class WorkerBootstrapConfig:
     openclaw: dict[str, Any]
     agents_md: str = ""
     soul_md: str = ""
+    profile_md: str = ""
+    runtime_yaml: str = ""
 
     @property
     def matrix_config(self) -> dict[str, Any]:
@@ -49,6 +51,14 @@ class WorkerBootstrapConfig:
         return str(
             self.bridge_runtime_config.get("sandboxId")
             or self.bridge_runtime_config.get("sandbox_id")
+            or ""
+        )
+
+    @property
+    def runtime_helper_url(self) -> str:
+        return str(
+            self.bridge_runtime_config.get("helperUrl")
+            or self.bridge_runtime_config.get("helper_url")
             or ""
         )
 
@@ -111,4 +121,9 @@ class S3Bootstrap:
             openclaw=openclaw,
             agents_md=self.read_text("AGENTS.md") or "",
             soul_md=self.read_text("SOUL.md") or "",
+            profile_md=self.read_text("PROFILE.md") or "",
+            # v2.4 generator input: agents/<name>/runtime/runtime.yaml
+            # (MemberRuntimeConfig snapshot written by the qwenpaw/opencode
+            # member reconcile branch)
+            runtime_yaml=self.read_text("runtime/runtime.yaml") or "",
         )
