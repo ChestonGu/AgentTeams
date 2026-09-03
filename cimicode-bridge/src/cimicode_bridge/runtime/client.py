@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
-from httpx_sse import aconnect_sse
 
 from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
 from cimicode_bridge.runtime.adapters import CimicodeDialect
@@ -32,27 +32,48 @@ class HttpSseRuntime:
             return response.json() if response.content else {}
 
     async def stream_sse(self, method: str, path: str, *, json_body: dict[str, Any] | None = None):
-        headers = {}
-        if self.auth is not None:
-            headers = await self.auth.attach(headers)
+        """手写 SSE 解析：按空行分帧，data: 行拼接为 JSON。
 
-        # httpx-sse 的 aconnect_sse 返回 AsyncIterator[EventSource]，
-        # 直接 async for 迭代即可（不要套 async with，会报 context manager 协议错误）。
+        不依赖 httpx-sse（其 aconnect_sse 在容器内两种用法均异常）。
+        诊断脚本已验证裸 httpx 逐行解析在本环境 100% 可收到 message/done。
+        """
+        headers = {"Accept": "text/event-stream"}
+        if self.auth is not None:
+            headers.update(await self.auth.attach(headers))
+
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            async for event in aconnect_sse(
-                client,
+            async with client.stream(
                 method,
                 f"{self.base_url}{path}",
                 json=json_body,
                 headers=headers,
-            ):
-                if event.response.status_code >= 400:
-                    event.response.raise_for_status()
-                if event.data:
-                    yield {
-                        "event": event.event,
-                        "data": event.json(),
-                    }
+            ) as response:
+                response.raise_for_status()
+                data_lines: list[str] = []
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.rstrip("\r")
+                    if line == "":
+                        if data_lines:
+                            data = "\n".join(data_lines)
+                            try:
+                                payload = json.loads(data)
+                            except json.JSONDecodeError:
+                                payload = {"raw": data}
+                            yield {"event": "", "data": payload}
+                            data_lines = []
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip(" "))
+                    elif line.startswith("event:") and data_lines == []:
+                        # event 名在我们的协议里内嵌于 data.event，此处仅兼容透传
+                        continue
+                if data_lines:
+                    data = "\n".join(data_lines)
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        payload = {"raw": data}
+                    yield {"event": "", "data": payload}
 
     async def chat(
         self,
