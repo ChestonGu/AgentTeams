@@ -30,6 +30,7 @@ WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
 COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
 QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
+CIMICODE_BRIDGE_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-cimicode-bridge
 OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
@@ -41,6 +42,7 @@ WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
 COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
 QWENPAW_WORKER_TAG ?= $(QWENPAW_WORKER_IMAGE):$(VERSION)
+CIMICODE_BRIDGE_TAG ?= $(CIMICODE_BRIDGE_IMAGE):$(VERSION)
 OPENHUMAN_WORKER_TAG ?= $(OPENHUMAN_WORKER_IMAGE):$(VERSION)
 OPENCLAW_BASE_TAG  ?= $(OPENCLAW_BASE_IMAGE):$(VERSION)
 CONTROLLER_TAG     ?= $(CONTROLLER_IMAGE):$(VERSION)
@@ -53,6 +55,7 @@ LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
+LOCAL_CIMICODE_BRIDGE = agentteams/cimicode-bridge:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
@@ -109,11 +112,11 @@ LINES          ?= 50
 # ---------- Phony targets ----------
 
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        build-qwenpaw-worker \
+        build-qwenpaw-worker build-cimicode-bridge \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
-        push-qwenpaw-worker \
+        push-qwenpaw-worker push-cimicode-bridge \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
-        push-native-qwenpaw-worker \
+        push-native-qwenpaw-worker push-native-cimicode-bridge \
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
@@ -128,7 +131,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller build-cimicode-bridge ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -210,6 +213,12 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
 		.
+
+build-cimicode-bridge: ## Build cimicode-bridge Worker image
+	@echo "==> Building cimicode-bridge image: $(LOCAL_CIMICODE_BRIDGE)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-t $(LOCAL_CIMICODE_BRIDGE) \
+		./cimicode-bridge/
 
 # ---------- Tag ----------
 
@@ -504,6 +513,31 @@ else
 		-f qwenpaw/Dockerfile .
 endif
 
+push-cimicode-bridge: buildx-setup ## Build + push multi-arch cimicode-bridge image
+	@echo "==> Building + pushing multi-arch cimicode-bridge: $(CIMICODE_BRIDGE_TAG) [$(MULTIARCH_PLATFORMS)]"
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(CIMICODE_BRIDGE_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building cimicode-bridge for $(plat)..." && \
+		podman build --platform $(plat) \
+			$(DOCKER_BUILD_ARGS) \
+			--manifest $(CIMICODE_BRIDGE_TAG) \
+			./cimicode-bridge/ && ) true
+	podman manifest push --all $(CIMICODE_BRIDGE_TAG) docker://$(CIMICODE_BRIDGE_TAG)
+	$(if $(PUSH_LATEST), \
+		podman manifest push --all $(CIMICODE_BRIDGE_TAG) docker://$(CIMICODE_BRIDGE_IMAGE):latest && \
+		echo "  -> Also pushed :latest tag")
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(DOCKER_BUILD_ARGS) \
+		-t $(CIMICODE_BRIDGE_TAG) \
+		$(if $(PUSH_LATEST),-t $(CIMICODE_BRIDGE_IMAGE):latest) \
+		--push \
+		./cimicode-bridge/
+endif
+
 # ---------- Push native-arch only (dev use) ----------
 # WARNING: Pushing single-arch images will overwrite multi-arch manifests.
 # Only use for local development / testing, never for release.
@@ -555,6 +589,10 @@ push-native-openhuman-worker: build-openhuman-worker ## Push native-arch OpenHum
 push-native-qwenpaw-worker: build-qwenpaw-worker ## Push native-arch QwenPaw Worker only (dev)
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
 	docker push $(QWENPAW_WORKER_TAG)
+
+push-native-cimicode-bridge: build-cimicode-bridge ## Push native-arch cimicode-bridge only (dev)
+	docker tag $(LOCAL_CIMICODE_BRIDGE) $(CIMICODE_BRIDGE_TAG)
+	docker push $(CIMICODE_BRIDGE_TAG)
 
 # ---------- Test ----------
 
