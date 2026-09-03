@@ -23,13 +23,16 @@ RUNTIME_YAML = (
 ).read_text(encoding="utf-8")
 
 
-def _msg(mid: str, role: str, text: str = "", ended: bool = True) -> dict:
+def _msg(mid: str, role: str, text: str = "", completed: bool = True, error: dict | None = None) -> dict:
+    info: dict = {
+        "id": mid,
+        "role": role,
+        "time": {"created": 1, "completed": 3 if completed else None},
+    }
+    if error is not None:
+        info["error"] = error
     return {
-        "info": {
-            "id": mid,
-            "role": role,
-            "time": {"created": 1, "started": 2, "ended": 3 if ended else None},
-        },
+        "info": info,
         "parts": [{"type": "text", "text": text}] if text else [],
     }
 
@@ -116,8 +119,8 @@ class TestOpenCodeChat:
         fake = FakeSandbox(script=[
             [],  # baseline before POST
             [],  # poll 1: nothing yet
-            [_msg("m_a", "assistant", text="", ended=False)],  # poll 2: streaming
-            [_msg("m_a", "assistant", text="task done: ok", ended=True)],  # poll 3: done
+            [_msg("m_a", "assistant", text="", completed=False)],  # poll 2: in flight
+            [_msg("m_a", "assistant", text="task done: ok", completed=True)],  # poll 3: done
         ])
         adapter = _adapter()
         fake.attach(adapter)
@@ -144,9 +147,9 @@ class TestOpenCodeChat:
     def test_session_is_reused_across_turns(self):
         fake = FakeSandbox(script=[
             [],  # baseline
-            [_msg("m_1", "assistant", text="one", ended=True)],
+            [_msg("m_1", "assistant", text="one", completed=True)],
             [],  # baseline turn 2 (assistant m_1 is there but snapshot pops this)
-            [_msg("m_2", "assistant", text="two", ended=True)],
+            [_msg("m_2", "assistant", text="two", completed=True)],
         ])
         adapter = _adapter()
         fake.attach(adapter)
@@ -166,6 +169,23 @@ class TestOpenCodeChat:
             adapter.chat(session_id="", sandbox_id="", turn_id="t", agent_md="a", history=[], user_message="x")
         )
         assert events[-1].kind == RuntimeEventKind.TURN_INTERRUPTED
+
+    def test_turn_error_surfaces_as_runtime_error(self):
+        # upstream failures (e.g. quota errors retried server-side) land on
+        # info.error of a completed assistant message — must not read as a
+        # successful empty turn
+        fake = FakeSandbox(script=[
+            [],
+            [_msg("m_e", "assistant", completed=True, error={"name": "APIError", "data": {"message": "余额不足"}})],
+        ])
+        adapter = _adapter()
+        fake.attach(adapter)
+
+        events = asyncio.run(
+            adapter.chat(session_id="", sandbox_id="", turn_id="t", agent_md="a", history=[], user_message="x")
+        )
+        assert events[-1].kind == RuntimeEventKind.RUNTIME_ERROR
+        assert "余额不足" in events[-1].text
 
     def test_helper_failure_returns_runtime_error(self):
         fake = FakeSandbox()

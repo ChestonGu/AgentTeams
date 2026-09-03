@@ -14,19 +14,24 @@ logger = logging.getLogger(__name__)
 class OpenCodeAdapter:
     """RuntimeAdapter over the opencode headless server (``opencode serve``).
 
-    Protocol notes (stable opencode REST API):
-      * sessions:  ``POST /session`` -> session object; ``GET /session`` -> list
+    Protocol notes (stable opencode REST API, calibrated against 1.18.27):
+      * sessions:  ``POST /session`` -> session object (top-level ``id``);
+        ``GET /session`` -> list
       * messages:  ``POST /session/{id}/message`` body ``{"parts": [{"type":
-        "text", "text": ...}]}``; ``GET /session/{id}/message`` -> list of
-        ``{info: {id, role, time: {created, started, ended?}}, parts: [...]}``
-      * completion signal: the latest assistant message has ``info.time.ended``
-        set. SSE (``GET /session/{id}/event``) exists but recent releases have
-        reliability issues — we deliberately poll instead.
+        "text", "text": ...}]}`` — the call BLOCKS until the turn finishes
+        (or the model errors out), so it gets its own long timeout;
+        ``GET /session/{id}/message`` -> list of ``{info: {id, role, time:
+        {created, completed?}, error?}, parts: [...]}``
+      * completion signal: a finished assistant message has
+        ``info.time.completed`` set; a failed turn carries ``info.error``
+        (``error.data.message`` holds the upstream message, e.g. quota
+        errors surfaced as retry loops). SSE exists but recent releases
+        have reliability issues — we poll instead.
       * system prompt: opencode reads an ``AGENTS.md`` from the working
-        directory; since bridge and sandbox are separate pods, the generated
-        agent.md is shipped to the sandbox via a tiny helper endpoint
-        (``POST {helper_url}/agents-md``, body = raw markdown) baked into the
-        sandbox image before each turn.
+        directory (a volume shared with the sandbox pod); the generated
+        agent.md is shipped there via the sandbox helper endpoint
+        (``POST {helper_url}/agents-md``, body = raw markdown) before each
+        turn.
 
     Session binding: the controller may pre-create a session id in
     openclaw.json (``bridge.runtime.sessionId``). When empty the adapter owns
@@ -152,8 +157,17 @@ class OpenCodeAdapter:
                 if not message_id or message_id == baseline_id:
                     continue
                 time_info = info.get("time") or {}
-                if time_info.get("ended") is None:
+                if time_info.get("completed") is None:
                     continue
+                error = info.get("error")
+                if isinstance(error, dict):
+                    data = error.get("data") or {}
+                    detail = str(data.get("message") or error.get("name") or "opencode turn failed")
+                    return RuntimeEvent(
+                        kind=RuntimeEventKind.RUNTIME_ERROR,
+                        text=f"opencode turn failed: {detail}",
+                        data={"session_id": session_id, "message_id": message_id},
+                    )
                 text = self._extract_text(message)
                 return RuntimeEvent(
                     kind=RuntimeEventKind.TURN_COMPLETED,
@@ -188,6 +202,8 @@ class OpenCodeAdapter:
             response = await self._http().post(
                 f"{self.base_url}/session/{resolved}/message",
                 json={"parts": [{"type": "text", "text": user_message}]},
+                # POST blocks server-side until the whole turn finishes
+                timeout=self.timeout_seconds + 30.0,
             )
             response.raise_for_status()
             completed = await self._poll_reply(resolved, baseline)

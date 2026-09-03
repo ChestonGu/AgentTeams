@@ -29,9 +29,10 @@ COPY opencode/runtime-image/tools/bash.ts /opt/agenttools/tools/bash.ts
 COPY opencode/runtime-image/entrypoint.sh /opt/agenttools/entrypoint.sh
 RUN chmod +x /opt/agenttools/entrypoint.sh
 
-ENV ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic \
-    ANTHROPIC_AUTH_TOKEN=0ed68f04ea7d431ba58cd238d3418e3f.ZMkTWZlZrk43IEFk \
-    OPENCODE_PORT=4096
+# LLM credentials live in opencode.json (options.baseURL + options.apiKey —
+# the v1.18.x effect config removed the top-level api_key/api_key_env fields;
+# key must target the Coding Plan endpoint, not the generic /api/paas/v4).
+ENV OPENCODE_PORT=4096
 
 EXPOSE 4096
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agenttools/entrypoint.sh"]
