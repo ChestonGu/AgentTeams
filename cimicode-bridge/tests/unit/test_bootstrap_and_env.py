@@ -66,6 +66,38 @@ class TestBootstrapManagedRuntime:
         boot = _bootstrap({}, monkeypatch)
         assert boot.load(retries=1) is None
 
+    def test_inline_config_soul_extracted(self, monkeypatch):
+        # spec.soul / spec.identity land in desired.inlineConfig for managed
+        # runtimes — the bootstrap must surface them as soul_md / profile_md
+        # so the v2.4 generator gets its --soul-file / --profile-file inputs.
+        runtime_yaml = (
+            "member:\n"
+            "  runtime: opencode\n"
+            "desired:\n"
+            "  inlineConfig:\n"
+            "    soul: 你是验收 worker\n"
+            "    identity: 资深后端工程师\n"
+        )
+        boot = _bootstrap({"agents/w1/runtime/runtime.yaml": runtime_yaml}, monkeypatch)
+        cfg = boot.load(retries=1)
+        assert cfg is not None
+        assert cfg.soul_md == "你是验收 worker"
+        assert cfg.profile_md == "资深后端工程师"
+
+    def test_inline_config_absent_yields_empty_persona(self, monkeypatch):
+        boot = _bootstrap({"agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n"}, monkeypatch)
+        cfg = boot.load(retries=1)
+        assert cfg is not None
+        assert cfg.soul_md == ""
+        assert cfg.profile_md == ""
+
+    def test_inline_config_unparsable_degrades_to_empty(self, monkeypatch):
+        boot = _bootstrap({"agents/w1/runtime/runtime.yaml": "::: not yaml ["}, monkeypatch)
+        cfg = boot.load(retries=1)
+        assert cfg is not None
+        assert cfg.soul_md == ""
+        assert cfg.profile_md == ""
+
 
 class TestEnvOverrides:
     def test_env_routes_to_opencode(self, monkeypatch):

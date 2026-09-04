@@ -12,6 +12,27 @@ from minio import Minio
 logger = logging.getLogger(__name__)
 
 
+def inline_persona(runtime_yaml: str) -> tuple[str, str]:
+    """Extract (soul, identity-as-profile) from a MemberRuntimeConfig snapshot.
+
+    Worker spec.soul / spec.identity are projected into desired.inlineConfig
+    by DeployMemberRuntimeConfig; a YAML parse failure degrades to empty
+    strings (the generator treats both inputs as optional) rather than
+    failing the whole bootstrap.
+    """
+    try:
+        import yaml
+
+        doc = yaml.safe_load(runtime_yaml) or {}
+        inline = ((doc.get("desired") or {}).get("inlineConfig")) or {}
+        if not isinstance(inline, dict):
+            return "", ""
+        return str(inline.get("soul") or ""), str(inline.get("identity") or "")
+    except Exception as exc:
+        logger.warning("failed to parse inlineConfig from runtime.yaml: %s", exc)
+        return "", ""
+
+
 @dataclass
 class WorkerBootstrapConfig:
     openclaw: dict[str, Any]
@@ -124,7 +145,19 @@ class S3Bootstrap:
         if not openclaw_text:
             if not runtime_yaml:
                 return None
-            return WorkerBootstrapConfig(openclaw={}, runtime_yaml=runtime_yaml)
+            # Managed runtimes carry the worker's persona inside the
+            # MemberRuntimeConfig snapshot: spec.soul / spec.identity are
+            # projected into desired.inlineConfig (DeployMemberRuntimeConfig)
+            # instead of separate SOUL.md / PROFILE.md objects. Extract them
+            # so the v2.4 generator receives the same --soul-file /
+            # --profile-file inputs as the legacy path.
+            soul_md, profile_md = inline_persona(runtime_yaml)
+            return WorkerBootstrapConfig(
+                openclaw={},
+                runtime_yaml=runtime_yaml,
+                soul_md=soul_md,
+                profile_md=profile_md,
+            )
         try:
             openclaw = json.loads(openclaw_text)
         except json.JSONDecodeError as exc:
