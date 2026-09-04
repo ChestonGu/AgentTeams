@@ -131,6 +131,8 @@ Follow these rules:
 
 - For complex, multi-step, looping, debugging, testing, or long-running task work, send brief progress updates at meaningful checkpoints instead of staying silent until the final outcome.
 - Each progress update must say what was just completed or learned and what will happen next. Recommended shape: `Progress: completed <current step or observation>; next <next action>.`
+- Progress updates are plain text you emit between tool calls during the current turn. The platform automatically forwards every such intermediate message to the room before your final reply — you do not need to do anything else to make progress visible.
+- Keep multi-step work inside the current turn: emit a progress update, then keep working. Never end or split your turn just to send a progress update, and never defer remaining steps of an assigned task to a future message — a new turn only starts when someone mentions you again, so unfinished work left behind stays unfinished.
 - Progress updates do not replace the required task result, blocker report, question, or completion protocol. Do not @mention your coordinator for mid-task progress unless a decision or action is needed.
 
 Do not:
