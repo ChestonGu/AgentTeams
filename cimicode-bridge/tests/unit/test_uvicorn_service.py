@@ -22,6 +22,12 @@ class FakeMatrix:
         self.sent = (room_id, body)
         return "$reply"
 
+    async def start_typing(self, room_id):
+        self.typing_started = room_id
+
+    async def stop_typing(self, room_id):
+        self.typing_stopped = room_id
+
 
 def test_healthz_and_readyz_endpoints():
     client = TestClient(create_app())
@@ -90,3 +96,5 @@ def test_matrix_event_calls_gateway_and_sends_reply():
     assert bridge.runtime_client.request["turn_id"] == "$event-1"
     assert "[Current message - respond to this]" in bridge.runtime_client.request["user_message"]
     assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
+    assert bridge.matrix_gateway.typing_started == "!room:matrix.local"
+    assert bridge.matrix_gateway.typing_stopped == "!room:matrix.local"

@@ -214,13 +214,15 @@ class BridgeApp:
         body = str(content.get("body", ""))
         decision = self.mention_filter.evaluate(body, sender, content=content)
         logger.info(
-            "matrix message room=%s sender=%s event=%s accepted=%s reason=%s mentions=%s",
+            "matrix message room=%s sender=%s event=%s accepted=%s role=%s reason=%s mentions=%s body=%r",
             room_id,
             sender,
             event_id,
             decision.accepted,
+            decision.role,
             decision.reason,
             decision.mentions,
+            body[:80],
         )
         history = self.history_stores.setdefault(
             room_id,
@@ -239,6 +241,7 @@ class BridgeApp:
             return
 
         user_message = history.build_context(f"{sender}: {body}")
+        await self.matrix_gateway.start_typing(room_id)
         try:
             if self.config.runtime.adapter == "opencode":
                 # v2.4: render agent.md from runtime.yaml + SOUL/PROFILE via
@@ -293,6 +296,8 @@ class BridgeApp:
             history.clear()
         except Exception:
             logger.exception("Matrix message handling failed event_id=%s", event_id)
+        finally:
+            await self.matrix_gateway.stop_typing(room_id)
 
     def status_payload(self) -> dict[str, Any]:
         return {

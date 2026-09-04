@@ -48,6 +48,7 @@ class MatrixGateway:
         self.state_store = state_store
         self.since_key = since_key
         self.refresh_token = refresh_token
+        self._typing_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def authenticate(self) -> bool:
         response = await self.client.whoami()
@@ -165,7 +166,44 @@ class MatrixGateway:
         event_id = getattr(response, "event_id", None)
         return str(event_id) if event_id else None
 
+    # ------------------------------------------------------------------
+    # Typing indicator（对齐 CoPaw TYPING_* 参数：服务端 30s 超时，25s 续期）
+    # ------------------------------------------------------------------
+    async def start_typing(self, room_id: str) -> None:
+        """开启 typing 并启动后台续期任务（长任务期间保持指示器）。"""
+        await self._typing_once(room_id, True)
+        self._stop_typing(room_id)
+        task = asyncio.create_task(self._typing_renewal_loop(room_id))
+        self._typing_tasks[room_id] = task
+
+    async def stop_typing(self, room_id: str) -> None:
+        """停止 typing：取消续期任务并发送 typing=false。"""
+        self._stop_typing(room_id)
+        await self._typing_once(room_id, False)
+
+    async def _typing_once(self, room_id: str, typing: bool) -> None:
+        try:
+            await self.client.room_typing(room_id, typing_state=typing, timeout=30000)
+        except Exception as exc:
+            logger.debug("room_typing(%s, %s) failed: %s", room_id, typing, exc)
+
+    async def _typing_renewal_loop(self, room_id: str) -> None:
+        try:
+            while True:
+                await asyncio.sleep(25)
+                await self._typing_once(room_id, True)
+        except asyncio.CancelledError:
+            raise
+
+    def _stop_typing(self, room_id: str) -> None:
+        task = self._typing_tasks.pop(room_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
     async def stop(self) -> None:
         self._stopped.set()
         self.connected = False
+        for task in list(self._typing_tasks.values()):
+            task.cancel()
+        self._typing_tasks.clear()
         await self.client.close()
