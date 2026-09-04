@@ -191,6 +191,7 @@ class BridgeApp:
             return
 
         user_message = history.build_context(f"{sender}: {body}")
+        await self.matrix_gateway.start_typing(room_id)
         try:
             events = await self.runtime_client.chat(
                 session_id=self.config.runtime.session_id,
@@ -223,6 +224,8 @@ class BridgeApp:
             history.clear()
         except Exception:
             logger.exception("Matrix message handling failed event_id=%s", event_id)
+        finally:
+            await self.matrix_gateway.stop_typing(room_id)
 
     def status_payload(self) -> dict[str, Any]:
         return {

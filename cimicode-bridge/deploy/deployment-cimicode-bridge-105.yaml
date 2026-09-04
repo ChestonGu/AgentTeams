@@ -24,7 +24,7 @@ spec:
         kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
       containers:
         - name: bridge
-          image: agentteams/cimicode-bridge:v0.0.7
+          image: agentteams/cimicode-bridge:v0.0.8
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
