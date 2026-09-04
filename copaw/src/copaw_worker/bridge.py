@@ -447,6 +447,16 @@ def _write_config_json(
     # Disable console channel (we use Matrix)
     existing["channels"].setdefault("console", {})["enabled"] = False
 
+    # Security guards off by default. Upstream CoPaw enables tool_guard with
+    # a default guarded-tool set, and its Matrix channel has no /approve
+    # handler — guarded commands block forever waiting for an approval that
+    # can never arrive. setdefault keeps user overrides intact (re-bridge
+    # never flips guards back on).
+    security = existing.setdefault("security", {})
+    security.setdefault("tool_guard", {}).setdefault("enabled", False)
+    security.setdefault("file_guard", {}).setdefault("enabled", False)
+    security.setdefault("skill_scanner", {}).setdefault("mode", "off")
+
     # Bridge model context window → agents.running.max_input_length so that
     # CoPaw's memory compaction threshold tracks the actual model capability.
     # We read contextWindow from the first model of the primary (or first)
