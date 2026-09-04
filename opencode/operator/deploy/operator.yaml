@@ -1,0 +1,88 @@
+# opencode-stack-operator: per-worker opencode+sandbox stack automation.
+# See opencode_stack_operator.py for the ownership model (bridge stays
+# controller-managed; this operator owns the standalone runtime/sandbox pair,
+# the sandbox FS Secret, and the Worker CR spec.env wiring).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opencode-stack-operator
+  namespace: opencode-team-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opencode-stack-operator
+  namespace: opencode-team-test
+rules:
+  - apiGroups: ["agentteams.io"]
+    resources: ["workers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["agentteams.io"]
+    resources: ["teams"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opencode-stack-operator
+  namespace: opencode-team-test
+subjects:
+  - kind: ServiceAccount
+    name: opencode-stack-operator
+    namespace: opencode-team-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opencode-stack-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode-stack-operator
+  namespace: opencode-team-test
+  labels:
+    app: opencode-stack-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode-stack-operator
+  template:
+    metadata:
+      labels:
+        app: opencode-stack-operator
+    spec:
+      serviceAccountName: opencode-stack-operator
+      containers:
+        - name: operator
+          image: agentteams/opencode-stack-operator:v0.1.0-oct
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WATCH_NAMESPACE
+              value: opencode-team-test
+            - name: OPENCODE_IMAGE
+              value: agentteams/opencode-runtime:v0.1.1-oct
+            - name: SANDBOX_IMAGE
+              value: agentteams/opencode-sandbox:v0.1.0-oct
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: http://agentteams-oct-minio.opencode-team-test.svc.cluster.local:9000
+            - name: AGENTTEAMS_FS_BUCKET
+              value: agentteams-storage
+            - name: MATRIX_SERVER_NAME
+              value: agentteams-oct-synapse.opencode-team-test.svc.cluster.local
+            # hostPath pairing requires opencode+sandbox on the same node
+            - name: NODE_SELECTOR_HOSTNAME
+              value: extvdiadmin-vmware-virtual-platform
+            - name: HOSTPATH_ROOT
+              value: /data/oct-workers
+            - name: RECONCILE_INTERVAL
+              value: "10"
