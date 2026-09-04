@@ -155,10 +155,10 @@ def taskflow_events(passw: str, sandbox_pod: str, since: datetime, task_filter: 
     return out
 
 
-def meta_events(passw: str, minio_pod: str, since: datetime, task_filter: str) -> list[tuple[datetime, str, str]]:
+def meta_events(passw: str, minio_pod: str, since: datetime, task_filter: str, team: str) -> list[tuple[datetime, str, str]]:
     out: list[tuple[datetime, str, str]] = []
-    listing = k(passw, "exec", "-n", NS, minio_pod, "--", "/usr/bin/mc", "ls", "--recursive",
-                "local/agentteams-storage/teams/oct-team/shared/tasks/")
+    prefix = f"local/agentteams-storage/teams/{team}/shared/tasks/"
+    listing = k(passw, "exec", "-n", NS, minio_pod, "--", "/usr/bin/mc", "ls", "--recursive", prefix)
     for line in listing.splitlines():
         m = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC\]\s+(\S+)\s+\S+\s+(\S+)$", line.strip())
         if not m:
@@ -171,8 +171,7 @@ def meta_events(passw: str, minio_pod: str, since: datetime, task_filter: str) -
         if when < since:
             continue
         if key.endswith("meta.json"):
-            raw = k(passw, "exec", "-n", NS, minio_pod, "--", "/usr/bin/mc", "cat",
-                    f"local/agentteams-storage/teams/oct-team/shared/tasks/{key}")
+            raw = k(passw, "exec", "-n", NS, minio_pod, "--", "/usr/bin/mc", "cat", f"{prefix}{key}")
             try:
                 meta = json.loads(raw)
             except json.JSONDecodeError:
@@ -188,10 +187,10 @@ def meta_events(passw: str, minio_pod: str, since: datetime, task_filter: str) -
     return out
 
 
-def leader_events(passw: str, leader_pod: str, since: datetime) -> list[tuple[datetime, str, str]]:
+def leader_events(passw: str, leader_pod: str, leader: str, since: datetime) -> list[tuple[datetime, str, str]]:
     out = []
     raw = k(passw, "exec", "-n", NS, leader_pod, "--", "cat",
-            "/root/.copaw-worker/oct-lead/.copaw/copaw.log", timeout=60)
+            f"/root/.copaw-worker/{leader}/.copaw/copaw.log", timeout=60)
     for ln in raw.splitlines():
         m = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| INFO \| .* \| (Handle agent query|Saved session state)", ln)
         if not m:
@@ -206,6 +205,8 @@ def leader_events(passw: str, leader_pod: str, since: datetime) -> list[tuple[da
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--worker", default="ocw-1", help="worker name (default ocw-1)")
+    ap.add_argument("--team", default="oct-team", help="team CR name for task storage prefix")
+    ap.add_argument("--leader", default="oct-lead", help="leader worker name for copaw.log")
     ap.add_argument("--since", required=True, help="UTC HH:MM or ISO datetime")
     ap.add_argument("--task", default="", help="substring filter on task id")
     args = ap.parse_args()
@@ -224,15 +225,15 @@ def main() -> int:
         raise RuntimeError(f"pod matching {pat} not found")
 
     worker_pod = find(f"agentteams-worker-{args.worker}")
-    sandbox_pod = find(f"ocw-1-sandbox") if args.worker == "ocw-1" else find(f"{args.worker}-sandbox")
+    sandbox_pod = find(f"{args.worker}-sandbox")
     minio_pod = find("minio")
-    leader_pod = find("agentteams-worker-oct-lead")
+    leader_pod = find(f"agentteams-worker-{args.leader}")
 
     events: list[tuple[datetime, str, str]] = []
     events += bridge_events(passw, worker_pod, since)
     events += taskflow_events(passw, sandbox_pod, since, args.task)
-    events += meta_events(passw, minio_pod, since, args.task)
-    events += leader_events(passw, leader_pod, since)
+    events += meta_events(passw, minio_pod, since, args.task, args.team)
+    events += leader_events(passw, leader_pod, args.leader, since)
     events.sort(key=lambda e: e[0])
 
     last_minute = ""
