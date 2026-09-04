@@ -304,14 +304,31 @@ class BridgeApp:
                 user_message=user_message,
             )
             response_text = ""
+            progress_texts: list[str] = []
             for event in events:
                 if event.kind.value == "text_delta":
                     response_text += event.text
                 elif event.kind.value == "turn_completed":
                     response_text = event.text or response_text
+                    progress_texts = list((event.data or {}).get("progress_texts") or [])
                 elif event.kind.value in {"runtime_error", "turn_interrupted"}:
                     logger.error("Gateway turn failed: %s", event.data or event.text)
                     return
+            # Mid-turn narration (the agent's Progress updates between tool
+            # calls) would otherwise be dropped with the final-reply-only
+            # contract — forward each before the reply so multi-step work is
+            # visible in the room as it happens.
+            for seq, ptext in enumerate(progress_texts, 1):
+                if ptext.strip() and ptext.strip() != "NO_REPLY":
+                    await self.matrix_gateway.send_text(room_id, ptext)
+                    logger.info(
+                        "progress sent room=%s event_id=%s seq=%d/%d body=%r",
+                        room_id,
+                        event_id,
+                        seq,
+                        len(progress_texts),
+                        ptext,
+                    )
             if response_text.strip() and response_text.strip() != "NO_REPLY":
                 await self.matrix_gateway.send_text(room_id, response_text)
                 logger.info(

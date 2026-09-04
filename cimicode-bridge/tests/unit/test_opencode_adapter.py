@@ -144,6 +144,49 @@ class TestOpenCodeChat:
         assert fake.agent_md_received == ["# AGENTS"]
         assert fake.requests[0] == ("POST", "/agents-md")
 
+    def test_mid_turn_assistant_messages_surface_as_progress(self):
+        fake = FakeSandbox(script=[
+            [],  # baseline before POST
+            [],  # poll 1: nothing yet
+            [
+                _msg("m_p", "assistant", text="Progress: completed deliverable 1/3; next b.txt", completed=True),
+                _msg("m_f", "assistant", text="TASK_COMPLETED all three deliverables done", completed=True),
+            ],  # final poll: mid-turn narration + final reply both complete
+        ])
+        adapter = _adapter()
+        fake.attach(adapter)
+
+        events = asyncio.run(
+            adapter.chat(
+                session_id="",
+                sandbox_id="",
+                turn_id="evt-prog",
+                agent_md="# AGENTS",
+                history=[],
+                user_message="multi-step task",
+            )
+        )
+
+        final = events[-1]
+        assert final.kind == RuntimeEventKind.TURN_COMPLETED
+        assert final.text == "TASK_COMPLETED all three deliverables done"
+        assert final.data["progress_texts"] == ["Progress: completed deliverable 1/3; next b.txt"]
+
+    def test_single_message_turn_has_no_progress(self):
+        fake = FakeSandbox(script=[
+            [],
+            [],
+            [_msg("m_f", "assistant", text="only reply", completed=True)],
+        ])
+        adapter = _adapter()
+        fake.attach(adapter)
+
+        events = asyncio.run(
+            adapter.chat(session_id="", sandbox_id="", turn_id="evt-1", agent_md="# A", history=[], user_message="hi")
+        )
+
+        assert events[-1].data.get("progress_texts", []) == []
+
     def test_session_is_reused_across_turns(self):
         fake = FakeSandbox(script=[
             [],  # baseline

@@ -140,6 +140,29 @@ class OpenCodeAdapter:
         return ""
 
     @staticmethod
+    def _completed_assistant_texts(messages: list[dict[str, Any]], baseline_id: str) -> list[str]:
+        """Completed assistant texts after baseline, oldest first.
+
+        A single opencode turn may emit several assistant messages (the agent
+        narrates progress between tool calls). Only the last one is the turn's
+        reply; the earlier ones are mid-turn progress the room expects to see.
+        """
+        texts: list[str] = []
+        for message in messages:
+            info = message.get("info") or message
+            if str(info.get("role")) != "assistant":
+                continue
+            message_id = str(info.get("id") or "")
+            if not message_id or message_id == baseline_id:
+                continue
+            if (info.get("time") or {}).get("completed") is None:
+                continue
+            text = OpenCodeAdapter._extract_text(message)
+            if text.strip():
+                texts.append(text)
+        return texts
+
+    @staticmethod
     def _extract_text(message: dict[str, Any]) -> str:
         info = message.get("info") or message
         parts = info.get("parts") or message.get("parts") or []
@@ -222,12 +245,25 @@ class OpenCodeAdapter:
             )
             response.raise_for_status()
             completed = await self._poll_reply(resolved, baseline)
+            if completed.kind == RuntimeEventKind.TURN_COMPLETED:
+                # Surface mid-turn assistant messages (progress narration the
+                # agent emits between tool calls) alongside the final reply —
+                # the caller forwards them to the room before the reply.
+                texts = self._completed_assistant_texts(await self._messages(resolved), baseline)
+                progress = [t for t in texts[:-1] if t.strip() and t.strip() != completed.text]
+                if progress:
+                    completed = RuntimeEvent(
+                        kind=RuntimeEventKind.TURN_COMPLETED,
+                        text=completed.text,
+                        data={**(completed.data or {}), "progress_texts": progress},
+                    )
             logger.info(
-                "opencode action: turn finished session=%s turn=%s outcome=%s elapsed=%.1fs reply=%r",
+                "opencode action: turn finished session=%s turn=%s outcome=%s elapsed=%.1fs progress=%d reply=%r",
                 resolved,
                 turn_id,
                 completed.kind.value,
                 time.monotonic() - turn_started,
+                len((completed.data or {}).get("progress_texts") or []),
                 (completed.text or "")[:300],
             )
             if completed.kind == RuntimeEventKind.TURN_COMPLETED:
