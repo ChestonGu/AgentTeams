@@ -84,7 +84,14 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
-	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
+	// Persist spec.runtime exactly as submitted. Resolving the install-time
+	// default into the CR breaks namespaces whose live Worker CRD enum lacks
+	// that value (e.g. "opencode" before the enum lands cluster-wide): the
+	// create is rejected before the reconciler ever runs. The worker
+	// reconciler applies AGENTTEAMS_DEFAULT_WORKER_RUNTIME via
+	// RuntimeFallback, so an omitted runtime resolves identically without
+	// being pinned in the CR.
+	runtime := req.Runtime
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{

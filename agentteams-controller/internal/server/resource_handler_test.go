@@ -717,7 +717,11 @@ func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 	}
 }
 
-func TestCreateWorkerDefaultsRuntime(t *testing.T) {
+func TestCreateWorkerOmittedRuntimeStaysEmpty(t *testing.T) {
+	// spec.runtime must not be defaulted into the CR: namespaces whose live
+	// Worker CRD enum lacks the install-time default (e.g. "opencode") would
+	// reject the create. The reconciler applies the default via
+	// RuntimeFallback instead.
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	handler := NewResourceHandler(k8sClient, "default", nil, "")
@@ -734,12 +738,15 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
 		t.Fatalf("get created worker: %v", err)
 	}
-	if got := stored.Spec.Runtime; got != "openclaw" {
-		t.Fatalf("worker.spec.runtime = %q, want openclaw", got)
+	if got := stored.Spec.Runtime; got != "" {
+		t.Fatalf("worker.spec.runtime = %q, want empty", got)
 	}
 }
 
-func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
+func TestCreateWorkerDefaultRuntimeNotPinnedInCR(t *testing.T) {
+	// The install-time default (h.defaultWorkerRuntime) must stay out of the
+	// CR: the reconciler resolves it via RuntimeFallback so the stored
+	// spec.runtime keeps whatever the caller explicitly sent.
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	handler := NewResourceHandler(k8sClient, "default", nil, "")
@@ -757,8 +764,8 @@ func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
 		t.Fatalf("get created worker: %v", err)
 	}
-	if got := stored.Spec.Runtime; got != backend.RuntimeQwenPaw {
-		t.Fatalf("worker.spec.runtime = %q, want %q", got, backend.RuntimeQwenPaw)
+	if got := stored.Spec.Runtime; got != "" {
+		t.Fatalf("worker.spec.runtime = %q, want empty (default not pinned)", got)
 	}
 }
 
