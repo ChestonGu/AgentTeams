@@ -18,6 +18,10 @@ spec:
         {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
     spec:
       serviceAccountName: {{ include "agentteams.controller.serviceAccountName" . }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

@@ -970,6 +970,12 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	leaderDMInvites := leaderDMDesired
 	if hasTeamAdmin {
 		leaderDMInvites = withoutString(leaderDMDesired, teamAdminID)
+	} else {
+		// Legacy branch: the global admin creates the room, and Synapse
+		// rejects inviting the creator of an is_direct room with
+		// M_FORBIDDEN "already in the room". The admin is joined by
+		// virtue of creating it — invite only the leader.
+		leaderDMInvites = withoutString(leaderDMDesired, adminMatrixID)
 	}
 	leaderDMMeta := leaderDMRoomMeta(req, teamAdminID, leaderMatrixID)
 	leaderDMRoom, err := p.matrixOps.CreateRoom(ctx, matrix.RoomSpec{
