@@ -1,0 +1,27 @@
+# =============================================================================
+# Agent PodTemplate overlay for opencode-team-test.
+#
+# The controller (name = agentteams-oct-controller, its AGENTTEAMS_CONTROLLER_NAME)
+# reads this ConfigMap on every agent-Pod Create and merges spec fields
+# ("user wins") into copaw leader pods and opencode bridge pods alike.
+#
+# Why: agentteams/* images (copaw-worker, cimicode-bridge) exist only in the
+# 105 node's containerd; without this overlay pods can be scheduled to k3s-103
+# where the pull fails forever (no registry serves them).
+#
+# Apply BEFORE creating Worker CRs:
+#   kubectl apply -f pod-template-oct.yaml
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentteams-oct-controller
+  namespace: opencode-team-test
+data:
+  pod-template.yaml: |
+    metadata:
+      labels:
+        agentteams.io/test-env: opencode-team-test
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform

@@ -1,0 +1,20 @@
+# =============================================================================
+# Team CR for opencode-team-test — binds the copaw leader and the opencode
+# worker into one Matrix team room. Create AFTER both workers are Ready.
+# =============================================================================
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: oct-team
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: OCT 测试团队
+  description: opencode runtime integration test team (copaw leader + opencode worker)
+  teamName: oct-team
+  workerMembers:
+    - name: oct-lead
+      role: team_leader
+    - name: ocw-1
+      role: worker

@@ -1,0 +1,58 @@
+# =============================================================================
+# Workers for opencode-team-test.
+#
+# oct-lead : copaw team leader (baseline-equivalence check for the new
+#            environment — same runtime as production workers)
+# ocw-1    : runtime=opencode worker — the controller provisions a
+#            cimicode-bridge pod (worker masquerade) that pulls
+#            runtime/runtime.yaml from MinIO, renders agent.md via the v2.4
+#            generator, and drives the standalone opencode pod's session.
+#            LLM config is baked into the opencode pod image (Zhipu Coding
+#            Plan), so model=native-config keeps the AI-gateway section out
+#            of runtime.yaml.
+#
+# Prereqs: helm release up, pod-template overlay applied, opencode stack
+# (opencode-svc / opencode-sandbox-svc) running for ocw-1.
+# =============================================================================
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: oct-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: oct-lead
+  displayName: oct-lead
+  model: glm-5.3-flash
+  identity: |
+    你是 OCT 测试团队的组长（copaw 运行时），负责拆解并分派前端任务，
+    追踪成员进度，汇总产出。
+  soul: |
+    风格：简洁、面向行动。分派任务时写清验收标准；收到产出后用
+    taskflow/projectflow 核对状态并给出明确结论。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ocw-1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  # NOTE: runtime omitted on purpose. The cluster-shared Worker CRD (installed
+  # by agentos long ago; helm never upgrades crds/) rejects runtime=opencode at
+  # admission. Empty runtime resolves to the controller's
+  # AGENTTEAMS_DEFAULT_WORKER_RUNTIME, which this environment sets to
+  # "opencode" (kubectl set env / values worker.defaultRuntime).
+  workerName: ocw-1
+  displayName: ocw-1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的前端工程师。收到任务先 taskflow ack，
+    完成后将结果写入 shared 工作区并 taskflow submit。
+  env:
+    BRIDGE_RUNTIME_ADAPTER: opencode
+    BRIDGE_RUNTIME_BASE_URL: http://opencode-svc.opencode-team-test.svc.cluster.local:4096
+    BRIDGE_RUNTIME_HELPER_URL: http://opencode-sandbox-svc.opencode-team-test.svc.cluster.local:4097

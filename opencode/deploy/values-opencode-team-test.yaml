@@ -1,0 +1,149 @@
+# =============================================================================
+# opencode-team-test — isolated integration-test overlay on the 105 k3s cluster
+# =============================================================================
+# Install (from repo root, server copy):
+#   helm dependency update helm/agentteams   # or reuse ~/agentteams-deploy/helm/higress-2.2.1.tgz
+#   helm install agentteams-oct ./helm/agentteams \
+#     -n opencode-team-test --create-namespace \
+#     -f opencode/deploy/values-opencode-team-test.yaml
+#
+# Isolation contract vs. the production `agentteams` release in ns agentos:
+#   * separate namespace (controller watches only its own ns via
+#     AGENTTEAMS_K8S_NAMESPACE fieldRef)
+#   * separate higress instance: IngressClass higress-oct +
+#     watchNamespace=opencode-team-test (nothing watches cluster-wide)
+#   * separate MinIO (chart-managed in-namespace; production uses s3-sim OSS)
+#   * separate Synapse (server_name derives from the new in-ns service FQDN)
+#   * disjoint NodePorts: 32180/30544 gateway, 32398 element-web
+#     (production occupies 32116/30494/30246/32397/31300/30833/31901/31080)
+# =============================================================================
+
+nameOverride: agentteams-oct
+
+global:
+  imageTag: ""
+
+controller:
+  image:
+    repository: agentteams/agentteams-controller
+    tag: v1.2.2-oct
+    pullPolicy: IfNotPresent
+  workerBackend: "k8s"
+  # agentteams/* images are imported into the 105 node's containerd only;
+  # keep the controller off k3s-103 where pulls would fail (no registry).
+  nodeSelector:
+    kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+  env:
+    # runtime=opencode workers run as cimicode-bridge pods (worker
+    # masquerade); see internal/backend/kubernetes.go OpenCodeBridgeImage.
+    AGENTTEAMS_OPENCODE_BRIDGE_IMAGE: agentteams/cimicode-bridge:v0.0.8-oct
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+manager:
+  enabled: false   # CRD-driven; the test drives Worker/Team CRs directly
+
+cms:
+  enabled: false
+
+elementWeb:
+  enabled: true
+  service:
+    type: NodePort
+    port: 8080
+    # 32398 — disjoint from production element-web (32397)
+    nodePort: 32398
+
+worker:
+  # Workers that omit spec.runtime resolve to this default. oct-lead pins
+  # runtime=copaw explicitly; ocw-1 omits runtime so it resolves to opencode
+  # here (the shared cluster CRD's enum predates opencode and rejects the
+  # explicit value at admission).
+  defaultRuntime: opencode
+  defaultImage:
+    openclaw:
+      repository: agentteams/worker-agent
+      tag: v1.2.2
+    copaw:
+      repository: agentteams/copaw-worker
+      tag: v1.2.2.2
+
+credentials:
+  adminPassword: oct-admin-2026
+  # GLM Coding Plan endpoint (openai-compatible) — NOT the generic
+  # /api/paas/v4 (which rejects Coding-Plan keys with 1113 quota errors).
+  llmProvider: openai-compat
+  llmBaseUrl: https://open.bigmodel.cn/api/coding/paas/v4
+  llmApiKey: 0ed68f04ea7d431ba58cd238d3418e3f.ZMkTWZlZrk43IEFk
+  defaultModel: glm-5.3-flash
+
+gateway:
+  publicURL: http://10.254.254.105:32180
+
+storage:
+  provider: minio
+  mode: managed          # in-namespace MinIO, fully isolated from s3-sim
+  bucket: agentteams-storage
+  minio:
+    auth:
+      rootUser: oct-minio
+      rootPassword: oct-minio-2026
+
+matrix:
+  provider: synapse
+  appservice:
+    enabled: true
+    # wake-up path: homeserver pushes AS transactions to this controller
+    pushURL: "http://agentteams-oct-controller.opencode-team-test.svc.cluster.local:8090"
+    asToken: oct-as-token-change-me
+    hsToken: oct-hs-token-change-me
+  synapse:
+    adminUser: admin
+    registrationSharedSecret: oct-reg-shared-2026
+    postgres:
+      password: oct-synapse-pg-2026
+    persistence:
+      enabled: true
+      size: 5Gi
+    service:
+      type: ClusterIP
+
+higress:
+  global:
+    local: true
+    # second-instance isolation: own IngressClass + namespaced watch
+    ingressClass: higress-oct
+    watchNamespace: opencode-team-test
+  higress-core:
+    gateway:
+      replicas: 1
+      service:
+        type: NodePort
+        ports:
+          - name: http2
+            port: 80
+            protocol: TCP
+            targetPort: 80
+            nodePort: 32180
+          - name: https
+            port: 443
+            protocol: TCP
+            targetPort: 443
+            nodePort: 30544
+    controller:
+      replicas: 1
+  higress-console:
+    service:
+      type: NodePort
+
+preflight:
+  llm:
+    # The hook Job has no nodeSelector and may land on k3s-103 where the
+    # controller image (imported only into 105) cannot be pulled. The Zhipu
+    # Coding endpoint was already validated live during opencode calibration.
+    enabled: false
