@@ -128,6 +128,25 @@ class S3Bootstrap:
             logger.warning("failed to read bootstrap object %s: %s", name, exc)
             return None
 
+    def publish(self, name: str, text: str) -> str | None:
+        """Write a UTF-8 object under agents/<worker>/<name>; returns the key.
+
+        Best-effort observability channel (e.g. the generated agent.md): a
+        failure logs a warning and returns None — never fails the turn.
+        """
+        key = self._key(name)
+        try:
+            from io import BytesIO
+
+            self.client.put_object(
+                self.bucket, key, BytesIO(text.encode("utf-8")), len(text.encode("utf-8")),
+                content_type="text/markdown",
+            )
+            return key
+        except Exception as exc:
+            logger.warning("failed to publish object %s: %s", key, exc)
+            return None
+
     def load(self, *, retries: int = 6, retry_interval_seconds: float = 5) -> WorkerBootstrapConfig | None:
         openclaw_text = None
         for attempt in range(retries):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -85,6 +86,11 @@ class OpenCodeAdapter:
     async def _push_agent_md(self, agent_md: str) -> None:
         if not self.helper_url:
             raise RuntimeError("opencode adapter requires runtime.helper_url (sandbox AGENTS.md helper)")
+        logger.info(
+            "opencode action: push agent.md to sandbox helper=%s bytes=%d",
+            self.helper_url,
+            len(agent_md.encode("utf-8")),
+        )
         response = await self._http().post(
             f"{self.helper_url}/agents-md",
             content=agent_md.encode("utf-8"),
@@ -99,6 +105,7 @@ class OpenCodeAdapter:
             response = await self._http().get(f"{self.base_url}/session/{session_id}")
             if response.status_code == 200:
                 self._session_id = session_id
+                logger.info("opencode action: reuse session id=%s", session_id)
                 return session_id
             logger.warning("opencode session %s vanished; recreating", session_id)
         response = await self._http().post(f"{self.base_url}/session", json={})
@@ -113,6 +120,7 @@ class OpenCodeAdapter:
         if not session_id:
             raise RuntimeError(f"opencode session creation returned no id: {created!r}")
         self._session_id = session_id
+        logger.info("opencode action: created session id=%s", session_id)
         return session_id
 
     async def _messages(self, session_id: str) -> list[dict[str, Any]]:
@@ -195,10 +203,17 @@ class OpenCodeAdapter:
         # (HistoryStore.build_context, contract §4 two-marker form);
         # sandbox binding is carried by base_url itself.
         del history, sandbox_id
+        turn_started = time.monotonic()
         try:
             await self._push_agent_md(agent_md)
             resolved = await self._ensure_session(session_id)
             baseline = self._last_assistant_id(await self._messages(resolved))
+            logger.info(
+                "opencode action: post message session=%s turn=%s user_message=%r",
+                resolved,
+                turn_id,
+                user_message[:300],
+            )
             response = await self._http().post(
                 f"{self.base_url}/session/{resolved}/message",
                 json={"parts": [{"type": "text", "text": user_message}]},
@@ -207,6 +222,14 @@ class OpenCodeAdapter:
             )
             response.raise_for_status()
             completed = await self._poll_reply(resolved, baseline)
+            logger.info(
+                "opencode action: turn finished session=%s turn=%s outcome=%s elapsed=%.1fs reply=%r",
+                resolved,
+                turn_id,
+                completed.kind.value,
+                time.monotonic() - turn_started,
+                (completed.text or "")[:300],
+            )
             if completed.kind == RuntimeEventKind.TURN_COMPLETED:
                 return [
                     RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text=completed.text),

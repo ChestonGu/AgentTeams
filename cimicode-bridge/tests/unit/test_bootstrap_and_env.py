@@ -99,6 +99,35 @@ class TestBootstrapManagedRuntime:
         assert cfg.profile_md == ""
 
 
+class TestPublish:
+    def test_publish_writes_agent_md_object(self, monkeypatch):
+        class PutCapture(FakeMinio):
+            def __init__(self, objects):
+                super().__init__(objects)
+                self.puts = []
+
+            def put_object(self, bucket, key, data, length, content_type=None):
+                self.puts.append((bucket, key, data.read(), content_type))
+
+        store = PutCapture({})
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        boot = S3Bootstrap(client=store, bucket="bkt", prefix="")
+        key = boot.publish("agent-md/latest.md", "# agent md content")
+        assert key == "agents/w1/agent-md/latest.md"
+        assert store.puts == [
+            ("bkt", "agents/w1/agent-md/latest.md", b"# agent md content", "text/markdown")
+        ]
+
+    def test_publish_failure_returns_none(self, monkeypatch):
+        class BrokenMinio(FakeMinio):
+            def put_object(self, *args, **kwargs):
+                raise RuntimeError("s3 down")
+
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        boot = S3Bootstrap(client=BrokenMinio({}), bucket="bkt", prefix="")
+        assert boot.publish("agent-md/latest.md", "x") is None
+
+
 class TestEnvOverrides:
     def test_env_routes_to_opencode(self, monkeypatch):
         monkeypatch.setenv("BRIDGE_RUNTIME_ADAPTER", "opencode")
