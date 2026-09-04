@@ -46,6 +46,10 @@ class BridgeApp:
     state_store: Any | None = field(default=None, init=False)
 
     def start(self) -> None:
+        # Root-level config: without this the cimicode_bridge.* loggers
+        # inherit WARNING and every INFO line (sync established, message
+        # decisions) disappears while uvicorn's own access log stays visible.
+        logging.basicConfig(level=os.getenv("BRIDGE_LOG_LEVEL", "INFO"))
         config_path = Path(self.config_path)
         self.config = load_config(config_path)
         self._apply_env_overrides()
@@ -97,12 +101,23 @@ class BridgeApp:
                 state_store=self.state_store,
                 since_key=f"matrix:since:{os.getenv('AGENTTEAMS_WORKER_NAME', 'worker')}",
                 refresh_token=self._refresh_matrix_token,
+                on_authenticated=self._on_matrix_authenticated,
             )
         self.runtime_healthy = False
         self.ready = False
         if self.debug:
             print(f"Loaded bridge config from {config_path}")
         print(f"Bridge started with runtime adapter: {self.config.runtime.adapter}")
+
+    def _on_matrix_authenticated(self, user_id: str) -> None:
+        """Feed the whoami-resolved identity into the mention filter.
+
+        Called from the gateway right after authentication — before the first
+        sync dispatches timeline events — so @-mention matching works from the
+        very first event (AGENTTEAMS_WORKER_MATRIX_USER_ID env is not set on
+        controller-managed bridge pods).
+        """
+        self.mention_filter.user_id = user_id
 
     def _apply_env_overrides(self) -> None:
         """Deployment-level runtime routing overrides (pod env).
@@ -198,6 +213,15 @@ class BridgeApp:
     ) -> None:
         body = str(content.get("body", ""))
         decision = self.mention_filter.evaluate(body, sender, content=content)
+        logger.info(
+            "matrix message room=%s sender=%s event=%s accepted=%s reason=%s mentions=%s",
+            room_id,
+            sender,
+            event_id,
+            decision.accepted,
+            decision.reason,
+            decision.mentions,
+        )
         history = self.history_stores.setdefault(
             room_id,
             HistoryStore(capacity=self.config.history.max_entries),

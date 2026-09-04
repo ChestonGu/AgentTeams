@@ -80,10 +80,14 @@ class S3Bootstrap:
 
         endpoint = endpoint.removeprefix("http://").removeprefix("https://")
         secure = os.getenv("AGENTTEAMS_FS_SECURE", "").lower() in {"1", "true", "yes"}
+        # NOTE: AGENTTEAMS_STORAGE_PREFIX is the mc alias/bucket form used by
+        # the copaw runtime (e.g. "agentteams/agentteams-storage") — NOT an S3
+        # key prefix. Controller-written bootstrap objects live at
+        # agents/<name>/... directly inside AGENTTEAMS_FS_BUCKET.
         return cls(
             client=Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure),
             bucket=bucket,
-            prefix=os.getenv("AGENTTEAMS_STORAGE_PREFIX", ""),
+            prefix="",
         )
 
     def _key(self, name: str) -> str:

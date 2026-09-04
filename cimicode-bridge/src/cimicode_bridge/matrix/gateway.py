@@ -30,6 +30,7 @@ class MatrixGateway:
         state_store: StateStore | None = None,
         since_key: str = "matrix:since",
         refresh_token: Callable[[], Awaitable[str | None]] | None = None,
+        on_authenticated: Callable[[str], None] | None = None,
     ) -> None:
         self.client = AsyncClient(
             homeserver,
@@ -39,6 +40,7 @@ class MatrixGateway:
         self.client.access_token = access_token
         self.sync_timeout_seconds = sync_timeout_seconds
         self.on_message = on_message
+        self.on_authenticated = on_authenticated
         self.user_id: str | None = None
         self.connected = False
         self._stopped = asyncio.Event()
@@ -57,6 +59,12 @@ class MatrixGateway:
         self.client.user = response.user_id
         if response.device_id:
             self.client.device_id = response.device_id
+        # Notify the app BEFORE the first sync: initial-sync timeline events
+        # are dispatched to callbacks immediately, so consumers like the
+        # mention filter must know this identity by then (setting it from
+        # the app's startup poll loop races the first dispatched event).
+        if self.on_authenticated is not None:
+            self.on_authenticated(response.user_id)
         return True
 
     async def start(self) -> None:
@@ -76,7 +84,26 @@ class MatrixGateway:
                         full_state=self.since is None,
                         since=self.since,
                     )
+                    # Accept pending room invites: the controller invites the
+                    # worker identity to team rooms, but nothing joins on our
+                    # behalf — without this the sync loop never sees their
+                    # messages.
+                    for invite_room_id in list(getattr(getattr(response, "rooms", None), "invite", {}) or {}):
+                        try:
+                            join_resp = await self.client.join(invite_room_id)
+                            if getattr(join_resp, "room_id", None) == invite_room_id:
+                                logger.info("joined invited room %s", invite_room_id)
+                            else:
+                                logger.warning("join response for invited room %s: %s", invite_room_id, join_resp)
+                        except Exception as exc:
+                            logger.warning("failed to join invited room %s: %s", invite_room_id, exc)
                     next_batch = getattr(response, "next_batch", None)
+                    if next_batch and self.since is None:
+                        logger.info(
+                            "matrix sync established user=%s rooms=%s",
+                            self.user_id,
+                            len(getattr(getattr(response, "rooms", None), "join", {}) or {}),
+                        )
                     if next_batch:
                         self.since = next_batch
                         if self.state_store is not None:
