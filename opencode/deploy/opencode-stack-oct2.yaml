@@ -1,0 +1,166 @@
+# =============================================================================
+# Second opencode stack — dedicated to the PAGE-CREATED worker ocw-page-1.
+#
+# One opencode+sandbox pair per worker is required because the bridge writes
+# agent.md (AGENTS.md) into the shared hostPath workspace on every turn; a
+# second worker sharing /data/oct-ocw would clobber ocw-1's prompt file.
+#
+# Reproducing this for worker N (page-created or otherwise), rename:
+#   deployments opencode{N} / opencode{N}-sandbox
+#   services    opencode{N}-svc / opencode{N}-sandbox-svc
+#   hostPath    /data/oct-ocw{N}/workspace
+#   sandbox env AGENTTEAMS_WORKER_NAME / AGENTTEAMS_MATRIX_USER_ID
+#               (and AGENTTEAMS_TEAM = the Team CR the worker belongs to)
+#   secret      opencode-sandbox-fs-{N} — the controller-provisioned MinIO
+#               user for THIS worker, extracted from its bridge pod:
+#                 kubectl exec agentteams-worker-<name> -- printenv \
+#                   AGENTTEAMS_FS_ACCESS_KEY / AGENTTEAMS_FS_SECRET_KEY
+#
+# Wiring on the Worker CR side (kubectl patch, spec.env is a MAP):
+#   {"spec":{"env":{
+#     "BRIDGE_RUNTIME_ADAPTER":"opencode",
+#     "BRIDGE_RUNTIME_BASE_URL":"http://opencode{N}-svc.opencode-team-test.svc.cluster.local:4096",
+#     "BRIDGE_RUNTIME_HELPER_URL":"http://opencode{N}-sandbox-svc.opencode-team-test.svc.cluster.local:4097"}}}
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencode2-svc
+  namespace: opencode-team-test
+  labels:
+    app: opencode2-svc
+spec:
+  selector:
+    app: opencode2
+  ports:
+    - name: http
+      port: 4096
+      targetPort: 4096
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencode2-sandbox-svc
+  namespace: opencode-team-test
+  labels:
+    app: opencode2-sandbox-svc
+spec:
+  selector:
+    app: opencode2-sandbox
+  ports:
+    - name: helper
+      port: 4097
+      targetPort: 4097
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode2
+  namespace: opencode-team-test
+  labels:
+    app: opencode2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode2
+  template:
+    metadata:
+      labels:
+        app: opencode2
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+      containers:
+        - name: opencode
+          image: agentteams/opencode-runtime:v0.1.1-oct
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OPENCODE_PORT
+              value: "4096"
+            - name: AGENTTEAMS_FS_ROOT
+              value: /workspace
+            - name: SANDBOX_EXEC_URL
+              value: http://opencode2-sandbox-svc.opencode-team-test.svc.cluster.local:4097
+          ports:
+            - name: http
+              containerPort: 4096
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          readinessProbe:
+            httpGet:
+              path: /session
+              port: 4096
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /data/oct-ocw2/workspace
+            type: DirectoryOrCreate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode2-sandbox
+  namespace: opencode-team-test
+  labels:
+    app: opencode2-sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode2-sandbox
+  template:
+    metadata:
+      labels:
+        app: opencode2-sandbox
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+      containers:
+        - name: sandbox
+          image: agentteams/opencode-sandbox:v0.1.0-oct
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AGENTTEAMS_FS_ROOT
+              value: /workspace
+            - name: AGENTTEAMS_WORKER_NAME
+              value: ocw-page-1
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: http://agentteams-oct-minio.opencode-team-test.svc.cluster.local:9000
+            - name: AGENTTEAMS_FS_BUCKET
+              value: agentteams-storage
+            # must equal the Team CR the worker belongs to when it runs tasks
+            - name: AGENTTEAMS_TEAM
+              value: oct-team
+            - name: AGENTTEAMS_MATRIX_USER_ID
+              value: "@ocw-page-1:agentteams-oct-synapse.opencode-team-test.svc.cluster.local"
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opencode-sandbox-fs-2
+                  key: accessKey
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opencode-sandbox-fs-2
+                  key: secretKey
+          ports:
+            - name: helper
+              containerPort: 4097
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 4097
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /data/oct-ocw2/workspace
+            type: DirectoryOrCreate
