@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,6 +17,16 @@ MessageHandler = Callable[[str, str, str, dict[str, Any]], Awaitable[None]]
 
 MAX_TOKEN_REFRESH_RETRIES = 3
 TOKEN_REFRESH_BACKOFF_S = 5
+
+# @localpart with optional :domain — Matrix user identifiers. The bare-local
+# form is what LLM replies naturally produce ("TASK_COMPLETED ... @oct-lead"),
+# but copaw's group-room requireMention check only accepts the full MXID in
+# plain text; structured m.mentions.user_ids is its first-class signal.
+# Localpart stays permissive (room member index validates every hit, so prose
+# like "path@host" never fabricates a mention); the domain is strictly ASCII
+# per the server-name grammar so "任务:说明" is not parsed as a user id.
+MENTION_TOKEN_RE = re.compile(r"@([^\s@:，。,；;()（）【】\[\]\"']+)(?::([A-Za-z0-9.\-]+))?")
+ROOM_MEMBERS_TTL_S = 600.0
 
 
 class MatrixGateway:
@@ -49,6 +61,10 @@ class MatrixGateway:
         self.since_key = since_key
         self.refresh_token = refresh_token
         self._typing_tasks: dict[str, asyncio.Task[None]] = {}
+        # room_id -> (expires_at_monotonic, alias -> full MXID). Feeds the
+        # outbound m.mentions mapping so "@oct-lead" in a reply reaches the
+        # leader even though its plain-text fallback needs the full MXID.
+        self._room_members: dict[str, tuple[float, dict[str, str]]] = {}
 
     async def authenticate(self) -> bool:
         response = await self.client.whoami()
@@ -157,6 +173,11 @@ class MatrixGateway:
         message = render_matrix_message(body)
         if content:
             message.update(content)
+        if "m.mentions" not in message:
+            mention_ids = await self._resolve_mentions(room_id, body)
+            if mention_ids:
+                message["m.mentions"] = {"user_ids": mention_ids}
+                logger.info("reply mentions room=%s users=%s", room_id, mention_ids)
         response = await self.client.room_send(
             room_id,
             "m.room.message",
@@ -165,6 +186,62 @@ class MatrixGateway:
         )
         event_id = getattr(response, "event_id", None)
         return str(event_id) if event_id else None
+
+    async def _room_member_index(self, room_id: str) -> dict[str, str] | None:
+        """alias (lowercased localpart/display name) -> full MXID, TTL cached.
+
+        Returns None when the joined-members lookup fails so callers can
+        degrade (full MXIDs in the body still pass through unverified).
+        """
+        cached = self._room_members.get(room_id)
+        now = time.monotonic()
+        if cached and cached[0] > now:
+            return cached[1]
+        try:
+            response = await self.client.joined_members(room_id)
+            members = getattr(response, "members", None)
+            if members is None:
+                return cached[1] if cached else None
+            index: dict[str, str] = {}
+            for member in members:
+                mxid = str(getattr(member, "user_id", "") or "")
+                if not mxid.startswith("@") or ":" not in mxid:
+                    continue
+                index[mxid[1:].split(":", 1)[0].lower()] = mxid
+                display = str(getattr(member, "display_name", "") or "").strip().lower()
+                if display:
+                    index.setdefault(display, mxid)
+            self._room_members[room_id] = (now + ROOM_MEMBERS_TTL_S, index)
+            return index
+        except Exception as exc:
+            logger.debug("joined_members(%s) failed: %s", room_id, exc)
+            return cached[1] if cached else None
+
+    async def _resolve_mentions(self, room_id: str, body: str) -> list[str]:
+        """Full MXIDs for @tokens in the body (deduped, self excluded).
+
+        Bare localparts resolve through the room member index; a token that
+        already carries a domain is accepted verbatim only when the member
+        index is unavailable or confirms it, so prose like "path@host" never
+        fabricates a mention.
+        """
+        index = await self._room_member_index(room_id)
+        resolved: list[str] = []
+        for match in MENTION_TOKEN_RE.finditer(body):
+            local, domain = match.group(1), match.group(2)
+            if domain:
+                candidate = f"@{local}:{domain}"
+                if index is not None and candidate not in index.values():
+                    continue
+            else:
+                if index is None:
+                    continue
+                candidate = index.get(local.lower(), "")
+                if not candidate:
+                    continue
+            if candidate != self.user_id and candidate not in resolved:
+                resolved.append(candidate)
+        return resolved
 
     # ------------------------------------------------------------------
     # Typing indicator（对齐 CoPaw TYPING_* 参数：服务端 30s 超时，25s 续期）
