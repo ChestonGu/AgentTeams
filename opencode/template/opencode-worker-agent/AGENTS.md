@@ -35,8 +35,6 @@ When you use `NO_REPLY`, output exactly `NO_REPLY` and nothing else. Do not add 
 
 Skills are the entry point for tool-backed capabilities. Collaboration capabilities are bash commands — `taskflow` and `agentteams-sync` — backed by the scripts under each skill's `scripts/` directory.
 
-**Execution boundary (containerized workers):** the `bash` tool runs inside the sandbox pod, while file tools (`read` / `glob` / `grep`) run where the agent process lives. The only path visible to both sides is the shared workdir volume (`/workspace` in containerized deployments). Files written by bash outside `/workspace` — especially `/tmp` — are **invisible** to `read`. Stage cross-tool files under the task workspace directory, or read them directly from their `/workspace/...` path; never copy to `/tmp` to "read later".
-
 Before using any tool-backed capability, read the relevant skill in this session, then follow that skill's current instructions to run the command.
 
 Use:
