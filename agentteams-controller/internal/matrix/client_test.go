@@ -764,6 +764,14 @@ func TestJoinRoom_Idempotent(t *testing.T) {
 				"errcode": "M_FORBIDDEN",
 				"error":   "@admin:d is already in the room",
 			})
+		case "/_matrix/client/v3/account/whoami":
+			json.NewEncoder(w).Encode(map[string]string{"user_id": "@alice:d"})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{"state_key": "@alice:d", "content": map[string]string{"membership": "join"}},
+				},
+			})
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -775,7 +783,44 @@ func TestJoinRoom_Idempotent(t *testing.T) {
 		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
 	}, server.Client())
 	if err := c.JoinRoom(context.Background(), "!room:d", "user-token"); err != nil {
-		t.Errorf("expected nil for already-in-room, got %v", err)
+		t.Errorf("expected nil for already-in-room (verified joined), got %v", err)
+	}
+}
+
+func TestJoinRoom_AlreadyClaimNotJoinedIsError(t *testing.T) {
+	// The homeserver claims "already in the room" but the member list says
+	// otherwise — the historical blanket-swallow read this as joined and the
+	// drift went unnoticed forever. It must surface as an error now.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/join":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "@alice:d is already in the room",
+			})
+		case "/_matrix/client/v3/account/whoami":
+			json.NewEncoder(w).Encode(map[string]string{"user_id": "@alice:d"})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{"state_key": "@bob:d", "content": map[string]string{"membership": "join"}},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.JoinRoom(context.Background(), "!room:d", "user-token"); err == nil {
+		t.Error("expected error when membership contradicts the already-in-room claim, got nil")
 	}
 }
 

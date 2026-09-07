@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -756,6 +757,14 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
+	}
+	for k, v := range w.Spec.Env {
+		if strings.HasPrefix(k, "BRIDGE_RUNTIME_") {
+			if resp.RuntimeEnv == nil {
+				resp.RuntimeEnv = map[string]string{}
+			}
+			resp.RuntimeEnv[k] = v
+		}
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})

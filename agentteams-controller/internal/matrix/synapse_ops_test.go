@@ -1259,3 +1259,123 @@ func TestSynapseOps_UnregisterAppService_ErrorPointsToHelm(t *testing.T) {
 		t.Errorf("error = %q, want Helm/declarative guidance", err)
 	}
 }
+
+// TestSynapseOps_CreateRoom_StripsCreatorFromInvite pins the recovery for
+// the first-provisioning failure seen on real Synapse: createRoom processes
+// the invite list in order, and inviting the creating user is rejected with
+// 403 M_FORBIDDEN "<creator> is already in the room" AFTER the room and its
+// alias already exist — so every other invite in the list is silently
+// dropped and the whole provisioning pass fails into a backoff retry. The
+// creator is joined by virtue of creating the room; the ops layer must strip
+// it from the invite list before sending.
+func TestSynapseOps_CreateRoom_StripsCreatorFromInvite(t *testing.T) {
+	var captured map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/createRoom":
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode createRoom body: %v", err)
+			}
+			captured = body
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"room_id": "!team:d"})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if _, err := ops.CreateRoom(context.Background(), RoomSpec{
+		Name:           "Team Room",
+		AliasLocalpart: "team-alpha",
+		Invite:         []string{"@admin:d", "@lead:d", "@dev:d"},
+		PowerLevels:    map[string]int{"@admin:d": 100, "@lead:d": 100},
+	}); err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+
+	invite, ok := captured["invite"].([]interface{})
+	if !ok {
+		t.Fatalf("missing invite in %v", captured)
+	}
+	var got []string
+	for _, v := range invite {
+		got = append(got, v.(string))
+	}
+	want := []interface{}{"@lead:d", "@dev:d"}
+	if len(got) != len(want) {
+		t.Fatalf("invite = %v, want %v (creator @admin:d stripped)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("invite = %v, want %v (creator @admin:d stripped)", got, want)
+		}
+	}
+}
+
+// TestSynapseOps_CreateRoom_StripsActorCreatorFromInvite is the actor-creator
+// twin: a team admin both creates the room and appears in the desired member
+// set — the strip must key off the actual creator, not just the admin.
+func TestSynapseOps_CreateRoom_StripsActorCreatorFromInvite(t *testing.T) {
+	var captured map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/createRoom":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer team-admin-token" {
+				t.Errorf("Authorization = %q, want Bearer team-admin-token", auth)
+			}
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode createRoom body: %v", err)
+			}
+			captured = body
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"room_id": "!team:d"})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ops := NewSynapseMatrixOps(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if _, err := ops.CreateRoom(context.Background(), RoomSpec{
+		Name:           "Team Room",
+		AliasLocalpart: "team-alpha",
+		ActorUserID:    "@team-admin:d",
+		ActorToken:     "team-admin-token",
+		Invite:         []string{"@team-admin:d", "@lead:d"},
+		PowerLevels:    map[string]int{"@team-admin:d": 100, "@lead:d": 100},
+	}); err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+
+	invite, ok := captured["invite"].([]interface{})
+	if !ok {
+		t.Fatalf("missing invite in %v", captured)
+	}
+	var got []string
+	for _, v := range invite {
+		got = append(got, v.(string))
+	}
+	want := []interface{}{"@lead:d"}
+	if len(got) != len(want) {
+		t.Fatalf("invite = %v, want %v (actor creator stripped)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("invite = %v, want %v (actor creator stripped)", got, want)
+		}
+	}
+}

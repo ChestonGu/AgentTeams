@@ -945,3 +945,43 @@ func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, 
 		t.Fatalf("limits.memory = %q, want %q (resources=%+v)", got.Limits.Memory, memLimit, got)
 	}
 }
+
+// TestWorkerToResponse_RuntimeEnvFilter pins the bridge self-heal contract:
+// GET /api/v1/workers/{self} exposes only the BRIDGE_RUNTIME_-prefixed
+// subset of spec.env — enough for a late-wired bridge pod (created before
+// the operator wrote spec.env) to pick up its runtime adapter wiring
+// without a pod restart — never the full spec.env, which may carry
+// deployment secrets.
+func TestWorkerToResponse_RuntimeEnvFilter(t *testing.T) {
+	w := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "w1"},
+		Spec: v1beta1.WorkerSpec{Env: map[string]string{
+			"AGENTTEAMS_MATRIX_URL":  "http://synapse:8008",
+			"BRIDGE_RUNTIME_ADAPTER": "opencode",
+		}},
+	}
+	resp := workerToResponse(w)
+	if len(resp.RuntimeEnv) != 1 {
+		t.Fatalf("RuntimeEnv = %v, want exactly the one BRIDGE_RUNTIME_ key", resp.RuntimeEnv)
+	}
+	if resp.RuntimeEnv["BRIDGE_RUNTIME_ADAPTER"] != "opencode" {
+		t.Fatalf("RuntimeEnv[BRIDGE_RUNTIME_ADAPTER] = %q, want opencode", resp.RuntimeEnv["BRIDGE_RUNTIME_ADAPTER"])
+	}
+	if _, ok := resp.RuntimeEnv["AGENTTEAMS_MATRIX_URL"]; ok {
+		t.Fatalf("RuntimeEnv leaked non-prefixed key AGENTTEAMS_MATRIX_URL: %v", resp.RuntimeEnv)
+	}
+}
+
+// TestWorkerToResponse_RuntimeEnvNilWhenAbsent: no BRIDGE_RUNTIME_ keys
+// means RuntimeEnv stays nil (omitted in JSON), so older bridges see no
+// behavioral change.
+func TestWorkerToResponse_RuntimeEnvNilWhenAbsent(t *testing.T) {
+	w := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "w1"},
+		Spec: v1beta1.WorkerSpec{Env: map[string]string{"AGENTTEAMS_MATRIX_URL": "x"}},
+	}
+	resp := workerToResponse(w)
+	if resp.RuntimeEnv != nil {
+		t.Fatalf("RuntimeEnv = %v, want nil when spec.env has no BRIDGE_RUNTIME_ keys", resp.RuntimeEnv)
+	}
+}

@@ -56,6 +56,10 @@ type WorkerProvisioner interface {
 	// JoinRoomAs accepts a room invite using the invited user's token.
 	// Idempotent: returns nil when the user has already joined.
 	JoinRoomAs(ctx context.Context, roomID, userToken string) error
+	// MissingTeamRoomMembers returns the team-room automation members (leader
+	// + workers, by Matrix ID) not currently joined. Read-only drift probe
+	// for the Team reconcile fast path.
+	MissingTeamRoomMembers(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error)
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error

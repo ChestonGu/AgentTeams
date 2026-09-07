@@ -48,6 +48,7 @@ type MockProvisioner struct {
 	LeaveManagerRoomFn               func(ctx context.Context, roomID string) error
 	DeactivateHumanUserFn          func(ctx context.Context, userID string) error
 	ProvisionTeamRoomsFn           func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
+	MissingTeamRoomMembersFn       func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error)
 	ArchiveTeamRoomsFn             func(ctx context.Context, req service.TeamRoomArchiveRequest) error
 	DeleteTeamRoomAliasesFn        func(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAliasFn        func(ctx context.Context, workerName string) error
@@ -667,6 +668,14 @@ func (m *MockProvisioner) ProvisionTeamRooms(ctx context.Context, req service.Te
 		TeamRoomID:     "!team-" + req.TeamName + ":localhost",
 		LeaderDMRoomID: "!leader-dm-" + req.TeamName + ":localhost",
 	}, nil
+}
+
+func (m *MockProvisioner) MissingTeamRoomMembers(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+	fn := m.MissingTeamRoomMembersFn
+	if fn != nil {
+		return fn(ctx, roomID, leaderName, workerNames)
+	}
+	return nil, nil
 }
 
 func (m *MockProvisioner) ArchiveTeamRooms(ctx context.Context, req service.TeamRoomArchiveRequest) error {

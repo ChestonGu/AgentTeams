@@ -892,6 +892,12 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		teamInvites = withoutString(teamDesired, teamAdminID)
 	} else {
 		teamRoomPowerLevels[adminMatrixID] = 100
+		// Same Synapse quirk as the Leader DM below: the global admin creates
+		// the room and is joined by virtue of creating it — inviting the
+		// creator makes Synapse abort createRoom AFTER the room exists, so
+		// every other invite in the list is dropped (and the whole first
+		// provisioning pass fails into a 30s backoff retry).
+		teamInvites = withoutString(teamDesired, adminMatrixID)
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrixOps.UserIDFor)
@@ -1039,6 +1045,48 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 
 	result.LeaderDMRoomID = leaderDMRoom.RoomID
 	return result, nil
+}
+
+// MissingTeamRoomMembers returns the automation members of a team room (the
+// leader and every worker member, by Matrix ID) that are not currently
+// joined. Read-only — a single admin ListRoomMembers call — so the Team
+// reconcile fast path can afford it on every evaluation: container readiness
+// alone cannot see invite/join drift (a lost invite leaves the room silently
+// understaffed forever). An empty result means the room is fully staffed.
+func (p *Provisioner) MissingTeamRoomMembers(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+	if roomID == "" {
+		return nil, nil
+	}
+	desired := make([]string, 0, len(workerNames)+1)
+	if leaderName != "" {
+		desired = append(desired, p.matrixOps.UserIDFor(leaderName))
+	}
+	for _, wn := range workerNames {
+		if wn == "" || wn == leaderName {
+			continue
+		}
+		desired = append(desired, p.matrixOps.UserIDFor(wn))
+	}
+	if len(desired) == 0 {
+		return nil, nil
+	}
+	members, err := p.matrixOps.ListRoomMembers(ctx, roomID, matrix.MemberSpec{})
+	if err != nil {
+		return nil, fmt.Errorf("list team room members %s: %w", roomID, err)
+	}
+	joined := make(map[string]bool, len(members))
+	for _, m := range members {
+		if m.Membership == "join" {
+			joined[m.UserID] = true
+		}
+	}
+	var missing []string
+	for _, id := range desired {
+		if !joined[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
 }
 
 func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {

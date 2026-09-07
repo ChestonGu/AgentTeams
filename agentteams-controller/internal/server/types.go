@@ -80,6 +80,13 @@ type WorkerResponse struct {
 	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
 	Team             string                     `json:"team,omitempty"`
 	Role             string                     `json:"role,omitempty"`
+	// RuntimeEnv exposes the runtime-wiring subset of spec.env (keys with the
+	// BRIDGE_RUNTIME_ prefix, e.g. adapter/base_url/helper_url written by the
+	// opencode stack operator). A bridge pod created before that wiring
+	// landed polls GET /api/v1/workers/{self} and picks these up without a
+	// pod restart. Only the prefix-filtered subset is exposed — never the
+	// full spec.env, which may carry deployment secrets.
+	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
 }
 
 type ExposedPortInfo struct {
