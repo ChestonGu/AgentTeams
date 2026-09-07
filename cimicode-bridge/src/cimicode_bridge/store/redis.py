@@ -1,9 +1,12 @@
+"""Redis StateStore：生产推荐后端（since 跨重启续传）。"""
 from __future__ import annotations
 
 import redis.asyncio as redis
 
 
 class RedisStore:
+    """redis.asyncio 客户端封装（TTL 由 ex 参数原生支持）。"""
+
     def __init__(self, url: str) -> None:
         self.client = redis.from_url(url, decode_responses=True)
 

@@ -1,3 +1,4 @@
+"""gateway HTTP + SSE 客户端引擎（手写 SSE 行解析，不依赖 httpx-sse）。"""
 from __future__ import annotations
 
 import json
@@ -10,6 +11,8 @@ from cimicode_bridge.runtime.adapters import CimicodeDialect
 
 
 class HttpSseRuntime:
+    """gateway 通用客户端：JSON 请求 + SSE 流消费（所有 adapter 共用）。"""
+
     def __init__(
         self,
         base_url: str,
@@ -18,10 +21,11 @@ class HttpSseRuntime:
         auth: Any | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
-        self.auth = auth
+        self.timeout_seconds = timeout_seconds  # 流读超时 = turn 超时
+        self.auth = auth                        # AuthProvider（当前 None）
 
     async def request_json(self, method: str, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """普通 JSON 请求（非流式接口用）。"""
         headers = {}
         if self.auth is not None:
             headers = await self.auth.attach(headers)
@@ -85,6 +89,10 @@ class HttpSseRuntime:
         history: list[dict[str, Any]],
         user_message: str,
     ) -> list[RuntimeEvent]:
+        """提交 turn：POST chat → SSE → 方言翻译为 RuntimeEvent 列表。
+
+        流结束仍未收到 turn_completed 时补一条 turn_interrupted（断流兜底）。
+        """
         path = "/v1/gateway/session/chat"
         events: list[RuntimeEvent] = []
         async for line in self.stream_sse(
@@ -105,7 +113,7 @@ class HttpSseRuntime:
         return events
 
     async def submit_turn(self, *, session_id: str, turn_id: str, payload: dict[str, Any]) -> list[RuntimeEvent]:
-        """Backward-compatible wrapper for the gateway chat call."""
+        """chat 的向后兼容包装（旧调用方使用）。"""
         return await self.chat(
             session_id=session_id,
             sandbox_id=str(payload.get("sandboxId", payload.get("sandbox_id", ""))),
