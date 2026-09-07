@@ -66,6 +66,35 @@ class TestBootstrapManagedRuntime:
         boot = _bootstrap({}, monkeypatch)
         assert boot.load(retries=1) is None
 
+    def test_runtime_yaml_retry_wins_startup_race(self, monkeypatch):
+        """The controller pushes runtime/runtime.yaml after the bridge pod
+        started: load must retry until the object appears instead of giving
+        up after a single read (which wedged the worker with an incomplete
+        bootstrap and made every later turn fail)."""
+        reads = {"runtime_yaml": 0}
+
+        class LateMinio(FakeMinio):
+            def get_object(self, bucket: str, key: str):
+                if key.endswith("runtime.yaml"):
+                    reads["runtime_yaml"] += 1
+                    if reads["runtime_yaml"] < 3:
+                        raise KeyError(key)
+                return super().get_object(bucket, key)
+
+        sleeps: list[float] = []
+        monkeypatch.setattr("cimicode_bridge.bootstrap.time.sleep", sleeps.append)
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        boot = S3Bootstrap(
+            client=LateMinio({"agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n"}),
+            bucket="bkt",
+            prefix="",
+        )
+        cfg = boot.load(retries=5, retry_interval_seconds=0)
+        assert cfg is not None
+        assert cfg.runtime_yaml.startswith("member:")
+        assert reads["runtime_yaml"] == 3   # two misses, then the object
+        assert len(sleeps) == 2             # slept between attempts, not after success
+
     def test_inline_config_soul_extracted(self, monkeypatch):
         # spec.soul / spec.identity land in desired.inlineConfig for managed
         # runtimes — the bootstrap must surface them as soul_md / profile_md

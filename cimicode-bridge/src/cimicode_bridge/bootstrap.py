@@ -149,9 +149,14 @@ class S3Bootstrap:
 
     def load(self, *, retries: int = 6, retry_interval_seconds: float = 5) -> WorkerBootstrapConfig | None:
         openclaw_text = None
+        runtime_yaml = ""
+        # Both carriers retry: managed (opencode) workers start before the
+        # controller finishes pushing runtime/runtime.yaml, and a single
+        # un-retried read used to wedged them with an incomplete bootstrap.
         for attempt in range(retries):
-            openclaw_text = self.read_text("openclaw.json")
-            if openclaw_text:
+            openclaw_text = openclaw_text or self.read_text("openclaw.json")
+            runtime_yaml = runtime_yaml or self.read_text("runtime/runtime.yaml")
+            if openclaw_text or runtime_yaml:
                 break
             if attempt + 1 < retries:
                 time.sleep(retry_interval_seconds)
@@ -160,7 +165,6 @@ class S3Bootstrap:
         # token arrives via AGENTTEAMS_WORKER_MATRIX_TOKEN, opencode endpoints
         # via BRIDGE_RUNTIME_* env). openclaw.json remains the carrier for the
         # legacy cimicode path (bridge.runtime session/sandbox binding).
-        runtime_yaml = self.read_text("runtime/runtime.yaml") or ""
         if not openclaw_text:
             if not runtime_yaml:
                 return None

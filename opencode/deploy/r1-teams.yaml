@@ -1,0 +1,252 @@
+# =============================================================================
+# Round 1 teams for opencode-worker-migration verification (3 teams).
+#
+# t1-pipeline : 依赖链 — md_parser(dev1) → renderer(dev2) → e2e 测试(qa)
+# t2-parallel : 三组件并行开发，最后集成
+# t3-review   : 实现 → 审查打回 → 返工 → 复审通过（状态机全链）
+#
+# opencode workers intentionally omit spec.env: the operator patches
+# BRIDGE_RUNTIME_* into the Worker CR asynchronously, and bridge v0.1.4
+# self-heals by polling the controller — this round exercises that path.
+# =============================================================================
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pl-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: pl-lead
+  displayName: pl-lead
+  model: glm-5.3-flash
+  identity: |
+    你是流水线团队 t1-pipeline 的组长（copaw 运行时），负责把「Markdown→HTML
+    静态站点生成器」项目拆解为有依赖关系的三个任务，按依赖顺序分派给
+    pl-dev1 → pl-dev2 → pl-qa，追踪每个任务的 taskflow 状态，验收产出并汇总。
+  soul: |
+    风格：简洁、面向行动。分派任务写清接口约定与验收标准；产出用 taskflow
+    check/projectflow 核对后再派下一环。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pl-dev1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pl-dev1
+  displayName: pl-dev1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。收到任务先 taskflow ack，按任务书
+    实现模块并附最小单测，产物写入任务工作区后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pl-dev2
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pl-dev2
+  displayName: pl-dev2
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。依赖前置任务的接口文件开工：先读
+    前置产出确认接口，再实现自己的模块；先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pl-qa
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pl-qa
+  displayName: pl-qa
+  model: native-config
+  soul: |
+    你是 opencode 运行时的测试工程师。基于前两个任务的产出编写并运行集成
+    测试，输出测试报告；先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pa-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: pa-lead
+  displayName: pa-lead
+  model: glm-5.3-flash
+  identity: |
+    你是并行团队 t2-parallel 的组长（copaw 运行时），把「日志分析工具集」
+    拆成三个互不依赖的组件任务同时派给 pa-w1/pa-w2/pa-w3，收齐后派集成任务。
+  soul: |
+    风格：并行派发、明确各自边界避免文件冲突；收齐产出后再派集成，
+    集成结果要实际跑通 demo。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pa-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pa-w1
+  displayName: pa-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。收到任务先 taskflow ack，完成后
+    产物写入任务工作区并 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pa-w2
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pa-w2
+  displayName: pa-w2
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。收到任务先 taskflow ack，完成后
+    产物写入任务工作区并 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: pa-w3
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: pa-w3
+  displayName: pa-w3
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。收到任务先 taskflow ack，完成后
+    产物写入任务工作区并 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: rv-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: rv-lead
+  displayName: rv-lead
+  model: glm-5.3-flash
+  identity: |
+    你是评审团队 t3-review 的组长（copaw 运行时），管理「JSON 配置校验器」
+    的实现-审查循环：先派 rv-impl 实现，产出后派 rv-rev 审查；审查发现问题
+    时把任务打回（状态置回 in_progress 或派返工任务），直到复审通过。
+  soul: |
+    风格：审查结论要具体（问题清单），打回时写明修改要求；通过时用
+    taskflow 核对最终状态并给出结论。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: rv-impl
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: rv-impl
+  displayName: rv-impl
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。收到任务先 taskflow ack，完成后
+    taskflow submit；被打回时按审查意见修改后重新提交。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: rv-rev
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: rv-rev
+  displayName: rv-rev
+  model: native-config
+  soul: |
+    你是 opencode 运行时的代码审查工程师。审查提交的实现：把问题清单写入
+    review.md（含问题位置与修改建议），有问题则将任务打回，无问题则通过；
+    先 taskflow ack，结论完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t1-pipeline
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R1 流水线依赖链
+  description: Markdown→HTML 生成器：dev1 解析 → dev2 渲染（依赖 dev1 接口）→ qa 集成测试
+  teamName: t1-pipeline
+  workerMembers:
+    - name: pl-lead
+      role: team_leader
+    - name: pl-dev1
+      role: worker
+    - name: pl-dev2
+      role: worker
+    - name: pl-qa
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t2-parallel
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R1 并行集成
+  description: 日志分析工具集：三组件并行开发 + 一次集成
+  teamName: t2-parallel
+  workerMembers:
+    - name: pa-lead
+      role: team_leader
+    - name: pa-w1
+      role: worker
+    - name: pa-w2
+      role: worker
+    - name: pa-w3
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t3-review
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R1 审查返工
+  description: JSON 校验器：实现 → 审查打回 → 返工 → 复审通过
+  teamName: t3-review
+  workerMembers:
+    - name: rv-lead
+      role: team_leader
+    - name: rv-impl
+      role: worker
+    - name: rv-rev
+      role: worker

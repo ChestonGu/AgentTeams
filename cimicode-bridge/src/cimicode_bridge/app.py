@@ -387,6 +387,20 @@ class BridgeApp:
                 # failed render refuses the turn instead of sending a
                 # half-configured system prompt to the sandbox).
                 if self.worker_files is None or not self.worker_files.runtime_yaml:
+                    # Last line of defense for the startup race: the worker
+                    # pod routinely starts before the controller pushes
+                    # runtime/runtime.yaml, and an unanswered delegation
+                    # wedges the task in assigned state. Refetch before
+                    # refusing — the object is usually there by now.
+                    logger.warning(
+                        "runtime/runtime.yaml missing from bootstrap; refetching before refusing turn"
+                    )
+                    if self.s3_bootstrap is not None:
+                        refetched = self.s3_bootstrap.load(retries=6, retry_interval_seconds=5)
+                        if refetched is not None and refetched.runtime_yaml:
+                            self.worker_files = refetched
+                            logger.info("runtime.yaml recovered at turn time after refetch")
+                if self.worker_files is None or not self.worker_files.runtime_yaml:
                     logger.error(
                         "opencode adapter requires runtime/runtime.yaml in the "
                         "worker bootstrap (agents/<name>/runtime/runtime.yaml); refusing turn"

@@ -98,3 +98,50 @@ def test_matrix_event_calls_gateway_and_sends_reply():
     assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
     assert bridge.matrix_gateway.typing_started == "!room:matrix.local"
     assert bridge.matrix_gateway.typing_stopped == "!room:matrix.local"
+
+
+def test_opencode_turn_refetches_missing_runtime_yaml(monkeypatch):
+    """Startup race: the bridge started before the controller pushed
+    runtime/runtime.yaml. The turn must refetch the bootstrap before
+    refusing — an unanswered delegation wedges the task in assigned
+    state with no retry path."""
+    bridge = BridgeApp()
+    bridge.start()
+    bridge.config.runtime.adapter = "opencode"
+    bridge.worker_files = None
+    recovered = WorkerBootstrapConfig(
+        openclaw={}, runtime_yaml="member:\n  runtime: opencode\n"
+    )
+    loads = {"n": 0}
+
+    class _StubBootstrap:
+        bucket = "bkt"
+
+        def load(self, *, retries=6, retry_interval_seconds=5):
+            loads["n"] += 1
+            return recovered
+
+        def publish(self, name, text):
+            return "agents/w1/" + name
+
+    bridge.s3_bootstrap = _StubBootstrap()
+    bridge.runtime_client = FakeRuntime()
+    bridge.matrix_gateway = FakeMatrix()
+    monkeypatch.setattr(
+        "cimicode_bridge.app.build_agent_md_via_generator",
+        lambda **kwargs: "# rendered agent md",
+    )
+
+    asyncio.run(
+        bridge.handle_matrix_message(
+            "!room:matrix.local",
+            "@leader:matrix.local",
+            "$evt-race",
+            {"body": "@leader you are assigned task multimd-01"},
+        )
+    )
+
+    assert loads["n"] == 1                    # refetch happened at turn time
+    assert bridge.worker_files is recovered   # bootstrap cache replaced
+    assert bridge.runtime_client.request["agent_md"] == "# rendered agent md"
+    assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
