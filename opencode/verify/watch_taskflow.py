@@ -157,7 +157,7 @@ def taskflow_events(passw: str, sandbox_pod: str, since: datetime, task_filter: 
 
 def meta_events(passw: str, minio_pod: str, since: datetime, task_filter: str, team: str) -> list[tuple[datetime, str, str]]:
     out: list[tuple[datetime, str, str]] = []
-    prefix = f"local/agentteams-storage/teams/{team}/shared/tasks/"
+    prefix = f"root/agentteams-storage/teams/{team}/shared/tasks/"
     listing = k(passw, "exec", "-n", NS, minio_pod, "--", "/usr/bin/mc", "ls", "--recursive", prefix)
     for line in listing.splitlines():
         m = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC\]\s+(\S+)\s+\S+\s+(\S+)$", line.strip())

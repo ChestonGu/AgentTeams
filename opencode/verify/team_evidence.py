@@ -37,8 +37,32 @@ NS = "opencode-team-test"
 
 
 def mc(passw: str, *args: str, timeout: int = 60) -> str:
-    """Run mc inside the minio pod (alias `local` is pre-configured there)."""
+    """Run mc inside the minio pod (alias `root` — see ensure_root_alias)."""
     return wt.k(passw, "exec", "-n", NS, MINIO_POD, "--", "/usr/bin/mc", *args, timeout=timeout)
+
+
+MINIO_ALIAS_READY = False
+
+
+def ensure_root_alias(passw: str) -> None:
+    """The pre-configured `local` alias inside the minio pod denies recursive
+    listings of teams/; re-set it as `root` using the chart's root credentials
+    from the secret (credentials are never printed)."""
+    global MINIO_ALIAS_READY
+    if MINIO_ALIAS_READY:
+        return
+    secrets = wt.k(passw, "get", "secret", "-n", NS, "--no-headers", "-o", "custom-columns=NAME:.metadata.name")
+    secret = next((ln.strip() for ln in secrets.splitlines() if "minio" in ln), "")
+    if not secret:
+        raise RuntimeError("no minio secret found")
+    user = wt.k(passw, "get", "secret", "-n", NS, secret,
+                "-o", "jsonpath={.data.MINIO_ROOT_USER}").strip()
+    pw = wt.k(passw, "get", "secret", "-n", NS, secret,
+              "-o", "jsonpath={.data.MINIO_ROOT_PASSWORD}").strip()
+    import base64
+    mc(passw, "alias", "set", "root", "http://127.0.0.1:9000",
+       base64.b64decode(user).decode(), base64.b64decode(pw).decode())
+    MINIO_ALIAS_READY = True
 
 
 MINIO_POD = ""  # resolved in main()
@@ -106,12 +130,20 @@ def collect_timeline(passw: str, worker: str, team: str, leader: str,
 
 
 def collect_agent_md(passw: str, worker: str, out_dir: str) -> dict:
-    """Pull agents/<worker>/AGENTS.md from MinIO; record bytes + sha256."""
-    key = f"local/agentteams-storage/agents/{worker}/AGENTS.md"
-    try:
-        raw = mc(passw, "cat", key)
-    except RuntimeError as exc:
-        return {"file": None, "error": str(exc)[:160]}
+    """Pull the generated agent.md from MinIO; record bytes + sha256.
+
+    The opencode bridge writes agents/<worker>/agent-md/latest.md (the
+    rendered v2.4 artifact); copaw workers keep AGENTS.md at the root.
+    """
+    for key in (f"root/agentteams-storage/agents/{worker}/agent-md/latest.md",
+                f"root/agentteams-storage/agents/{worker}/AGENTS.md"):
+        try:
+            raw = mc(passw, "cat", key)
+            break
+        except RuntimeError:
+            continue
+    else:
+        return {"file": None, "error": "no agent-md object in MinIO"}
     data = raw.encode("utf-8")
     digest, size = sha256_bytes(data)
     path = os.path.join(out_dir, "agents", f"{worker}.AGENTS.md")
@@ -123,7 +155,8 @@ def collect_agent_md(passw: str, worker: str, out_dir: str) -> dict:
 
 def collect_minio_tree(passw: str, team: str, out_dir: str) -> dict:
     """Recursive listing of teams/<team>/ — file-level collaboration evidence."""
-    listing = mc(passw, "ls", "--recursive", f"local/agentteams-storage/teams/{team}/")
+    ensure_root_alias(passw)
+    listing = mc(passw, "ls", "--recursive", f"root/agentteams-storage/teams/{team}/")
     path = os.path.join(out_dir, "minio-tree.txt")
     lines = [ln.strip() for ln in listing.splitlines() if ln.strip()]
     with open(path, "w", encoding="utf-8") as fh:
@@ -157,6 +190,7 @@ def main() -> int:
         return 2
 
     MINIO_POD = find_pod(passw, "minio")
+    ensure_root_alias(passw)
     os.makedirs(args.out, exist_ok=True)
 
     if args.workers:
