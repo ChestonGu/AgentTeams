@@ -46,6 +46,7 @@ class BridgeApp:
     matrix_gateway: MatrixGateway | None = field(default=None, init=False)
     runtime_client: Any | None = field(default=None, init=False)
     matrix_task: asyncio.Task[None] | None = field(default=None, init=False)
+    recovery_task: asyncio.Task[None] | None = field(default=None, init=False)
     state_store: Any | None = field(default=None, init=False)
 
     def start(self) -> None:
@@ -88,25 +89,7 @@ class BridgeApp:
         # The adapter choice also decides the session-binding contract below.
         self.runtime_client = build_runtime_adapter(self.config.runtime)
         self.state_store = self._build_state_store()
-        matrix_config = self.worker_files.matrix_config if self.worker_files else {}
-        homeserver = str(matrix_config.get("homeserver") or self.config.matrix.homeserver_url)
-        if homeserver.startswith("${"):
-            homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "")
-        # Only the cimicode adapter requires a pre-created gateway session id
-        # (openclaw.json bridge.runtime.sessionId); the opencode adapter owns
-        # its session lifecycle itself.
-        session_required = self.config.runtime.adapter == "cimicode"
-        if homeserver and self.matrix_access_token and (self.config.runtime.session_id or not session_required):
-            self.matrix_gateway = MatrixGateway(
-                homeserver,
-                self.matrix_access_token,
-                sync_timeout_seconds=self.config.matrix.sync_timeout_seconds,
-                on_message=self.handle_matrix_message,
-                state_store=self.state_store,
-                since_key=f"matrix:since:{os.getenv('AGENTTEAMS_WORKER_NAME', 'worker')}",
-                refresh_token=self._refresh_matrix_token,
-                on_authenticated=self._on_matrix_authenticated,
-            )
+        self.matrix_gateway = self._build_matrix_gateway()
         self.runtime_healthy = False
         self.ready = False
         if self.debug:
@@ -139,6 +122,34 @@ class BridgeApp:
         for key, value in overrides.items():
             if value:
                 setattr(self.config.runtime, key, value)
+
+    def _build_matrix_gateway(self) -> MatrixGateway | None:
+        """Build the Matrix gateway from the current config, or None when the
+        wiring is incomplete.
+
+        Only the cimicode adapter requires a pre-created gateway session id
+        (openclaw.json bridge.runtime.sessionId); the opencode adapter owns
+        its session lifecycle itself. Late-arriving wiring (Worker spec.env
+        written after the pod was created) is picked up by
+        _recover_late_runtime_wiring, which reuses this builder.
+        """
+        matrix_config = self.worker_files.matrix_config if self.worker_files else {}
+        homeserver = str(matrix_config.get("homeserver") or self.config.matrix.homeserver_url)
+        if homeserver.startswith("${"):
+            homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "")
+        session_required = self.config.runtime.adapter == "cimicode"
+        if homeserver and self.matrix_access_token and (self.config.runtime.session_id or not session_required):
+            return MatrixGateway(
+                homeserver,
+                self.matrix_access_token,
+                sync_timeout_seconds=self.config.matrix.sync_timeout_seconds,
+                on_message=self.handle_matrix_message,
+                state_store=self.state_store,
+                since_key=f"matrix:since:{os.getenv('AGENTTEAMS_WORKER_NAME', 'worker')}",
+                refresh_token=self._refresh_matrix_token,
+                on_authenticated=self._on_matrix_authenticated,
+            )
+        return None
 
     def _build_state_store(self) -> Any:
         backend = self.config.store.backend
@@ -175,11 +186,124 @@ class BridgeApp:
             logger.warning("Matrix token refresh failed: %s", exc)
             return None
 
+    # Poll interval for the late runtime-wiring recovery loop.
+    RECOVERY_POLL_SECONDS = 15.0
+
+    async def _fetch_runtime_env(self, worker: str, controller_url: str) -> dict[str, str]:
+        """Fetch this worker's runtime-wiring env subset from the controller.
+
+        GET /api/v1/workers/{self} is self-scoped: the worker authorization
+        model already allows a worker to read its own CR (ActionGet +
+        requireSelf). Returns {} on any failure — the recovery loop simply
+        retries on the next tick.
+        """
+        auth_token = os.getenv("AGENTTEAMS_AUTH_TOKEN", "")
+        token_file = os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        if not auth_token and token_file:
+            try:
+                auth_token = Path(token_file).read_text(encoding="utf-8").strip()
+            except OSError:
+                return {}
+        if not auth_token:
+            logger.warning("runtime wiring poll skipped: no auth token available")
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{controller_url}/api/v1/workers/{worker}",
+                    headers={"Authorization": f"Bearer {auth_token}"},
+                )
+                response.raise_for_status()
+                runtime_env = response.json().get("runtimeEnv") or {}
+            return {str(k): str(v) for k, v in runtime_env.items()}
+        except Exception as exc:
+            logger.warning("runtime wiring poll failed: %s", exc)
+            return {}
+
+    async def _recover_late_runtime_wiring(self) -> None:
+        """Poll the controller for this worker's runtime wiring until it lands.
+
+        A bridge pod can be created before the operator has written the
+        runtime wiring (BRIDGE_RUNTIME_ADAPTER / _BASE_URL / _HELPER_URL)
+        into Worker spec.env — the controller does not roll the pod after
+        that write, so the env the process started with stays incomplete:
+        the adapter defaults to cimicode with no gateway sessionId and the
+        bridge wedges in phase=bootstrap forever. Instead of recreating the
+        pod, poll GET /api/v1/workers/{self} until runtimeEnv carries the
+        adapter, then rebuild the runtime adapter and the Matrix gateway
+        in-process (same priority rules as startup: S3 bootstrap config
+        would already have been applied; controller runtimeEnv fills the
+        env-shaped gap).
+        """
+        worker = os.getenv("AGENTTEAMS_WORKER_NAME", "")
+        controller_url = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").rstrip("/")
+        if not worker or not controller_url:
+            logger.warning(
+                "late runtime wiring recovery unavailable: AGENTTEAMS_WORKER_NAME / AGENTTEAMS_CONTROLLER_URL not set"
+            )
+            return
+        logger.info(
+            "bridge in bootstrap without a gateway; polling controller for late runtime wiring every %.0fs",
+            self.RECOVERY_POLL_SECONDS,
+        )
+        last_adapter = ""
+        while True:
+            runtime_env = await self._fetch_runtime_env(worker, controller_url)
+            adapter = str(runtime_env.get("BRIDGE_RUNTIME_ADAPTER", ""))
+            if adapter and adapter != last_adapter:
+                last_adapter = adapter
+                for env_key, attr in (
+                    ("BRIDGE_RUNTIME_BASE_URL", "base_url"),
+                    ("BRIDGE_RUNTIME_HELPER_URL", "helper_url"),
+                ):
+                    value = str(runtime_env.get(env_key, ""))
+                    if value:
+                        setattr(self.config.runtime, attr, value)
+                logger.info(
+                    "late runtime wiring recovered from controller: adapter=%s base_url=%s helper_url=%s",
+                    adapter,
+                    self.config.runtime.base_url,
+                    self.config.runtime.helper_url,
+                )
+                closer = getattr(self.runtime_client, "close", None)
+                if closer is not None:
+                    await closer()
+                self.config.runtime.adapter = adapter
+                self.runtime_client = build_runtime_adapter(self.config.runtime)
+                self.matrix_gateway = self._build_matrix_gateway()
+                if self.matrix_gateway is not None:
+                    self.matrix_task = asyncio.create_task(self.matrix_gateway.start())
+                    while not self.matrix_gateway.connected and not self.matrix_task.done():
+                        await asyncio.sleep(0.05)
+                    self.matrix_connected = self.matrix_gateway.connected
+                    if self.matrix_gateway.user_id:
+                        self.mention_filter.user_id = self.matrix_gateway.user_id
+                        self.mention_filter.role_resolver.self_user_id = self.matrix_gateway.user_id
+                    self.runtime_healthy = self.matrix_gateway.connected
+                    session_required = self.config.runtime.adapter == "cimicode"
+                    self.ready = self.matrix_connected and (bool(self.config.runtime.session_id) or not session_required)
+                    self.phase = "listening" if self.ready else "bootstrap"
+                    if self.phase == "listening":
+                        logger.info(
+                            "bridge recovered to listening without a pod restart (adapter=%s)",
+                            adapter,
+                        )
+                        return
+                    logger.warning(
+                        "recovered wiring did not reach listening (phase=%s); keep polling for changes",
+                        self.phase,
+                    )
+            await asyncio.sleep(self.RECOVERY_POLL_SECONDS)
+
     async def start_background(self) -> None:
         if self.matrix_gateway is None:
             self.runtime_healthy = True
             self.ready = False
             self.phase = "bootstrap"
+            # Late runtime wiring (pod created before Worker spec.env landed)
+            # self-heals by polling the controller instead of requiring a
+            # pod recreation.
+            self.recovery_task = asyncio.create_task(self._recover_late_runtime_wiring())
             return
         self.matrix_task = asyncio.create_task(self.matrix_gateway.start())
         while not self.matrix_gateway.connected and not self.matrix_task.done():
@@ -199,6 +323,9 @@ class BridgeApp:
         print("Bridge shutdown requested")
 
     async def shutdown(self) -> None:
+        if self.recovery_task is not None:
+            self.recovery_task.cancel()
+            await asyncio.gather(self.recovery_task, return_exceptions=True)
         if self.matrix_gateway is not None:
             await self.matrix_gateway.stop()
         if self.matrix_task is not None:
