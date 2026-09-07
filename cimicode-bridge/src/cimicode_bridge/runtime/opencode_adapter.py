@@ -275,6 +275,21 @@ class OpenCodeAdapter:
         except httpx.HTTPStatusError as exc:
             logger.error("opencode HTTP error: %s %s", exc.response.status_code, exc.response.text[:400])
             return [RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, text=f"opencode HTTP {exc.response.status_code}")]
+        except httpx.TimeoutException as exc:
+            # str(TimeoutException) is often empty — spell out what it means:
+            # the blocking POST gave up, but the opencode turn usually keeps
+            # running server-side (session state is intact for later turns).
+            logger.error(
+                "opencode turn POST timed out after %.0fs (%s); the opencode "
+                "turn may still be running server-side",
+                time.monotonic() - turn_started,
+                type(exc).__name__,
+            )
+            return [RuntimeEvent(
+                kind=RuntimeEventKind.RUNTIME_ERROR,
+                text=f"opencode turn timed out after {self.timeout_seconds}s "
+                     "(task still running server-side; ask again to re-attach)",
+            )]
         except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("opencode adapter failure: %s", exc)
             return [RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, text=f"opencode adapter failure: {exc}")]

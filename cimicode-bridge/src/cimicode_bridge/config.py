@@ -39,7 +39,11 @@ class RuntimeConfig(BaseModel):
     session_id: str = ""
     sandbox_id: str = ""
     auth_type: str = "none"
-    turn_timeout_seconds: int = 600
+    # opencode's POST /session/{id}/message blocks until the whole agent
+    # turn finishes, so this bounds the *entire* turn (code + test runs
+    # routinely exceed 10 minutes). Override per deployment via
+    # BRIDGE_RUNTIME_TURN_TIMEOUT.
+    turn_timeout_seconds: int = 3600
     poll_interval_seconds: float = 1.0
     submit_max_retries: int = 3
     queue_max_pending: int = 8

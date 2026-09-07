@@ -48,6 +48,7 @@ class FakeSandbox:
         self._script = script  # each poll round pops one message-list snapshot
         self._script_i = 0
         self.helper_down = False
+        self.post_timeout = False
 
         async def handler(request: httpx.Request) -> httpx.Response:
             self.requests.append((request.method, request.url.path))
@@ -66,6 +67,10 @@ class FakeSandbox:
             if path.startswith("/session/") and path.count("/") == 2:
                 return httpx.Response(200, json={"id": path.rsplit("/", 1)[-1]})
             if path.startswith("/session/") and path.endswith("/message") and request.method == "POST":
+                if self.post_timeout:
+                    # opencode serve blocks the POST until the whole agent
+                    # turn finishes; an over-long turn raises here.
+                    raise httpx.ReadTimeout("timed out")
                 self.messages.append(_msg("m_user", "user"))
                 return httpx.Response(200, json={"id": "m_user"})
             if path.startswith("/session/") and path.endswith("/message"):
@@ -212,6 +217,22 @@ class TestOpenCodeChat:
             adapter.chat(session_id="", sandbox_id="", turn_id="t", agent_md="a", history=[], user_message="x")
         )
         assert events[-1].kind == RuntimeEventKind.TURN_INTERRUPTED
+
+    def test_post_timeout_reports_readable_failure(self):
+        # The blocking POST hitting its timeout must NOT surface as an empty
+        # "opencode adapter failure: " — that exact opaque message is what
+        # made a wedged rework turn undiagnosable in the r1 team trials.
+        fake = FakeSandbox(script=[[]])
+        fake.post_timeout = True
+        adapter = _adapter()
+        fake.attach(adapter)
+
+        events = asyncio.run(
+            adapter.chat(session_id="", sandbox_id="", turn_id="t", agent_md="a", history=[], user_message="x")
+        )
+        assert events[-1].kind == RuntimeEventKind.RUNTIME_ERROR
+        assert "timed out" in events[-1].text
+        assert "re-attach" in events[-1].text
 
     def test_turn_error_surfaces_as_runtime_error(self):
         # upstream failures (e.g. quota errors retried server-side) land on

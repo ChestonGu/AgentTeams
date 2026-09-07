@@ -119,6 +119,9 @@ class BridgeApp:
             "base_url": os.getenv("BRIDGE_RUNTIME_BASE_URL", ""),
             "helper_url": os.getenv("BRIDGE_RUNTIME_HELPER_URL", ""),
         }
+        turn_timeout = os.getenv("BRIDGE_RUNTIME_TURN_TIMEOUT", "")
+        if turn_timeout.isdigit() and int(turn_timeout) > 0:
+            self.config.runtime.turn_timeout_seconds = int(turn_timeout)
         for key, value in overrides.items():
             if value:
                 setattr(self.config.runtime, key, value)
@@ -454,6 +457,17 @@ class BridgeApp:
                     progress_texts = list((event.data or {}).get("progress_texts") or [])
                 elif event.kind.value in {"runtime_error", "turn_interrupted"}:
                     logger.error("Gateway turn failed: %s", event.data or event.text)
+                    # A silent failure leaves the room waiting forever (the
+                    # delegating leader has no other failure signal). Tell the
+                    # room what happened so the turn can be retried.
+                    try:
+                        reason = (event.text or "runtime error").strip()
+                        await self.matrix_gateway.send_text(
+                            room_id,
+                            f"**turn failed**: {reason}",
+                        )
+                    except Exception:
+                        logger.exception("failed to report turn failure to room %s", room_id)
                     return
             # Mid-turn narration (the agent's Progress updates between tool
             # calls) would otherwise be dropped with the final-reply-only
