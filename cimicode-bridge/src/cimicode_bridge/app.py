@@ -53,7 +53,10 @@ class BridgeApp:
         # Root-level config: without this the cimicode_bridge.* loggers
         # inherit WARNING and every INFO line (sync established, message
         # decisions) disappears while uvicorn's own access log stays visible.
-        logging.basicConfig(level=os.getenv("BRIDGE_LOG_LEVEL", "INFO"))
+        logging.basicConfig(
+            level=os.getenv("BRIDGE_LOG_LEVEL", "INFO"),
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
         config_path = Path(self.config_path)
         self.config = load_config(config_path)
         self._apply_env_overrides()
@@ -251,6 +254,48 @@ class BridgeApp:
         )
         last_adapter = ""
         while True:
+            # Bug fix (r2 it-w1): a bridge pod that starts before the
+            # controller pushes agents/<w>/runtime/runtime.yaml wedges here
+            # forever if we only chase env wiring — the bootstrap objects
+            # (and with them the matrix credentials) never load and the
+            # gateway is never built. Retry the S3 bootstrap every cycle;
+            # when it finally lands, rebuild the gateway in-process.
+            if (self.worker_files is None or not self.worker_files.runtime_yaml) \
+                    and self.s3_bootstrap is not None:
+                refetched = self.s3_bootstrap.load(retries=1, retry_interval_seconds=0)
+                if refetched is not None and refetched.runtime_yaml:
+                    logger.info("bootstrap objects recovered by self-heal poll; rebuilding gateway")
+                    self.worker_files = refetched
+                    if not self.matrix_access_token:
+                        self.matrix_access_token = refetched.matrix_access_token
+                    runtime = refetched.bridge_runtime_config
+                    self.config.runtime.base_url = str(
+                        runtime.get("baseUrl") or runtime.get("base_url")
+                        or self.config.runtime.base_url)
+                    self.config.runtime.helper_url = (
+                        refetched.runtime_helper_url or self.config.runtime.helper_url)
+                    self.config.runtime.session_id = refetched.gateway_session_id
+                    self.config.runtime.sandbox_id = refetched.gateway_sandbox_id
+                    gateway = self._build_matrix_gateway()
+                    if gateway is not None:
+                        self.matrix_gateway = gateway
+                        self.matrix_task = asyncio.create_task(gateway.start())
+                        while not gateway.connected and not self.matrix_task.done():
+                            await asyncio.sleep(0.05)
+                        self.matrix_connected = gateway.connected
+                        self.runtime_healthy = gateway.connected
+                        if gateway.connected:
+                            self.phase = "listening" if (
+                                self.config.runtime.adapter != "cimicode"
+                                or self.config.runtime.session_id
+                            ) else "bootstrap"
+                            self.ready = self.phase == "listening"
+                            logger.info(
+                                "gateway rebuilt from late bootstrap (phase=%s); matrix sync will replay unconsumed mentions",
+                                self.phase,
+                            )
+                            if self.phase == "listening":
+                                return
             runtime_env = await self._fetch_runtime_env(worker, controller_url)
             adapter = str(runtime_env.get("BRIDGE_RUNTIME_ADAPTER", ""))
             if adapter and adapter != last_adapter:
@@ -414,6 +459,7 @@ class BridgeApp:
                         runtime_yaml=self.worker_files.runtime_yaml,
                         soul_md=self.worker_files.soul_md,
                         profile_md=self.worker_files.profile_md,
+                        user_md=self.worker_files.user_md or {},
                     )
                 except GenerateAgentMdError as exc:
                     logger.error("agent.md generation failed: %s", exc)

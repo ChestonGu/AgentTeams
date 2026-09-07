@@ -21,6 +21,7 @@ def build_agent_md_via_generator(
     runtime_yaml: str,
     soul_md: str = "",
     profile_md: str = "",
+    user_md: dict[str, str] | None = None,
     generator_path: str | None = None,
     template_path: str | None = None,
 ) -> str:
@@ -29,6 +30,9 @@ def build_agent_md_via_generator(
     The generator lives in the bridge image (paired with its source template,
     contract §2) and fails loud on invalid input (exit 1) — the bridge mirrors
     that: any non-zero exit raises, the caller refuses the turn.
+
+    user_md: optional user customization files (name -> content) appended
+    after the persona section (custom AGENTS.md tail / TOOL.md / ...).
     """
     generator = generator_path or os.getenv("BRIDGE_GENERATOR_PATH", DEFAULT_GENERATOR_PATH)
     if not Path(generator).exists():
@@ -57,6 +61,12 @@ def build_agent_md_via_generator(
             profile_path = Path(tmp) / "PROFILE.md"
             profile_path.write_text(profile_md, encoding="utf-8")
             command += ["--profile-file", str(profile_path)]
+        for name, text in (user_md or {}).items():
+            if not str(text or "").strip():
+                continue
+            safe = Path(tmp) / f"user-{len(command)}-{name.replace('/', '_')}"
+            safe.write_text(text, encoding="utf-8")
+            command += ["--user-md", f"{name}={safe}"]
         result = subprocess.run(
             command,
             capture_output=True,

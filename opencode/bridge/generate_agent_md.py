@@ -287,13 +287,15 @@ def _normalize_extra(text):
     return text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
 
 
-def generate(cfg, template, date=None, soul_text="", profile_text=""):
+def generate(cfg, template, date=None, soul_text="", profile_text="",
+             user_md=None):
     """Parsed runtime config + source template -> the finished agent.md.
 
     The template must carry exactly one {{COORDINATION}} and one
     {{ENVIRONMENT}} placeholder; after substitution the output must be
     free of any residual braces. SOUL.md/PROFILE.md are appended verbatim
-    after the rendered content."""
+    after the rendered content; user-provided files (custom AGENTS.md
+    tail / TOOL.md / IDENTITY.md ...) follow under named headings."""
     # a CRLF checkout (git autocrlf on a Windows build host) must not leak
     # into the prompt — normalize the template like the persona files
     template = template.replace("\r\n", "\n").replace("\r", "\n")
@@ -324,11 +326,17 @@ def generate(cfg, template, date=None, soul_text="", profile_text=""):
 
     extras = [(_normalize_extra(extra) if extra else "").strip()
               for extra in (soul_text, profile_text)]
-    if any(extras):
+    user_sections = [(str(name).strip() or "USER",
+                      (_normalize_extra(text) if text else "").strip())
+                     for name, text in (user_md or [])]
+    user_sections = [(name, text) for name, text in user_sections if text]
+    if any(extras) or user_sections:
         out = out.rstrip("\n") + "\n\n" + PERSONA_SECTION
         for extra in extras:
             if extra:
                 out += "\n\n" + extra
+        for name, text in user_sections:
+            out += f"\n\n### User Provided — {name}\n\n{text}"
         out += "\n"
     return out
 
@@ -351,6 +359,11 @@ def main(argv=None):
                          "after the rendered agent.md (copaw prompt order)")
     ap.add_argument("--profile-file", default=None,
                     help="optional PROFILE.md path; appended after SOUL.md")
+    ap.add_argument("--user-md", action="append", default=[],
+                    metavar="NAME=PATH",
+                    help="optional user-provided file (custom AGENTS.md tail/"
+                         "TOOL.md/IDENTITY.md...); appended under a named "
+                         "heading after the persona. Repeatable.")
     ap.add_argument("--date", default=None,
                     help="override Today (UTC), YYYY-MM-DD (tests)")
     ap.add_argument("--output", default="-",
@@ -377,8 +390,13 @@ def main(argv=None):
         runtime = load_runtime_config(args.runtime_config)
         soul_text = _read_optional(args.soul_file)
         profile_text = _read_optional(args.profile_file)
+        user_md = []
+        for spec in args.user_md:
+            name, _, path = spec.partition("=")
+            user_md.append((name, _read_optional(path or name)))
         out = generate(runtime, template, date=args.date,
-                       soul_text=soul_text, profile_text=profile_text)
+                       soul_text=soul_text, profile_text=profile_text,
+                       user_md=user_md)
         agentteams_log.log_event(
             log, "generated",
             output_bytes=len(out.encode("utf-8")),
@@ -389,7 +407,8 @@ def main(argv=None):
             coordinators=len(runtime["coordinators"]),
             admin=bool(runtime["admin_id"]),
             soul_merged=bool(soul_text.strip()),
-            profile_merged=bool(profile_text.strip()))
+            profile_merged=bool(profile_text.strip()),
+            user_md_files=[name for name, text in user_md if text.strip()])
     except GenerateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         agentteams_log.log_event(log, "error", level=logging.ERROR,

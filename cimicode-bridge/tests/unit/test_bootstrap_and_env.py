@@ -177,3 +177,49 @@ class TestEnvOverrides:
         app.start()
         assert app.config.runtime.adapter == "cimicode"
         assert app.config.runtime.helper_url == ""
+
+
+class TestUserMdLoading:
+    """User customization files (AGENTS.md tail / TOOL.md / IDENTITY.md)."""
+
+    def test_user_md_forwarded_on_managed_path(self, monkeypatch):
+        objects = {
+            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
+            "agents/w1/AGENTS.md": (
+                "<!-- agentteams-builtin-start -->\ncanonical\n"
+                "<!-- agentteams-builtin-end -->\nuser custom rules here"
+            ),
+            "agents/w1/TOOL.md": "internal tool: foobar",
+        }
+        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
+        assert cfg is not None
+        assert cfg.user_md == {
+            "AGENTS.md": "user custom rules here",
+            "TOOL.md": "internal tool: foobar",
+        }
+
+    def test_agents_md_without_marker_uses_whole_file(self, monkeypatch):
+        objects = {
+            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
+            "agents/w1/AGENTS.md": "plain user file",
+        }
+        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
+        assert cfg is not None
+        assert cfg.user_md == {"AGENTS.md": "plain user file"}
+
+    def test_canonical_only_agents_md_skipped(self, monkeypatch):
+        objects = {
+            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
+            "agents/w1/AGENTS.md": (
+                "<!-- agentteams-builtin-start -->\ncanonical\n<!-- agentteams-builtin-end -->\n"
+            ),
+        }
+        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
+        assert cfg is not None
+        assert cfg.user_md == {}
+
+    def test_no_user_files_yields_empty_dict(self, monkeypatch):
+        objects = {"agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n"}
+        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
+        assert cfg is not None
+        assert cfg.user_md == {}
