@@ -253,23 +253,105 @@ watch 本 ns 的 Worker CR（opencode 型），为每个 worker 供给独立运�
 
 ---
 
-## 五、opencode runtime / sandbox 与 skill 机制
+## 五、opencode 运行时布置与 bridge↔opencode 通信
 
-### 5.1 镜像内容
+### 5.1 双 pod 分工（会话与执行分离）
 
-- **runtime（v0.1.3-oct）**：node:22-slim + `opencode-ai@1.18.x` + **ripgrep**（skill 工具依赖，缺它每次 skill 调用挂 133s 后报 "ripgrep execution failed"）+ 自定义 `opencode.json`（LLM 直连 zhipu Coding 端点，**不经 higress 网关**）+ 自定义 bash 工具（转发 sandbox）。
-- **sandbox（v0.1.2-oct）**：python3/mc/jq + 全套 skills + taskflow/agentteams-sync CLI + sandbox_helper（:4097，`POST /exec` 执行命令、`POST /agents-md` 落盘 AGENTS.md）。
-- **共享卷**：两 pod 挂同一 hostPath `/workspace`——文件协作的唯一可靠通道。
+每个 opencode worker 由两个 pod 组成（operator 供给，同节点、共享同一 hostPath `/workspace`）：
 
-### 5.2 skill 生效链（曾两度失效，现为三层保障）
+```
+┌─ opencode-<w>（会话 pod）──────────┐   ┌─ opencode-<w>-sandbox（执行 pod）──┐
+│ opencode serve :4096               │   │ sandbox_helper :4097                │
+│  • LLM 会话循环（直连 zhipu）       │──▶│  • POST /exec     执行命令          │
+│  • 原生工具 read/write/edit/        │   │  • POST /agents-md 落盘 AGENTS.md  │
+│    glob/grep/task/todowrite/...     │   │  • 预置：taskflow/agentteams-sync/ │
+│  • 自定义 bash（转发沙箱，见 5.3）  │   │    mc/jq/git/全套 skills            │
+│  • cwd=/workspace（读 AGENTS.md 与  │   │  • cwd=/workspace（同一文件树）     │
+│    .opencode/skills 项目级发现）    │   │                                     │
+└───────────────┬────────────────────┘   └────────────────┬────────────────────┘
+                └────────── 共享 hostPath /workspace ──────┘
+                  （AGENTS.md、.opencode/skills、任务工作区……两边看到同一棵树）
+```
 
-1. sandbox entrypoint 启动时把镜像内 skills 同步到 `/workspace/.opencode/skills/`（opencode 项目级原生发现位置）；
-2. **runtime entrypoint 启动前等待该目录出现**（`SKILL_WAIT_SECONDS=180` 超时降级）——消灭"sandbox 晚于 runtime 发布→opencode 启动时 skill 工具为空"的竞态；
-3. 镜像带 ripgrep——skill 工具自身依赖可用。
+**为什么要拆两个 pod**：opencode（Node）与协作工具链（Python/mc）各自独立演进、独立限流；执行环境可整体替换而不动会话环境；sandbox 挂了可独立重启，会话历史不丢。
 
-实测：自然流程（任务书不提 skill）worker 按模板 §4 协议自然调用 skill 37-57 次、零错误。
+### 5.2 runtime 镜像（v0.1.3-oct）布置
 
-### 5.3 跨 pod 边界（重要约束）
+基底 `node:22-slim`，安装：
+
+- `opencode-ai@1.18.x`（pin 版本，`autoupdate: false`）
+- **ripgrep**——opencode 的 skill 工具 shell 出 `rg` 扫 skill 内容，node-slim 不带，缺它每次 skill 调用挂 133s 后报 `ripgrep execution failed`（r4 实测定位的第二类 skill 失效）
+- `/opt/agenttools/opencode.json` → 启动时种子到 `$HOME/.config/opencode/opencode.json`（若不存在）：
+  - provider `zhipu-coding`（`@ai-sdk/openai-compatible`），`baseURL=https://open.bigmodel.cn/api/coding/paas/v4`，apiKey 内置，默认模型 `glm-5.3-flash` —— **LLM 直连 zhipu，不经 higress 网关**（网关日志看不到 worker 的 LLM 活动属正常）
+- `/opt/agenttools/tools/bash.ts` → 种子到 `$HOME/.config/opencode/tools/bash.ts`（自定义工具，见 5.3）
+- entrypoint：种子配置 → **等待 `/workspace/.opencode/skills/*/SKILL.md` 出现**（`SKILL_WAIT_SECONDS=180`，超时降级继续）→ `exec opencode serve --port 4096 --hostname 0.0.0.0`（cwd=/workspace）
+
+### 5.3 工具集与预置方式
+
+opencode 侧 agent 可见工具 = **opencode 原生工具 + 自定义 bash + 原生 skill 工具**：
+
+| 工具 | 来源 | 执行位置 | 说明 |
+|---|---|---|---|
+| `bash` | 自定义 `bash.ts`（同名自定义工具**覆盖**内置 bash） | **sandbox pod** | POST `$SANDBOX_EXEC_URL/exec` `{command, timeout}`（timeout 钳 1-900s，fetch 带AbortSignal），返回 `{exitCode,stdout,stderr}` 拼装文本 |
+| `read` / `write` / `edit` / `glob` / `grep` / `task` / `todowrite` / `webfetch` / `question` | opencode 原生 | runtime pod 本地 | 作用于 cwd=/workspace |
+| `skill` | opencode 原生 | runtime pod | 列出/加载项目级 skills（依赖 ripgrep） |
+
+**skill 预置链**（源码 → 镜像 → 生效点）：
+
+```
+仓库 opencode/template/opencode-worker-agent/skills/   （5 个：communication /
+  file-sharing / mcporter / organization / task-management，各含 SKILL.md+scripts/）
+  ──(sandbox Dockerfile COPY)──▶ 镜像 /opt/agentteams/skills/
+  ──(sandbox entrypoint 启动时 cp -rf)──▶ /workspace/.opencode/skills/   ← opencode 项目级发现位置
+  ──(opencode 启动后)──▶ skill 工具可列出/加载；agent 按模板 §4 协议先读再用
+```
+
+配套预置（sandbox Dockerfile 生成）：`/usr/local/bin/taskflow` → `task-management/scripts/taskflow.py`、`/usr/local/bin/agentteams-sync` → `file-sharing/scripts/agentteams_sync.py`（skills 里的脚本以全局命令形式供 bash 使用；部署副本与 cli/ 源逐字节一致，有 drift 检查）。
+
+skill 生效的**三层保障**：①sandbox entrypoint 每次启动重新发布（镜像为权威源）②runtime entrypoint 启动前等待目录出现（消灭"sandbox 晚发布→opencode 启动时 skill 空"竞态）③镜像带 ripgrep（工具自身依赖）。模板 §4 写明"用工具前先读对应 skill"——自然流程实测调用 37-57 次/worker、零错误。
+
+### 5.4 sandbox 镜像（v0.1.2-oct）与 helper 协议
+
+基底 `python:3.12-slim`：curl/jq/git/procps/mc + skills + `sandbox_helper.py`（stdlib http.server，端口 4097，`BRIDGE_SANDBOX_HELPER_PORT` 可覆盖，带鉴权）。三个端点：
+
+```
+GET  /healthz                        → 200 {"status":"ok"}
+POST /agents-md   body=markdown原文   → 原子写 workdir/AGENTS.md
+                                      （临时文件+fsync+os.replace，绝无半写状态）
+POST /exec        {"command","timeout"?} → {exitCode, stdout, stderr}
+                                      （在 workdir 下执行，stdin 不支持）
+```
+
+entrypoint：设 `WORKDIR=$AGENTTEAMS_FS_ROOT`（=/workspace）→ 发布 skills（5.3）→ 起 helper。
+
+### 5.5 bridge ↔ opencode 通信全序列（每个 turn）
+
+```
+bridge (opencode_adapter)                     opencode svc :4096        sandbox helper :4097
+──────────────────────────                    ─────────────────         ────────────────────
+1. POST {helper}/agents-md  agent_md 正文 ──────────────────────────────▶ 落盘 /workspace/AGENTS.md
+   （opencode 以 /workspace 为 cwd，原生读取 AGENTS.md 作为会话规则文件）
+2. POST {base}/session ─────────────────────▶ 建/复用会话 ses_...
+3. POST {base}/session/{id}/message ────────▶ ┃ 阻塞整个 agent turn：
+   body: {parts:[{type:"text",text:user_message}]}
+   （user_message = "[Chat messages since your last reply - for context]\n
+      <历史>@sender: body" 拼装，见 §3.3）     ┃ LLM 循环+工具调用
+   timeout=turn_timeout_seconds(默认3600)     ┃ （bash→sandbox /exec，
+                                                ┃  read/write→共享卷）
+4.        （POST 返回后）GET /session/{id}/message ◀─ 收尾对账：
+                                              baseline 之后全部已完成
+                                              assistant 文本 → 最终回复 + progress
+5. 组事件回流 app.py：TEXT_DELTA(全文)、TURN_COMPLETED(data.progress_texts)
+   → progress 逐条发房间 → 最终回复发房间
+```
+
+关键约定：
+- **AGENTS.md 是唯一 system prompt 通道**：bridge 不调 opencode 的 system 参数，而是借 sandbox helper 把每 turn 生成的 agent.md 原子写到共享卷 `AGENTS.md`——opencode 原生规则文件机制，无需任何 opencode 私有 API。
+- **会话无状态化**：adapter 每 turn 可新建 session（实测 created session），历史由 bridge 侧 HistoryStore 拼进 user_message——bridge 重启/opencode 重启都不丢协作上下文。
+- base_url/helper_url 缺省由 bridge 从 worker 名自算（§3.2），operator env 可覆盖。
+- POST 超时 ≠ 任务失败：opencode 侧 turn 通常仍在跑，错误文案明示 "ask again to re-attach"（再次 mention 可续接）。
+
+### 5.6 跨 pod 边界（重要约束）
 
 bash 工具在 **sandbox pod** 执行（其 /tmp 是 sandbox 的），read/write/glob 等在 **runtime pod** 本地执行——两 pod 仅 `/workspace` 共享。任何"bash 写 /tmp 再 read 读"的路径都会挂死。AGENTS.md 模板**不写**这类环境细节（模板纯净性约定），环境问题一律部署层解决。
 
