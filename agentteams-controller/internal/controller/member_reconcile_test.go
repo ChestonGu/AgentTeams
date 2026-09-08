@@ -813,6 +813,56 @@ func TestReconcileMemberConfigNonQwenPawKeepsFileBasedPath(t *testing.T) {
 	}
 }
 
+// TestReconcileMemberConfigCimiCodeBridgeKeepsFileBasedPath locks cimicode-bridge
+// onto the classic openclaw config path (no runtime.yaml) and asserts the
+// resolved effective runtime reaches DeployWorkerConfig for bridge-section
+// gating in the deployer.
+func TestReconcileMemberConfigCimiCodeBridgeKeepsFileBasedPath(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:        "worker-a",
+		RuntimeName: "worker-a",
+		Role:        RoleStandalone,
+		Spec: v1beta1.WorkerSpec{
+			Runtime:            "cimicode-bridge",
+			CimicodeGatewayUrl: "https://cimicode.example.com",
+			SessionId:          "sess-1",
+			SandboxId:          "sbx-1",
+			TemplateId:         "tmpl-1",
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
+		t.Fatalf("cimicode-bridge must not write runtime config, got %d calls", got)
+	}
+	if got := len(deployer.Calls.DeployWorkerConfig); got != 1 {
+		t.Fatalf("DeployWorkerConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployWorkerConfig[0]
+	if req.EffectiveRuntime != "cimicode-bridge" {
+		t.Fatalf("EffectiveRuntime=%q, want cimicode-bridge", req.EffectiveRuntime)
+	}
+	if req.Spec.CimicodeGatewayUrl != "https://cimicode.example.com" || req.Spec.SessionId != "sess-1" ||
+		req.Spec.SandboxId != "sbx-1" || req.Spec.TemplateId != "tmpl-1" {
+		t.Fatalf("bridge spec fields lost in deploy request: %#v", req.Spec)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 1 || writeInline != 1 || deployConfig != 1 || pushSkills != 1 {
+		t.Fatalf("file-based deploy path call counts package=%d inline=%d config=%d skills=%d, want all 1",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

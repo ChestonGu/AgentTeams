@@ -365,6 +365,12 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    cimicodeBridge:
+      # Placeholder TCS registry — MUST be overridden at deploy time with the
+      # real cimicode bridge image. The external registry likely does not carry
+      # the global.imageTag tag either; override repository AND tag together.
+      repository: agentteams/cimicode-bridge
+      tag: v0.1.4             # explicit tag — do NOT fall back to global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

@@ -18,9 +18,15 @@ type CreateWorkerRequest struct {
 	Skills        []string                           `json:"skills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
+	SessionId     string                             `json:"sessionId,omitempty"`
+	SandboxId     string                             `json:"sandboxId,omitempty"`
+	TemplateId    string                             `json:"templateId,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	// CimicodeGatewayUrl is the external cimicode gateway endpoint for
+	// cimicode-bridge workers (projected into openclaw.json, not pod env).
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -43,9 +49,15 @@ type UpdateWorkerRequest struct {
 	Skills        []string                           `json:"skills,omitempty"`
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
+	SessionId     string                             `json:"sessionId,omitempty"`
+	SandboxId     string                             `json:"sandboxId,omitempty"`
+	TemplateId    string                             `json:"templateId,omitempty"`
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	// CimicodeGatewayUrl is the external cimicode gateway endpoint for
+	// cimicode-bridge workers (projected into openclaw.json, not pod env).
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -80,6 +92,12 @@ type WorkerResponse struct {
 	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
 	Team             string                     `json:"team,omitempty"`
 	Role             string                     `json:"role,omitempty"`
+	SessionId        string                     `json:"sessionId,omitempty"`
+	SandboxId        string                     `json:"sandboxId,omitempty"`
+	TemplateId       string                     `json:"templateId,omitempty"`
+	// CimicodeGatewayUrl is the external cimicode gateway endpoint for
+	// cimicode-bridge workers (projected into openclaw.json, not pod env).
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
 }
 
 type ExposedPortInfo struct {

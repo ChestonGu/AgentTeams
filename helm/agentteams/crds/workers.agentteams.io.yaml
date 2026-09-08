@@ -24,7 +24,7 @@ spec:
                   description: Name of the AI gateway Model API to use as the LLM provider.
                 runtime:
                   type: string
-                  enum: [openclaw, copaw, hermes, qwenpaw]
+                  enum: [openclaw, copaw, hermes, qwenpaw, cimicode-bridge]
                   description: |
                     Agent runtime. When omitted the controller falls back to
                     AGENTTEAMS_DEFAULT_WORKER_RUNTIME (set at install time), and
@@ -40,13 +40,16 @@ spec:
                   description: Business/runtime identity for Matrix localpart and OSS path key (fallback to metadata.name)
                 sessionId:
                   type: string
-                  description: External session identifier this worker is bound to (e.g. an AgentLoop session). Informational; does not affect the pod spec.
+                  description: External session identifier this worker is bound to (e.g. an AgentLoop session). For cimicode-bridge workers, projected into the bridge section of agents/<name>/openclaw.json; otherwise informational. Does not affect the pod spec.
                 sandboxId:
                   type: string
-                  description: External sandbox/environment identifier this worker runs in. Informational; does not affect the pod spec.
+                  description: External sandbox/environment identifier this worker runs in. For cimicode-bridge workers, projected into the bridge section of agents/<name>/openclaw.json; otherwise informational. Does not affect the pod spec.
                 templateId:
                   type: string
-                  description: Agent template ID this worker was created from. Informational; does not affect the pod spec.
+                  description: Agent template ID this worker was created from. For cimicode-bridge workers, projected into the bridge section of agents/<name>/openclaw.json; otherwise informational. Does not affect the pod spec.
+                cimicodeGatewayUrl:
+                  type: string
+                  description: External cimicode gateway endpoint. Config-only; for cimicode-bridge workers it is projected into the bridge section of agents/<name>/openclaw.json. Does not affect the pod spec.
                 identity:
                   type: string
                   description: Worker public identity (generates IDENTITY.md; merged into SOUL.md for copaw and hermes)

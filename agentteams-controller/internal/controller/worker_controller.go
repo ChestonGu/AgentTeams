@@ -835,6 +835,7 @@ func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.SessionId = ""       // external-session-only: does not affect pod
 	spec.SandboxId = ""       // external-sandbox-only: does not affect pod
 	spec.TemplateId = ""      // template-only: does not affect pod
+	spec.CimicodeGatewayUrl = ""
 	layoutVersion := workerDepsLayoutHashVersion(spec)
 	if layoutVersion == "" {
 		buf, err := json.Marshal(spec)
@@ -892,6 +893,7 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 	spec.SessionId = ""  // external-session-only: does not affect pod
 	spec.SandboxId = ""  // external-sandbox-only: does not affect pod
 	spec.TemplateId = "" // template-only: does not affect pod
+	spec.CimicodeGatewayUrl = ""
 	payload := struct {
 		Spec             v1beta1.WorkerSpec                 `json:"spec"`
 		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`

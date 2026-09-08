@@ -92,23 +92,27 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
-			Model:            req.Model,
-			ModelProvider:    req.ModelProvider,
-			DisplayName:      req.DisplayName,
-			WorkerName:       req.WorkerName,
-			Runtime:          runtime,
-			Image:            req.Image,
-			Identity:         req.Identity,
-			Soul:             req.Soul,
-			Agents:           req.Agents,
-			Skills:           req.Skills,
-			McpServers:       req.McpServers,
-			Package:          req.Package,
-			Expose:           req.Expose,
-			ChannelPolicy:    req.ChannelPolicy,
-			Resources:        req.Resources,
-			ContainerManaged: &containerManaged,
-			State:            req.State,
+			Model:              req.Model,
+			ModelProvider:      req.ModelProvider,
+			DisplayName:        req.DisplayName,
+			WorkerName:         req.WorkerName,
+			Runtime:            runtime,
+			Image:              req.Image,
+			Identity:           req.Identity,
+			Soul:               req.Soul,
+			Agents:             req.Agents,
+			Skills:             req.Skills,
+			McpServers:         req.McpServers,
+			Package:            req.Package,
+			SessionId:          req.SessionId,
+			SandboxId:          req.SandboxId,
+			TemplateId:         req.TemplateId,
+			CimicodeGatewayUrl: req.CimicodeGatewayUrl,
+			Expose:             req.Expose,
+			ChannelPolicy:      req.ChannelPolicy,
+			Resources:          req.Resources,
+			ContainerManaged:   &containerManaged,
+			State:              req.State,
 		},
 	}
 
@@ -240,6 +244,18 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Package != "" {
 			worker.Spec.Package = req.Package
+		}
+		if req.SessionId != "" {
+			worker.Spec.SessionId = req.SessionId
+		}
+		if req.SandboxId != "" {
+			worker.Spec.SandboxId = req.SandboxId
+		}
+		if req.TemplateId != "" {
+			worker.Spec.TemplateId = req.TemplateId
+		}
+		if req.CimicodeGatewayUrl != "" {
+			worker.Spec.CimicodeGatewayUrl = req.CimicodeGatewayUrl
 		}
 		if req.Expose != nil {
 			worker.Spec.Expose = req.Expose
@@ -725,27 +741,31 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 
 func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
-		Name:             w.Name,
-		DisplayName:      w.Spec.DisplayName,
-		WorkerName:       w.Spec.WorkerName,
-		Phase:            w.Status.Phase,
-		State:            w.Spec.DesiredState(),
-		Model:            w.Spec.Model,
-		Runtime:          w.Spec.Runtime,
-		Image:            w.Spec.Image,
-		Identity:         w.Spec.Identity,
-		Soul:             w.Spec.Soul,
-		Agents:           w.Spec.Agents,
-		Skills:           w.Spec.Skills,
-		McpServers:       w.Spec.McpServers,
-		Package:          w.Spec.Package,
-		BackendRuntime:   w.Spec.GetBackendRuntime(),
-		ContainerManaged: w.Spec.DesiredContainerMan(),
-		ChannelPolicy:    w.Spec.ChannelPolicy,
-		ContainerState:   w.Status.ContainerState,
-		MatrixUserID:     w.Status.MatrixUserID,
-		RoomID:           w.Status.RoomID,
-		Message:          w.Status.Message,
+		Name:               w.Name,
+		DisplayName:        w.Spec.DisplayName,
+		WorkerName:         w.Spec.WorkerName,
+		Phase:              w.Status.Phase,
+		State:              w.Spec.DesiredState(),
+		Model:              w.Spec.Model,
+		Runtime:            w.Spec.Runtime,
+		Image:              w.Spec.Image,
+		Identity:           w.Spec.Identity,
+		Soul:               w.Spec.Soul,
+		Agents:             w.Spec.Agents,
+		Skills:             w.Spec.Skills,
+		McpServers:         w.Spec.McpServers,
+		Package:            w.Spec.Package,
+		SessionId:          w.Spec.SessionId,
+		SandboxId:          w.Spec.SandboxId,
+		TemplateId:         w.Spec.TemplateId,
+		CimicodeGatewayUrl: w.Spec.CimicodeGatewayUrl,
+		BackendRuntime:     w.Spec.GetBackendRuntime(),
+		ContainerManaged:   w.Spec.DesiredContainerMan(),
+		ChannelPolicy:      w.Spec.ChannelPolicy,
+		ContainerState:     w.Status.ContainerState,
+		MatrixUserID:       w.Status.MatrixUserID,
+		RoomID:             w.Status.RoomID,
+		Message:            w.Status.Message,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

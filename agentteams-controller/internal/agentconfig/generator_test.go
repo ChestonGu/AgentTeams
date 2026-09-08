@@ -156,6 +156,91 @@ func TestGenerateOpenClawConfig_CustomModel(t *testing.T) {
 	}
 }
 
+// TestGenerateOpenClawConfig_BridgeSection covers the three bridge states:
+// full BridgeConfig emits all four keys verbatim, partial config omits empty
+// keys (omitempty), and a nil Bridge emits no bridge section at all. The
+// generator stays runtime-agnostic — gating happens in the deployer.
+func TestGenerateOpenClawConfig_BridgeSection(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "d",
+		MatrixServerURL: "http://m:8080",
+		AIGatewayURL:    "http://g:8080",
+	})
+
+	generate := func(t *testing.T, bridge *BridgeConfig) map[string]interface{} {
+		t.Helper()
+		data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+			WorkerName:  "w1",
+			MatrixToken: "tok",
+			GatewayKey:  "key",
+			Bridge:      bridge,
+		})
+		if err != nil {
+			t.Fatalf("GenerateOpenClawConfig: %v", err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		return config
+	}
+
+	t.Run("full bridge config", func(t *testing.T) {
+		bridge := generate(t, &BridgeConfig{
+			Runtime: BridgeRuntime{
+				BaseUrl:    "https://cimicode.example.com",
+				SessionId:  "sess-1",
+				SandboxId:  "sbx-1",
+				TemplateId: "tmpl-1",
+			},
+		})
+		section, ok := bridge["bridge"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge section missing: %v", bridge["bridge"])
+		}
+		runtime, ok := section["runtime"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge.runtime section missing: %v", section["runtime"])
+		}
+		for key, want := range map[string]string{
+			"baseUrl":    "https://cimicode.example.com",
+			"sessionId":  "sess-1",
+			"sandboxId":  "sbx-1",
+			"templateId": "tmpl-1",
+		} {
+			if got := runtime[key]; got != want {
+				t.Errorf("bridge.runtime.%s = %v, want %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("partial bridge config drops empty keys", func(t *testing.T) {
+		section, ok := generate(t, &BridgeConfig{Runtime: BridgeRuntime{BaseUrl: "https://cimicode.example.com"}})["bridge"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge section missing: %v", section)
+		}
+		runtime, ok := section["runtime"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge.runtime section missing: %v", section["runtime"])
+		}
+		if got := runtime["baseUrl"]; got != "https://cimicode.example.com" {
+			t.Errorf("bridge.runtime.baseUrl = %v", got)
+		}
+		for _, key := range []string{"sessionId", "sandboxId", "templateId"} {
+			if _, ok := runtime[key]; ok {
+				t.Errorf("bridge.runtime.%s should be omitted when empty", key)
+			}
+		}
+	})
+
+	t.Run("nil bridge config omits section", func(t *testing.T) {
+		config := generate(t, nil)
+		if _, ok := config["bridge"]; ok {
+			t.Errorf("bridge section should be absent for nil Bridge, got %v", config["bridge"])
+		}
+	})
+}
+
 func TestGenerateOpenClawConfig_WithEmbedding(t *testing.T) {
 	g := NewGenerator(Config{
 		MatrixDomain:    "d",

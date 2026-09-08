@@ -1813,6 +1813,42 @@ func TestHashAppliedWorkerSpec_ExcludesLifecycleAndIdlePolicy(t *testing.T) {
 	}
 }
 
+// TestHashAppliedWorkerSpec_ExcludesBridgeConfigFields asserts the bridge
+// binding fields are config-only: changing any of them (or setting them from
+// empty) must not change either applied-spec hash, so the worker pod is never
+// recreated when the bridge section of openclaw.json is re-projected. Image
+// remains the canary for pod-affecting fields.
+func TestHashAppliedWorkerSpec_ExcludesBridgeConfigFields(t *testing.T) {
+	base := v1beta1.WorkerSpec{
+		Model:   "qwen-plus",
+		Runtime: "cimicode-bridge",
+		Image:   "bridge:v1",
+	}
+	baseHash := hashAppliedWorkerSpec(base)
+	baseHashRR := hashAppliedWorkerSpecForRuntimeAndResources(base, "cimicode-bridge", nil)
+
+	changed := base
+	changed.CimicodeGatewayUrl = "https://cimicode.example.com"
+	changed.SessionId = "sess-1"
+	changed.SandboxId = "sbx-1"
+	changed.TemplateId = "tmpl-1"
+	if got := hashAppliedWorkerSpec(changed); got != baseHash {
+		t.Fatalf("bridge config fields must not affect hashAppliedWorkerSpec: got %q, want %q", got, baseHash)
+	}
+	if got := hashAppliedWorkerSpecForRuntimeAndResources(changed, "cimicode-bridge", nil); got != baseHashRR {
+		t.Fatalf("bridge config fields must not affect runtime+resources hash: got %q, want %q", got, baseHashRR)
+	}
+
+	changedImage := base
+	changedImage.Image = "bridge:v2"
+	if got := hashAppliedWorkerSpec(changedImage); got == baseHash {
+		t.Fatalf("Image change must still affect hashAppliedWorkerSpec: got %q", got)
+	}
+	if got := hashAppliedWorkerSpecForRuntimeAndResources(changedImage, "cimicode-bridge", nil); got == baseHashRR {
+		t.Fatalf("Image change must still affect runtime+resources hash: got %q", got)
+	}
+}
+
 func TestHashAppliedWorkerSpecForRuntimeQwenPawExcludesHotConfig(t *testing.T) {
 	state := "Running"
 	base := v1beta1.WorkerSpec{

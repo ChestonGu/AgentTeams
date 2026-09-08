@@ -428,6 +428,70 @@ func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 	}
 }
 
+// TestDeployTeamRuntimeConfigsCimiCodeBridgeMember pins the team-reconcile
+// runtime-config coverage decision: cimicode-bridge team members receive
+// runtime/runtime.yaml with the team section through the same
+// deployTeamRuntimeConfigs pass as copaw members (team info delivery parity —
+// copaw's taskflow/matrix_channel read the roster from runtime.yaml), while
+// non-managed runtimes (openclaw) remain skipped.
+func TestDeployTeamRuntimeConfigsCimiCodeBridgeMember(t *testing.T) {
+	ctx := context.Background()
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Deployer:       deployer,
+		DefaultRuntime: "openclaw",
+	}
+
+	mkWorker := func(name, rt string) v1beta1.Worker {
+		return v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       v1beta1.WorkerSpec{Runtime: rt, Model: "qwen"},
+			Status: v1beta1.WorkerStatus{
+				Phase:        "Running",
+				MatrixUserID: "@" + name + ":matrix.local",
+				RoomID:       "!room-" + name + ":matrix.local",
+			},
+		}
+	}
+	members := []teamWorkerMember{
+		{ref: v1beta1.TeamWorkerRef{Name: "lead", Role: "team_leader"}, worker: mkWorker("lead", "copaw"), runtimeName: "lead"},
+		{ref: v1beta1.TeamWorkerRef{Name: "cb"}, worker: mkWorker("cb", "cimicode-bridge"), runtimeName: "cb"},
+		{ref: v1beta1.TeamWorkerRef{Name: "oc"}, worker: mkWorker("oc", "openclaw"), runtimeName: "oc"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "cb"},
+				{Name: "oc"},
+			},
+		},
+	}
+	rooms := &service.TeamRoomResult{TeamRoomID: "!team:matrix.local", LeaderDMRoomID: "!dm:matrix.local"}
+
+	if err := r.deployTeamRuntimeConfigs(ctx, team, members, "lead", "team-a", "lead", rooms); err != nil {
+		t.Fatalf("deployTeamRuntimeConfigs: %v", err)
+	}
+
+	cbReq, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "cb")
+	if !ok {
+		t.Fatalf("cimicode-bridge member missing runtime config: %#v", deployer.Calls.DeployMemberRuntimeConfig)
+	}
+	if cbReq.Role != "worker" || cbReq.TeamRoomID != "!team:matrix.local" || cbReq.LeaderDMRoomID != "!dm:matrix.local" {
+		t.Errorf("cb runtime config missing team routing facts: %#v", cbReq)
+	}
+	if len(cbReq.TeamMembers) != 3 {
+		t.Errorf("cb TeamMembers=%d, want 3 (full roster incl. openclaw member)", len(cbReq.TeamMembers))
+	}
+	if _, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "lead"); !ok {
+		t.Fatalf("copaw leader missing runtime config: %#v", deployer.Calls.DeployMemberRuntimeConfig)
+	}
+	if _, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "oc"); ok {
+		t.Fatalf("openclaw member must not receive runtime config: %#v", deployer.Calls.DeployMemberRuntimeConfig)
+	}
+}
+
 func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) {
 	ctx := context.Background()
 
@@ -467,9 +531,9 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
-			Admin:        &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
+			Admin:         &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
 			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupAllowExtra: []string{"team-group-bot"}},
-			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
+			HumanMembers:  []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "lead", Role: "team_leader"},
 				{Name: "dev"},

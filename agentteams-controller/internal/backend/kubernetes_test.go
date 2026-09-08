@@ -630,6 +630,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
+		{"cimicode_bridge", RuntimeCimiCodeBridge, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"empty_default", "", "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 	}
 	for _, tc := range cases {
@@ -686,24 +687,27 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_cimicode_bridge", RuntimeCimiCodeBridge, "", "agentteams/cimicode-bridge-worker:latest", RuntimeCimiCodeBridge},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"empty_with_qwenpaw_fallback", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"empty_with_cimicode_bridge_fallback", "", RuntimeCimiCodeBridge, "agentteams/cimicode-bridge-worker:latest", RuntimeCimiCodeBridge},
 		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest", RuntimeOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:          "agentteams",
-				WorkerImage:        "agentteams/worker-agent:latest",
-				CopawWorkerImage:   "agentteams/copaw-worker:latest",
-				HermesWorkerImage:  "agentteams/hermes-worker:latest",
-				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-				WorkerCPU:          "1000m",
-				WorkerMemory:       "2Gi",
+				Namespace:                 "agentteams",
+				WorkerImage:               "agentteams/worker-agent:latest",
+				CopawWorkerImage:          "agentteams/copaw-worker:latest",
+				HermesWorkerImage:         "agentteams/hermes-worker:latest",
+				QwenPawWorkerImage:        "agentteams/qwenpaw-worker:latest",
+				CimiCodeBridgeWorkerImage: "agentteams/cimicode-bridge-worker:latest",
+				WorkerCPU:                 "1000m",
+				WorkerMemory:              "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{

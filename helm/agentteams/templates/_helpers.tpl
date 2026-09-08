@@ -213,6 +213,11 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
 {{- end }}
 
+{{- define "agentteams.worker.cimicodeImage" -}}
+{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.cimicodeBridge.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.cimicodeBridge.repository $tag }}
+{{- end }}
+
 {{- /* appservice.pushURL: the controller HTTP endpoint registered with the homeserver for AS transaction push. Empty = passwordless-only mode (no url field in the registration). Single source of truth for the synapse-appservice Secret and the controller env. */ -}}
 {{- define "agentteams.appservice.pushURL" -}}
 {{- .Values.matrix.appservice.pushURL | default "" -}}

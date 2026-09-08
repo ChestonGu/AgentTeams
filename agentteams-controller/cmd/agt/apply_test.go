@@ -106,3 +106,15 @@ func TestWorkerRuntimeHelpIncludesQwenPaw(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerRuntimeHelpIncludesCimiCodeBridge(t *testing.T) {
+	for name, usage := range map[string]string{
+		"create": createWorkerCmd().Flags().Lookup("runtime").Usage,
+		"apply":  applyWorkerSubCmd().Flags().Lookup("runtime").Usage,
+		"update": updateWorkerCmd().Flags().Lookup("runtime").Usage,
+	} {
+		if !strings.Contains(usage, "cimicode-bridge") {
+			t.Errorf("%s worker runtime help %q does not include cimicode-bridge", name, usage)
+		}
+	}
+}

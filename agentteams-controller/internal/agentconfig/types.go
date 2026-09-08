@@ -33,6 +33,29 @@ type HeartbeatConfig struct {
 	Every   string // e.g. "30m", "1h"
 }
 
+// BridgeConfig is the "bridge" section embedded in openclaw.json for
+// cimicode-bridge workers: the external gateway binding consumed by the
+// stateless bridge container. The binding lives under a nested "runtime"
+// key — the bridge team's read contract (2026-09-08):
+//
+//	"bridge": { "runtime": { "baseUrl": ..., "sessionId": ...,
+//	                         "sandboxId": ..., "templateId": ... } }
+//
+// baseUrl carries the CRD spec field cimicodeGatewayUrl; the three id
+// fields keep their CRD names verbatim.
+type BridgeConfig struct {
+	Runtime BridgeRuntime `json:"runtime"`
+}
+
+// BridgeRuntime holds the bridge runtime binding fields. Empty fields are
+// omitted from the section.
+type BridgeRuntime struct {
+	BaseUrl    string `json:"baseUrl,omitempty"`
+	SessionId  string `json:"sessionId,omitempty"`
+	SandboxId  string `json:"sandboxId,omitempty"`
+	TemplateId string `json:"templateId,omitempty"`
+}
+
 // WorkerConfigRequest describes everything needed to generate a worker's config files.
 type WorkerConfigRequest struct {
 	WorkerName     string           // e.g. "worker-alice"
@@ -43,7 +66,8 @@ type WorkerConfigRequest struct {
 	TeamLeaderName string           // if non-empty, this is a team worker
 	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
 	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
-	Runtime        string           // agent runtime (openclaw | copaw | hermes | qwenpaw)
+	Bridge         *BridgeConfig    // optional: external gateway binding (cimicode-bridge runtime); emitted verbatim as the top-level "bridge" key when non-nil
+	Runtime        string           // agent runtime (openclaw | copaw | hermes | qwenpaw | cimicode-bridge)
 }
 
 // ChannelPolicy describes additive/subtractive communication rules.

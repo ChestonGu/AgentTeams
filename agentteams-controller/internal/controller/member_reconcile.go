@@ -495,15 +495,16 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
-		Name:           m.RuntimeName,
-		Spec:           m.Spec,
-		Role:           m.Role.String(),
-		MatrixToken:    state.ProvResult.MatrixToken,
-		GatewayKey:     state.ProvResult.GatewayKey,
-		MatrixPassword: state.ProvResult.MatrixPassword,
-		McpServers:     m.Spec.McpServers,
-		IsUpdate:       m.IsUpdate,
-		AIGatewayURL:   aiGatewayURL,
+		Name:             m.RuntimeName,
+		Spec:             m.Spec,
+		Role:             m.Role.String(),
+		EffectiveRuntime: effectiveRuntime,
+		MatrixToken:      state.ProvResult.MatrixToken,
+		GatewayKey:       state.ProvResult.GatewayKey,
+		MatrixPassword:   state.ProvResult.MatrixPassword,
+		McpServers:       m.Spec.McpServers,
+		IsUpdate:         m.IsUpdate,
+		AIGatewayURL:     aiGatewayURL,
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}

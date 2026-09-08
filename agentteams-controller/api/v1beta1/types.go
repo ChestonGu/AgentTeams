@@ -178,23 +178,34 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | cimicode-bridge (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 
 	// SessionId is the external session identifier this worker is bound to
-	// (for example an AgentLoop session). Informational; does not affect the
-	// worker pod spec.
+	// (for example an AgentLoop session). For cimicode-bridge workers it is
+	// projected into the bridge section of agents/<name>/openclaw.json;
+	// otherwise informational. Does not affect the worker pod spec.
 	SessionId string `json:"sessionId,omitempty"`
 
 	// SandboxId is the external sandbox/environment identifier this worker
-	// runs in. Informational; does not affect the worker pod spec.
+	// runs in. For cimicode-bridge workers it is projected into the bridge
+	// section of agents/<name>/openclaw.json; otherwise informational.
+	// Does not affect the worker pod spec.
 	SandboxId string `json:"sandboxId,omitempty"`
 
 	// TemplateId is the agent template ID this worker was created from.
-	// Informational; does not affect the worker pod spec.
+	// For cimicode-bridge workers it is projected into the bridge section of
+	// agents/<name>/openclaw.json; otherwise informational. Does not affect
+	// the worker pod spec.
 	TemplateId string `json:"templateId,omitempty"`
+
+	// CimicodeGatewayUrl is the external cimicode gateway endpoint for
+	// cimicode-bridge workers. Config-only: projected into the bridge section
+	// of agents/<name>/openclaw.json during reconcile; excluded from the
+	// applied-spec hash and does not affect the worker pod spec.
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
 
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`

@@ -548,6 +548,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			wantImage: "qwenpaw:v4",
 		},
 		{
+			name:      "cimicode bridge runtime",
+			runtime:   RuntimeCimiCodeBridge,
+			config:    SandboxConfig{WorkerImage: "default:latest", CimiCodeBridgeWorkerImage: "cimicode-bridge:v5"},
+			wantImage: "cimicode-bridge:v5",
+		},
+		{
 			name:      "default worker image",
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",
@@ -575,6 +581,31 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 				t.Errorf("inplaceUpdate=%+v, want image %q", plugin.createClaimSpec.InplaceUpdate, tt.wantImage)
 			}
 		})
+	}
+}
+
+// TestSandboxBackend_Create_RuntimeLabelForCimiCodeBridge guards the
+// defaultRuntime() mapping: a cimicode-bridge create must stamp
+// agentteams.io/runtime=cimicode-bridge on the claim instead of falling
+// through to the openclaw default (the openhuman mislabel is the cautionary
+// precedent for forgetting the switch case).
+func TestSandboxBackend_Create_RuntimeLabelForCimiCodeBridge(t *testing.T) {
+	plugin := &fakeSandboxPlugin{}
+	backend := NewSandboxBackend(
+		plugin,
+		sandbox.ProviderConfig{Namespace: "test-ns", DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())},
+		SandboxConfig{Namespace: "test-ns", WorkerImage: "default:latest", CimiCodeBridgeWorkerImage: "bridge:v1"},
+		"prefix-",
+		nil,
+		newFakeK8sCoreClient(),
+		nil,
+	)
+
+	if _, err := backend.Create(context.Background(), CreateRequest{Name: "w1", Runtime: RuntimeCimiCodeBridge}); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	if got := plugin.createClaimSpec.Labels[v1beta1.LabelRuntime]; got != RuntimeCimiCodeBridge {
+		t.Fatalf("runtime label = %q, want %q", got, RuntimeCimiCodeBridge)
 	}
 }
 

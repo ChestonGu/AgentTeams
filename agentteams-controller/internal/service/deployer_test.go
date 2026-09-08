@@ -217,6 +217,304 @@ func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
 	}
 }
 
+// TestDeployWorkerConfigCimiCodeBridgeIdentityOwnsSoul pins the
+// inlineOwnsSoul predicate extension: a cimicode-bridge worker with only
+// spec.identity set (no spec.soul) owns SOUL.md the same way copaw/hermes
+// do — the locally merged SOUL.md (identity prepended by WriteInlineConfigs)
+// is pushed to OSS instead of falling back to the seed-only branch, which
+// would keep the stored version untouched.
+func TestDeployWorkerConfigCimiCodeBridgeIdentityOwnsSoul(t *testing.T) {
+	ctx := context.Background()
+	writeLocalSoul := func(agentFSDir, name string) {
+		workerDir := filepath.Join(agentFSDir, name)
+		if err := os.MkdirAll(workerDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		// What WriteInlineConfigs produces locally for mergeIdentityIntoSoul
+		// runtimes: identity prepended, no separate IDENTITY.md.
+		if err := os.WriteFile(filepath.Join(workerDir, "SOUL.md"), []byte("ID HEADER\n\nSOUL BODY\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("cimicode-bridge identity-only pushes merged local SOUL.md", func(t *testing.T) {
+		tmp := t.TempDir()
+		agentFSDir := filepath.Join(tmp, "agents")
+		writeLocalSoul(agentFSDir, "cb-worker")
+
+		store := ossfake.NewMemory()
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+			AgentFSDir:  agentFSDir,
+		})
+		err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "cb-worker",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			IsUpdate:         true,
+			EffectiveRuntime: "cimicode-bridge",
+			Spec: v1beta1.WorkerSpec{
+				Runtime:  "cimicode-bridge",
+				Identity: "ID HEADER",
+			},
+		})
+		if err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/cb-worker/SOUL.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(got), "ID HEADER") || !strings.Contains(string(got), "SOUL BODY") {
+			t.Fatalf("SOUL.md missing merged identity/soul content: %s", got)
+		}
+	})
+
+	t.Run("openclaw identity-only stays seed-only", func(t *testing.T) {
+		tmp := t.TempDir()
+		agentFSDir := filepath.Join(tmp, "agents")
+		writeLocalSoul(agentFSDir, "oc-worker")
+
+		store := ossfake.NewMemory()
+		if err := store.PutObject(ctx, "agents/oc-worker/SOUL.md", []byte("OSS SEED")); err != nil {
+			t.Fatal(err)
+		}
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+			AgentFSDir:  agentFSDir,
+		})
+		err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:        "oc-worker",
+			MatrixToken: "matrix-token",
+			GatewayKey:  "gateway-key",
+			IsUpdate:    true,
+			Spec: v1beta1.WorkerSpec{
+				Runtime:  "openclaw",
+				Identity: "ID HEADER",
+			},
+		})
+		if err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/oc-worker/SOUL.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(got), "SOUL BODY") {
+			t.Fatalf("openclaw identity-only must not overwrite stored SOUL.md: %s", got)
+		}
+	})
+}
+
+// TestBuiltinAgentDirCimiCodeBridgeSharesCopawTemplate pins the builtin
+// template selection: cimicode-bridge workers use the copaw worker template
+// (task-protocol AGENTS.md and coordination skills), matching the copaw file
+// shape the reconcile already produces — instead of the openclaw default.
+func TestBuiltinAgentDirCimiCodeBridgeSharesCopawTemplate(t *testing.T) {
+	d := NewDeployer(DeployerConfig{WorkerAgentDir: filepath.Join("templates", "worker-agent")})
+	got := d.builtinAgentDir("worker", "cimicode-bridge")
+	want := filepath.Join("templates", "copaw-worker-agent")
+	if got != want {
+		t.Fatalf("builtinAgentDir(worker, cimicode-bridge)=%q, want %q", got, want)
+	}
+}
+
+// TestDeployWorkerConfigWritesBridgeSectionForCimiCodeBridgeRuntime covers
+// the deployer-side gating of the bridge section: only emitted when
+// EffectiveRuntime is cimicode-bridge and at least one bridge field is set.
+// A non-bridge runtime with the same spec fields must not emit the section,
+// and a stale bridge stored in an existing openclaw.json must be overwritten
+// by the regenerated values (mergeUserPluginConfig only preserves
+// plugins.*/channels from the stored file).
+func TestDeployWorkerConfigWritesBridgeSectionForCimiCodeBridgeRuntime(t *testing.T) {
+	ctx := context.Background()
+	bridgeSpec := v1beta1.WorkerSpec{
+		Runtime:            "cimicode-bridge",
+		CimicodeGatewayUrl: "https://cimicode.example.com",
+		SessionId:          "sess-1",
+		SandboxId:          "sbx-1",
+		TemplateId:         "tmpl-1",
+	}
+
+	t.Run("cimicode-bridge runtime writes bridge section", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+		})
+		if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "alice",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			EffectiveRuntime: "cimicode-bridge",
+			Spec:             bridgeSpec,
+		}); err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/alice/openclaw.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(got, &config); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		section, ok := config["bridge"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge section missing: %s", got)
+		}
+		runtime, ok := section["runtime"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge.runtime section missing: %s", got)
+		}
+		for key, want := range map[string]string{
+			"baseUrl":    "https://cimicode.example.com",
+			"sessionId":  "sess-1",
+			"sandboxId":  "sbx-1",
+			"templateId": "tmpl-1",
+		} {
+			if got := runtime[key]; got != want {
+				t.Errorf("bridge.runtime.%s = %v, want %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("openclaw runtime with same fields omits bridge section", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+		})
+		spec := bridgeSpec
+		spec.Runtime = "openclaw"
+		if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "alice",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			EffectiveRuntime: "openclaw",
+			Spec:             spec,
+		}); err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/alice/openclaw.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(got, &config); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if _, ok := config["bridge"]; ok {
+			t.Fatalf("bridge section must not be emitted for openclaw runtime: %s", got)
+		}
+	})
+
+	t.Run("cimicode-bridge runtime with empty fields omits bridge section", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+		})
+		if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "alice",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			EffectiveRuntime: "cimicode-bridge",
+		}); err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/alice/openclaw.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(got), "bridge") {
+			t.Fatalf("bridge section must not be emitted when all fields are empty: %s", got)
+		}
+	})
+
+	t.Run("stale stored bridge is overwritten by regenerated values", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		if err := store.PutObject(ctx, "agents/alice/openclaw.json", []byte(`{"bridge":{"cimicodeGatewayUrl":"https://stale.example.com","sessionId":"old"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+		})
+		if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "alice",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			EffectiveRuntime: "cimicode-bridge",
+			Spec:             bridgeSpec,
+		}); err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/alice/openclaw.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(got, &config); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		section, ok := config["bridge"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge section missing: %s", got)
+		}
+		runtime, ok := section["runtime"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("bridge.runtime section missing: %s", got)
+		}
+		if got := runtime["baseUrl"]; got != "https://cimicode.example.com" {
+			t.Errorf("bridge.runtime.baseUrl = %v, want regenerated value", got)
+		}
+		if got := runtime["sessionId"]; got != "sess-1" {
+			t.Errorf("bridge.runtime.sessionId = %v, want regenerated value", got)
+		}
+	})
+
+	t.Run("stale stored bridge disappears when runtime switches away", func(t *testing.T) {
+		store := ossfake.NewMemory()
+		if err := store.PutObject(ctx, "agents/alice/openclaw.json", []byte(`{"bridge":{"gatewayUrl":"https://stale.example.com"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		deployer := NewDeployer(DeployerConfig{
+			AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+			OSS:         store,
+		})
+		if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+			Name:             "alice",
+			MatrixToken:      "matrix-token",
+			GatewayKey:       "gateway-key",
+			EffectiveRuntime: "openclaw",
+			Spec:             v1beta1.WorkerSpec{Runtime: "openclaw"},
+		}); err != nil {
+			t.Fatalf("DeployWorkerConfig failed: %v", err)
+		}
+
+		got, err := store.GetObject(ctx, "agents/alice/openclaw.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(got, &config); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if _, ok := config["bridge"]; ok {
+			t.Fatalf("stale bridge section must be dropped after runtime switch: %s", got)
+		}
+	})
+}
+
 func TestDeployWorkerConfigMergesMcporterConfigPreservingExternalMCP(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()

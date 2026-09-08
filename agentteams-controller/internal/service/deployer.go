@@ -16,6 +16,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
@@ -35,6 +36,12 @@ type WorkerDeployRequest struct {
 	TeamRoomID     string
 	LeaderDMRoomID string
 	TeamMembers    []RuntimeConfigTeamMember
+
+	// EffectiveRuntime is the member's runtime resolved against the cluster
+	// default (backend.ResolveRuntime(spec.Runtime, defaultRuntime)), supplied
+	// by the caller. Gates runtime-scoped config sections (bridge). Spec.Runtime
+	// stays the raw CR value.
+	EffectiveRuntime string
 
 	// From provisioning
 	MatrixToken    string
@@ -341,6 +348,24 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
+	// Bridge section (cimicode-bridge): project the external gateway binding
+	// into openclaw.json. Gated on the effective runtime (respects the cluster
+	// default when spec.runtime is empty) and on at least one field being set —
+	// an all-empty bridge emits no section (out-of-band gateway configuration).
+	var bridge *agentconfig.BridgeConfig
+	if req.EffectiveRuntime == backend.RuntimeCimiCodeBridge &&
+		(req.Spec.CimicodeGatewayUrl != "" || req.Spec.SessionId != "" ||
+			req.Spec.SandboxId != "" || req.Spec.TemplateId != "") {
+		bridge = &agentconfig.BridgeConfig{
+			Runtime: agentconfig.BridgeRuntime{
+				BaseUrl:    req.Spec.CimicodeGatewayUrl,
+				SessionId:  req.Spec.SessionId,
+				SandboxId:  req.Spec.SandboxId,
+				TemplateId: req.Spec.TemplateId,
+			},
+		}
+	}
+
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:     req.Name,
 		MatrixToken:    req.MatrixToken,
@@ -350,6 +375,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		TeamLeaderName: req.TeamLeaderName,
 		ChannelPolicy:  channelPolicy,
 		Heartbeat:      req.Heartbeat,
+		Bridge:         bridge,
 		Runtime:        req.Spec.Runtime,
 	})
 	if err != nil {
@@ -392,7 +418,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// in InjectCoordinationContext, so skip here.
 	if req.Role != "team_leader" {
 		soulKey := agentPrefix + "/SOUL.md"
-		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes") || strings.EqualFold(req.Spec.Runtime, "cimicode-bridge")) && req.Spec.Identity != "")
 		// Try external config ref if no inline soul
 		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")
@@ -1492,7 +1518,7 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 		return filepath.Join(baseDir, "team-leader-agent")
 	default:
 		switch runtime {
-		case "copaw":
+		case "copaw", "cimicode-bridge":
 			return filepath.Join(baseDir, "copaw-worker-agent")
 		case "hermes":
 			return filepath.Join(baseDir, "hermes-worker-agent")

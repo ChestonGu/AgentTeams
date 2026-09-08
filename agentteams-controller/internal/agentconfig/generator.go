@@ -182,6 +182,14 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		defaults["heartbeat"] = hb
 	}
 
+	// Bridge section (cimicode-bridge): external gateway binding for the
+	// stateless bridge container. The deployer gates this on the effective
+	// runtime; the generator stays runtime-agnostic and emits the request
+	// value verbatim. Struct omitempty tags drop empty keys.
+	if req.Bridge != nil {
+		config["bridge"] = req.Bridge
+	}
+
 	// Add supports_multimodal based on the selected model's capabilities.
 	// The OpenClaw runtime strictly validates agents.defaults and does not
 	// recognize these keys — only emit them for runtimes that consume them.

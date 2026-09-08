@@ -110,6 +110,91 @@ func TestUpdateWorkerPreservesResources(t *testing.T) {
 	assertAgentResources(t, got.Spec.Resources, "300m", "768Mi", "3", "5Gi")
 }
 
+// TestCreateWorkerMapsBridgeConfigFields locks the HTTP surface of the
+// cimicode-bridge runtime: POST must materialize runtime + the four bridge
+// fields into the Worker CR spec and echo them back in the response.
+func TestCreateWorkerMapsBridgeConfigFields(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"name":"bridge-worker",
+		"model":"qwen3.5-plus",
+		"runtime":"cimicode-bridge",
+		"cimicodeGatewayUrl":"https://cimicode.example.com",
+		"sessionId":"sess-1",
+		"sandboxId":"sbx-1",
+		"templateId":"tmpl-1"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var worker v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "bridge-worker", Namespace: "default"}, &worker); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if worker.Spec.Runtime != "cimicode-bridge" {
+		t.Fatalf("runtime = %q, want cimicode-bridge", worker.Spec.Runtime)
+	}
+	if worker.Spec.CimicodeGatewayUrl != "https://cimicode.example.com" {
+		t.Fatalf("cimicodeGatewayUrl = %q", worker.Spec.CimicodeGatewayUrl)
+	}
+	if worker.Spec.SessionId != "sess-1" || worker.Spec.SandboxId != "sbx-1" || worker.Spec.TemplateId != "tmpl-1" {
+		t.Fatalf("bridge ID fields = %q/%q/%q", worker.Spec.SessionId, worker.Spec.SandboxId, worker.Spec.TemplateId)
+	}
+
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Runtime != "cimicode-bridge" || resp.CimicodeGatewayUrl != "https://cimicode.example.com" ||
+		resp.SessionId != "sess-1" || resp.SandboxId != "sbx-1" || resp.TemplateId != "tmpl-1" {
+		t.Fatalf("response missing bridge fields: %#v", resp)
+	}
+}
+
+// TestUpdateWorkerBridgeConfigFieldsNonEmptyOverwrite: PUT overwrites bridge
+// fields only when non-empty (sending "" is a no-op — the fields cannot be
+// cleared via the HTTP API, by design).
+func TestUpdateWorkerBridgeConfigFieldsNonEmptyOverwrite(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "bridge-worker"
+	worker.Namespace = "default"
+	worker.Spec.Model = "qwen3.5-plus"
+	worker.Spec.Runtime = "cimicode-bridge"
+	worker.Spec.CimicodeGatewayUrl = "https://old.example.com"
+	worker.Spec.SessionId = "old-sess"
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	// Non-empty gatewayUrl overwrites; empty sessionId is a no-op.
+	body := []byte(`{"cimicodeGatewayUrl":"https://new.example.com","sessionId":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/bridge-worker", bytes.NewReader(body))
+	req.SetPathValue("name", "bridge-worker")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "bridge-worker", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if got.Spec.CimicodeGatewayUrl != "https://new.example.com" {
+		t.Fatalf("cimicodeGatewayUrl = %q, want overwritten value", got.Spec.CimicodeGatewayUrl)
+	}
+	if got.Spec.SessionId != "old-sess" {
+		t.Fatalf("sessionId = %q, empty PUT value must be a no-op", got.Spec.SessionId)
+	}
+}
+
 func TestCreateTeamDoesNotOwnWorkerRuntimeConfig(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{

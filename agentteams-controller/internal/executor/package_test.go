@@ -160,6 +160,33 @@ func TestWriteInlineConfigs_CoPawIdentityOnly(t *testing.T) {
 	assertFileContent(t, filepath.Join(dir, "SOUL.md"), "identity only")
 }
 
+func TestWriteInlineConfigs_AllFields_CimiCodeBridge(t *testing.T) {
+	dir := t.TempDir()
+
+	err := WriteInlineConfigs(dir, "cimicode-bridge", "identity content", "soul content", "agents content")
+	if err != nil {
+		t.Fatalf("WriteInlineConfigs failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "IDENTITY.md")); err == nil {
+		t.Error("IDENTITY.md should not exist for cimicode-bridge runtime")
+	}
+
+	soulData, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("failed to read SOUL.md: %v", err)
+	}
+	soul := string(soulData)
+	if !strings.HasPrefix(soul, "identity content") {
+		t.Errorf("SOUL.md should start with identity content, got: %s", soul[:min(len(soul), 50)])
+	}
+	if !strings.Contains(soul, "soul content") {
+		t.Error("SOUL.md should contain soul content")
+	}
+
+	assertFileContains(t, filepath.Join(dir, "AGENTS.md"), "agents content")
+}
+
 func TestWriteInlineConfigs_AllFields_Hermes(t *testing.T) {
 	dir := t.TempDir()
 
