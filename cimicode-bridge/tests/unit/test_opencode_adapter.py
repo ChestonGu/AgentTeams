@@ -291,17 +291,3 @@ class TestGeneratorPrompt:
     def test_missing_generator_fail_loud(self):
         with pytest.raises(GenerateAgentMdError):
             build_agent_md_via_generator(runtime_yaml=RUNTIME_YAML, generator_path="/nonexistent/g.py")
-
-    def test_real_generator_render_with_user_md(self):
-        agent_md = build_agent_md_via_generator(
-            runtime_yaml=RUNTIME_YAML,
-            soul_md="Be terse.",
-            user_md={"AGENTS.md": "custom rules tail", "TOOL.md": "tool foobar"},
-            generator_path=str(GENERATOR),
-        )
-        assert "## Persona" in agent_md
-        assert "### User Provided — AGENTS.md" in agent_md
-        assert "custom rules tail" in agent_md
-        assert "### User Provided — TOOL.md" in agent_md
-        assert "tool foobar" in agent_md
-        assert "{{" not in agent_md

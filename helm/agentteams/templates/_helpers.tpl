@@ -166,12 +166,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "agentteams.higress.gatewayURL" -}}
-{{- $port := 80 }}
-{{- if and .Values.higress (index .Values.higress "higress-core") }}
-{{- $gw := index (index .Values.higress "higress-core") "gateway" | default dict }}
-{{- $port = $gw.httpPort | default 80 }}
-{{- end }}
-{{- printf "http://higress-gateway.%s.svc.cluster.local:%d" (include "agentteams.namespace" .) ($port | int) }}
+{{/* In-cluster gateway URL must use the gateway *Service* port, not the
+     pod-side httpPort: with global.local the chart binds hostPort=httpPort,
+     and moving httpPort to dodge a host conflict (e.g. 18080 beside a
+     production gateway on 80) must not leak into the URL workers call —
+     the Service still listens on port 80. Override via gateway.internalPort
+     if the Service port itself ever changes. */ -}}
+{{- $port := (.Values.gateway.internalPort | default 80) | int }}
+{{- printf "http://higress-gateway.%s.svc.cluster.local:%d" (include "agentteams.namespace" .) $port }}
 {{- end }}
 
 {{/* ── ServiceAccount helpers ──────────────────────────────────────────── */}}

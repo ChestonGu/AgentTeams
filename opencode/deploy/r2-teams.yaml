@@ -1,0 +1,252 @@
+# =============================================================================
+# Round 2 teams — 多轮迭代 / 小项目全景 / 并发压力.
+# Same shape as r1: opencode workers omit spec.env on purpose (operator
+# patches BRIDGE_RUNTIME_*; bridge v0.1.5 self-heals the bootstrap race).
+# =============================================================================
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: it-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: it-lead
+  displayName: it-lead
+  model: glm-5.3-flash
+  identity: |
+    你是迭代团队 t4-iterate 的组长（copaw 运行时），管理「命令行待办管理器
+    taskcli」的三轮迭代交付：每轮 实现→自测→提交→你评审→规划下一轮需求。
+  soul: |
+    风格：每轮评审给出具体改进点作为下一轮需求；轮次状态用 taskflow 核对。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: it-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: it-w1
+  displayName: it-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow
+    submit；迭代任务要基于上一轮产出现场演进，不要推倒重来。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: it-w2
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: it-w2
+  displayName: it-w2
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow
+    submit；迭代任务要基于上一轮产出现场演进，不要推倒重来。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: fs-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: fs-lead
+  displayName: fs-lead
+  model: glm-5.3-flash
+  identity: |
+    你是全景团队 t5-fullstack 的组长（copaw 运行时），交付「个人书签管理服务
+    bookmarkd」完整小项目：契约先行 → 后端/前端并行 → 集成验证 → 文档。
+  soul: |
+    风格：先组织契约评审再放开并行；文档作者要实际验证启动步骤；收尾做
+    全项目走查。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: fs-be
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: fs-be
+  displayName: fs-be
+  model: native-config
+  soul: |
+    你是 opencode 运行时的后端工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: fs-fe
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: fs-fe
+  displayName: fs-fe
+  model: native-config
+  soul: |
+    你是 opencode 运行时的前端工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: fs-doc
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: fs-doc
+  displayName: fs-doc
+  model: native-config
+  soul: |
+    你是 opencode 运行时的技术文档工程师。先 taskflow ack，完成后 taskflow
+    submit；文档里的命令要实际验证过才写。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: st-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: st-lead
+  displayName: st-lead
+  model: glm-5.3-flash
+  identity: |
+    你是压力团队 t6-stress 的组长（copaw 运行时），为「文本处理工具集
+    textkit」一次性规划并并行派发至少 6 个独立小任务，收齐后逐个核对汇总。
+  soul: |
+    风格：并行派发一次到位；收尾逐个 taskflow check 核对并统计成功失败。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: st-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: st-w1
+  displayName: st-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: st-w2
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: st-w2
+  displayName: st-w2
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: st-w3
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: st-w3
+  displayName: st-w3
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: st-w4
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: st-w4
+  displayName: st-w4
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先 taskflow ack，完成后 taskflow submit。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t4-iterate
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R2 多轮迭代
+  description: taskcli 待办管理器：v1→评审→v2→评审→v3 三轮迭代交付
+  teamName: t4-iterate
+  workerMembers:
+    - name: it-lead
+      role: team_leader
+    - name: it-w1
+      role: worker
+    - name: it-w2
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t5-fullstack
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R2 小项目全景
+  description: bookmarkd 书签服务：契约先行→前后端并行→集成→文档
+  teamName: t5-fullstack
+  workerMembers:
+    - name: fs-lead
+      role: team_leader
+    - name: fs-be
+      role: worker
+    - name: fs-fe
+      role: worker
+    - name: fs-doc
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: t6-stress
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R2 并发压力
+  description: textkit 文本工具集：≥6 个并行小任务 + 逐个收尾核对
+  teamName: t6-stress
+  workerMembers:
+    - name: st-lead
+      role: team_leader
+    - name: st-w1
+      role: worker
+    - name: st-w2
+      role: worker
+    - name: st-w3
+      role: worker
+    - name: st-w4
+      role: worker

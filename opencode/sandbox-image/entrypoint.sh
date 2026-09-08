@@ -14,5 +14,17 @@ cd "$WORKDIR"
 
 export AGENTTEAMS_FS_ROOT="$WORKDIR"
 
+# Publish the skill tree to the shared workdir as opencode *project* skills:
+# the opencode service pod (cwd=$WORKDIR) natively discovers
+# .opencode/skills/<name>/SKILL.md and exposes them via its skill tool, so
+# the agent actually reads the skill docs instead of falling back to the
+# AGENTS.md protocol text. The image copy is authoritative — re-synced on
+# every sandbox start.
+if [ -d /opt/agentteams/skills ]; then
+    mkdir -p "$WORKDIR/.opencode/skills"
+    cp -rf /opt/agentteams/skills/. "$WORKDIR/.opencode/skills/"
+    echo "[sandbox] skills published to $WORKDIR/.opencode/skills ($(ls "$WORKDIR/.opencode/skills" | wc -l) entries)"
+fi
+
 echo "[sandbox] workdir=$WORKDIR helper_port=$HELPER_PORT"
 exec python3 /opt/agentteams/sandbox_helper.py

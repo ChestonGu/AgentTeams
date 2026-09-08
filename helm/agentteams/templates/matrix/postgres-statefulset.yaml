@@ -30,6 +30,10 @@ spec:
       labels:
         {{- include "agentteams.component.selectorLabels" (dict "root" . "component" "synapse-postgres") | nindent 8 }}
     spec:
+      {{- with .Values.matrix.synapse.postgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: postgres
           image: "{{ .Values.matrix.synapse.postgres.image.repository }}:{{ .Values.matrix.synapse.postgres.image.tag }}"
@@ -47,6 +51,10 @@ spec:
             exec: { command: ["pg_isready", "-U", "synapse"] }
             initialDelaySeconds: 5
             periodSeconds: 5
+          {{- with .Values.matrix.synapse.postgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

@@ -179,47 +179,39 @@ class TestEnvOverrides:
         assert app.config.runtime.helper_url == ""
 
 
-class TestUserMdLoading:
-    """User customization files (AGENTS.md tail / TOOL.md / IDENTITY.md)."""
 
-    def test_user_md_forwarded_on_managed_path(self, monkeypatch):
-        objects = {
-            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
-            "agents/w1/AGENTS.md": (
-                "<!-- agentteams-builtin-start -->\ncanonical\n"
-                "<!-- agentteams-builtin-end -->\nuser custom rules here"
-            ),
-            "agents/w1/TOOL.md": "internal tool: foobar",
-        }
-        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
-        assert cfg is not None
-        assert cfg.user_md == {
-            "AGENTS.md": "user custom rules here",
-            "TOOL.md": "internal tool: foobar",
-        }
+class TestOpencodeSelfProvision:
+    def test_derive_urls_from_worker_name(self, monkeypatch):
+        from cimicode_bridge.app import BridgeApp
 
-    def test_agents_md_without_marker_uses_whole_file(self, monkeypatch):
-        objects = {
-            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
-            "agents/w1/AGENTS.md": "plain user file",
-        }
-        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
-        assert cfg is not None
-        assert cfg.user_md == {"AGENTS.md": "plain user file"}
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w9")
+        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL", "BRIDGE_RUNTIME_HELPER_URL", "AGENTTEAMS_FS_ENDPOINT"):
+            monkeypatch.delenv(key, raising=False)
+        app = BridgeApp()
+        app.start()
+        assert app.config.runtime.adapter == "cimicode"  # no yaml yet at boot
+        # simulate the yaml-based self-provision used by the recovery loop
+        app.config.runtime.adapter = "opencode"
+        app._derive_opencode_urls()
+        assert app.config.runtime.base_url == "http://opencode-w9-svc:4096"
+        assert app.config.runtime.helper_url == "http://opencode-w9-sandbox-svc:4097"
 
-    def test_canonical_only_agents_md_skipped(self, monkeypatch):
-        objects = {
-            "agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n",
-            "agents/w1/AGENTS.md": (
-                "<!-- agentteams-builtin-start -->\ncanonical\n<!-- agentteams-builtin-end -->\n"
-            ),
-        }
-        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
-        assert cfg is not None
-        assert cfg.user_md == {}
+    def test_env_overrides_win_over_derived(self, monkeypatch):
+        from cimicode_bridge.app import BridgeApp
 
-    def test_no_user_files_yields_empty_dict(self, monkeypatch):
-        objects = {"agents/w1/runtime/runtime.yaml": "member:\n  runtime: opencode\n"}
-        cfg = _bootstrap(objects, monkeypatch).load(retries=1)
-        assert cfg is not None
-        assert cfg.user_md == {}
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w9")
+        monkeypatch.setenv("BRIDGE_RUNTIME_ADAPTER", "opencode")
+        monkeypatch.setenv("BRIDGE_RUNTIME_BASE_URL", "http://custom:4096")
+        monkeypatch.delenv("BRIDGE_RUNTIME_HELPER_URL", raising=False)
+        monkeypatch.delenv("AGENTTEAMS_FS_ENDPOINT", raising=False)
+        app = BridgeApp()
+        app.start()
+        assert app.config.runtime.base_url == "http://custom:4096"
+        assert app.config.runtime.helper_url == "http://opencode-w9-sandbox-svc:4097"
+
+    def test_managed_runtime_type(self):
+        from cimicode_bridge.bootstrap import managed_runtime_type
+
+        assert managed_runtime_type("member:\n  runtime: opencode\n") == "opencode"
+        assert managed_runtime_type("member: [broken") == ""
+        assert managed_runtime_type("") == ""

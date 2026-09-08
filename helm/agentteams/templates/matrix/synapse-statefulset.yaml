@@ -17,6 +17,10 @@ spec:
       labels:
         {{- include "agentteams.component.selectorLabels" (dict "root" . "component" "synapse") | nindent 8 }}
     spec:
+      {{- with .Values.matrix.synapse.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         # Generate the signing key (and any missing secrets) into the data
         # volume on first boot. Idempotent: a no-op when the key already exists.

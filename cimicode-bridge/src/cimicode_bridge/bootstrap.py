@@ -12,6 +12,23 @@ from minio import Minio
 logger = logging.getLogger(__name__)
 
 
+def managed_runtime_type(runtime_yaml: str) -> str:
+    """Return member.runtime from a MemberRuntimeConfig snapshot ("" on error).
+
+    The managed runtime.yaml is the authoritative statement of a worker's
+    runtime type — the recovery loop uses it to self-provision the opencode
+    adapter when the operator's BRIDGE_RUNTIME_* env has not landed yet.
+    """
+    try:
+        import yaml
+
+        doc = yaml.safe_load(runtime_yaml) or {}
+        member = doc.get("member") or {}
+        return str(member.get("runtime") or "")
+    except Exception:
+        return ""
+
+
 def inline_persona(runtime_yaml: str) -> tuple[str, str]:
     """Extract (soul, identity-as-profile) from a MemberRuntimeConfig snapshot.
 
@@ -40,11 +57,6 @@ class WorkerBootstrapConfig:
     soul_md: str = ""
     profile_md: str = ""
     runtime_yaml: str = ""
-    # User-provided customization files (agents/<name>/{AGENTS.md,TOOL.md,
-    # IDENTITY.md,...}) forwarded to the agent.md generator. AGENTS.md is
-    # special: AgentTeams manages the canonical builtin block, so only the
-    # free-form tail after the builtin-end marker is treated as user content.
-    user_md: dict[str, str] | None = None
 
     @property
     def matrix_config(self) -> dict[str, Any]:
@@ -133,36 +145,6 @@ class S3Bootstrap:
             logger.warning("failed to read bootstrap object %s: %s", name, exc)
             return None
 
-    # User customization files surfaced into the generated agent.md. The
-    # copaw/openclaw ecosystem historically offered AGENTS.md (system
-    # template + free-form user tail) plus optional IDENTITY.md and
-    # TOOL.md/TOOLS.md (openclaw packages use the plural form); current
-    # copaw no longer consumes the latter, but user packages built on the
-    # openclaw template still ship them — forward whatever exists so the
-    # opencode worker sees the same customization the copaw world intended.
-    USER_MD_FILES: tuple[str, ...] = (
-        "AGENTS.md", "TOOLS.md", "TOOL.md", "IDENTITY.md",
-    )
-    BUILTIN_END_MARKER = "<!-- agentteams-builtin-end -->"
-
-    def load_user_md(self) -> dict[str, str]:
-        user_md: dict[str, str] = {}
-        for name in self.USER_MD_FILES:
-            text = self.read_text(name)
-            if not text or not text.strip():
-                continue
-            if name == "AGENTS.md":
-                marker = self.BUILTIN_END_MARKER
-                if marker in text:
-                    tail = text.split(marker, 1)[1]
-                    # skip the closing marker line remainder up to newline
-                    tail = tail.split("\n", 1)[1] if "\n" in tail else ""
-                    text = tail
-                    if not text.strip():
-                        continue  # canonical template only, nothing user-side
-            user_md[name] = text.strip("\n")
-        return user_md
-
     def publish(self, name: str, text: str) -> str | None:
         """Write a UTF-8 object under agents/<worker>/<name>; returns the key.
 
@@ -215,7 +197,6 @@ class S3Bootstrap:
                 runtime_yaml=runtime_yaml,
                 soul_md=soul_md,
                 profile_md=profile_md,
-                user_md=self.load_user_md(),
             )
         try:
             openclaw = json.loads(openclaw_text)
@@ -230,5 +211,4 @@ class S3Bootstrap:
             # (MemberRuntimeConfig snapshot written by the qwenpaw/opencode
             # member reconcile branch)
             runtime_yaml=runtime_yaml,
-            user_md=self.load_user_md(),
         )

@@ -1,0 +1,55 @@
+# Namespace-level resource guards for opencode-team-test.
+#
+# Rationale: the k3s-103 node went down twice on 2026-09-07 under a global
+# (CONSTRAINT_NONE) OOM, with the test postgres (85 kills), minio (10) and
+# synapse (10) among the victims. The stack now runs pinned to the 105 node,
+# which also hosts the apiserver/etcd and production components — so a
+# runaway container here is even less acceptable. These objects cap the
+# whole namespace:
+#
+#   * LimitRange   — injects default requests/limits into every container
+#                    that declares none (the controller creates worker and
+#                    sandbox pods without resources; without this they are
+#                    BestEffort and uncapped).
+#   * ResourceQuota — hard ceiling on the namespace's total requests/limits;
+#                     a leak (teams never torn down, workers multiplying)
+#                     can no longer starve the node.
+#
+# Apply after `helm upgrade`:
+#   kubectl apply -f opencode/deploy/oct-resource-guards.yaml
+#
+# Sizing: measured steady-state usage of a full round (12 bridge workers +
+# 12 opencode pods + 12 sandboxes + infra) is ~5Gi requests / ~10Gi actual.
+# The limits.* ceilings account for the controllers' declared caps (each
+# bridge worker declares limits 2cpu/2Gi — 20 workers coexisting during
+# round-overlap is 40cpu/40Gi) plus ~headroom; the physical node has
+# 62Gi, so even full limit commitments cannot oversubscribe memory 1:1.
+# The requests.* ceilings are the real runaway protection (~2cpu/6Gi
+# steady state vs 8cpu/16Gi hard).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: oct-defaults
+  namespace: opencode-team-test
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+      default:
+        cpu: "1"
+        memory: 1Gi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: oct-ceiling
+  namespace: opencode-team-test
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "48"
+    limits.memory: 48Gi
+    pods: "60"

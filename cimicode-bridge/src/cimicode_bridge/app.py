@@ -13,7 +13,11 @@ from typing import Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig
+from cimicode_bridge.bootstrap import (
+    S3Bootstrap,
+    WorkerBootstrapConfig,
+    managed_runtime_type,
+)
 from cimicode_bridge.config import BridgeConfig, load_config
 from cimicode_bridge.matrix_client import MentionFilter, RoleResolver
 from cimicode_bridge.matrix.gateway import MatrixGateway
@@ -75,6 +79,16 @@ class BridgeApp:
             self.config.runtime.helper_url = self.worker_files.runtime_helper_url or self.config.runtime.helper_url
             self.config.runtime.session_id = self.worker_files.gateway_session_id
             self.config.runtime.sandbox_id = self.worker_files.gateway_sandbox_id
+            # Authoritative runtime type from the managed runtime.yaml —
+            # self-provisions the opencode adapter + service URLs without
+            # waiting for the operator's BRIDGE_RUNTIME_* env.
+            if self.worker_files.runtime_yaml \
+                    and managed_runtime_type(self.worker_files.runtime_yaml) == "opencode" \
+                    and self.config.runtime.adapter != "opencode":
+                self.config.runtime.adapter = "opencode"
+                logger.info("adapter self-provisioned as opencode from runtime.yaml at boot")
+            self._derive_opencode_urls()
+            self.runtime_client = build_runtime_adapter(self.config.runtime)
         self.mention_filter = MentionFilter(
             require_mention=self.config.filter.require_mention,
             allow_unknown=self.config.filter.allow_unknown,
@@ -128,6 +142,33 @@ class BridgeApp:
         for key, value in overrides.items():
             if value:
                 setattr(self.config.runtime, key, value)
+        self._explicit_base_url = bool(overrides["base_url"])
+        self._explicit_helper_url = bool(overrides["helper_url"])
+        self._derive_opencode_urls()
+
+    # Set when BRIDGE_RUNTIME_BASE_URL/_HELPER_URL (or the controller's
+    # runtimeEnv) provided the value explicitly — derived URLs must not
+    # shadow an explicit override.
+    _explicit_base_url: bool = False
+    _explicit_helper_url: bool = False
+
+    def _derive_opencode_urls(self) -> None:
+        """Self-provision the opencode wiring when the operator env is late.
+
+        The runtime/sandbox service names follow the operator's predictable
+        convention (opencode-<worker>-svc / opencode-<worker>-sandbox-svc),
+        so the bridge does not need to wait for BRIDGE_RUNTIME_BASE_URL /
+        _HELPER_URL to be patched into the Worker CR: compute them from the
+        worker name and let explicit env values win as overrides. This
+        removes the operator-env arrival race from the bootstrap path.
+        """
+        worker = os.getenv("AGENTTEAMS_WORKER_NAME", "")
+        if not worker or self.config.runtime.adapter != "opencode":
+            return
+        if not self._explicit_base_url:
+            self.config.runtime.base_url = f"http://opencode-{worker}-svc:4096"
+        if not self._explicit_helper_url:
+            self.config.runtime.helper_url = f"http://opencode-{worker}-sandbox-svc:4097"
 
     def _build_matrix_gateway(self) -> MatrixGateway | None:
         """Build the Matrix gateway from the current config, or None when the
@@ -276,6 +317,20 @@ class BridgeApp:
                         refetched.runtime_helper_url or self.config.runtime.helper_url)
                     self.config.runtime.session_id = refetched.gateway_session_id
                     self.config.runtime.sandbox_id = refetched.gateway_sandbox_id
+                    # The managed runtime.yaml is the authoritative runtime
+                    # type — it self-provisions the opencode adapter (and the
+                    # predictable service URLs) without waiting for the
+                    # operator's BRIDGE_RUNTIME_* env to land.
+                    if managed_runtime_type(refetched.runtime_yaml) == "opencode" \
+                            and self.config.runtime.adapter != "opencode":
+                        self.config.runtime.adapter = "opencode"
+                        logger.info("adapter self-provisioned as opencode from runtime.yaml")
+                    self._derive_opencode_urls()
+                    if self.config.runtime.adapter == "opencode" and self.runtime_client is not None:
+                        closer = getattr(self.runtime_client, "close", None)
+                        if closer is not None:
+                            await closer()
+                    self.runtime_client = build_runtime_adapter(self.config.runtime)
                     gateway = self._build_matrix_gateway()
                     if gateway is not None:
                         self.matrix_gateway = gateway
@@ -300,13 +355,14 @@ class BridgeApp:
             adapter = str(runtime_env.get("BRIDGE_RUNTIME_ADAPTER", ""))
             if adapter and adapter != last_adapter:
                 last_adapter = adapter
-                for env_key, attr in (
-                    ("BRIDGE_RUNTIME_BASE_URL", "base_url"),
-                    ("BRIDGE_RUNTIME_HELPER_URL", "helper_url"),
+                for env_key, attr, flag in (
+                    ("BRIDGE_RUNTIME_BASE_URL", "base_url", "_explicit_base_url"),
+                    ("BRIDGE_RUNTIME_HELPER_URL", "helper_url", "_explicit_helper_url"),
                 ):
                     value = str(runtime_env.get(env_key, ""))
                     if value:
                         setattr(self.config.runtime, attr, value)
+                        setattr(self, flag, True)
                 logger.info(
                     "late runtime wiring recovered from controller: adapter=%s base_url=%s helper_url=%s",
                     adapter,
@@ -434,21 +490,24 @@ class BridgeApp:
                 # the generator shipped in the bridge image (fail-loud — a
                 # failed render refuses the turn instead of sending a
                 # half-configured system prompt to the sandbox).
-                if self.worker_files is None or not self.worker_files.runtime_yaml:
-                    # Last line of defense for the startup race: the worker
-                    # pod routinely starts before the controller pushes
-                    # runtime/runtime.yaml, and an unanswered delegation
-                    # wedges the task in assigned state. Refetch before
-                    # refusing — the object is usually there by now.
-                    logger.warning(
-                        "runtime/runtime.yaml missing from bootstrap; refetching before refusing turn"
-                    )
-                    if self.s3_bootstrap is not None:
-                        refetched = self.s3_bootstrap.load(retries=6, retry_interval_seconds=5)
-                        if refetched is not None and refetched.runtime_yaml:
-                            self.worker_files = refetched
-                            logger.info("runtime.yaml recovered at turn time after refetch")
-                if self.worker_files is None or not self.worker_files.runtime_yaml:
+                #
+                # The controller enriches runtime.yaml after its first write
+                # (member.matrixUserId lands once the matrix user registers,
+                # team facts update on membership changes), so the boot-time
+                # bootstrap cache must never shadow the source of truth:
+                # pull fresh from S3 on EVERY turn and fall back to the
+                # cache only when the pull itself fails.
+                turn_files = self.worker_files
+                if self.s3_bootstrap is not None:
+                    fresh = self.s3_bootstrap.load(retries=1)
+                    if fresh is not None and fresh.runtime_yaml:
+                        turn_files = fresh
+                        self.worker_files = fresh
+                    else:
+                        logger.warning(
+                            "per-turn bootstrap pull failed; falling back to boot-time cache"
+                        )
+                if turn_files is None or not turn_files.runtime_yaml:
                     logger.error(
                         "opencode adapter requires runtime/runtime.yaml in the "
                         "worker bootstrap (agents/<name>/runtime/runtime.yaml); refusing turn"
@@ -456,42 +515,13 @@ class BridgeApp:
                     return
                 try:
                     agent_md = build_agent_md_via_generator(
-                        runtime_yaml=self.worker_files.runtime_yaml,
-                        soul_md=self.worker_files.soul_md,
-                        profile_md=self.worker_files.profile_md,
-                        user_md=self.worker_files.user_md or {},
+                        runtime_yaml=turn_files.runtime_yaml,
+                        soul_md=turn_files.soul_md,
+                        profile_md=turn_files.profile_md,
                     )
                 except GenerateAgentMdError as exc:
-                    # The controller enriches runtime.yaml after first write
-                    # (member.matrixUserId lands when the matrix user is
-                    # registered), and the bridge caches the boot-time copy.
-                    # A fail-loud on stale data must not strand the turn:
-                    # refetch once and retry before giving up.
-                    logger.warning(
-                        "agent.md generation failed on cached runtime.yaml; refetching bootstrap once: %s",
-                        exc,
-                    )
-                    if self.s3_bootstrap is not None:
-                        refetched = self.s3_bootstrap.load(retries=1)
-                        if refetched is not None and refetched.runtime_yaml:
-                            self.worker_files = refetched
-                            try:
-                                agent_md = build_agent_md_via_generator(
-                                    runtime_yaml=refetched.runtime_yaml,
-                                    soul_md=refetched.soul_md,
-                                    profile_md=refetched.profile_md,
-                                    user_md=refetched.user_md or {},
-                                )
-                                logger.info("agent.md generated after bootstrap refetch")
-                            except GenerateAgentMdError as retry_exc:
-                                logger.error("agent.md generation failed after refetch: %s", retry_exc)
-                                return
-                        else:
-                            logger.error("agent.md generation failed and refetch returned nothing: %s", exc)
-                            return
-                    else:
-                        logger.error("agent.md generation failed (no bootstrap to refetch): %s", exc)
-                        return
+                    logger.error("agent.md generation failed: %s", exc)
+                    return
             else:
                 agent_md = build_agent_md(
                     agents_md=self.worker_files.agents_md if self.worker_files else "",

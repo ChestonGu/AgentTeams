@@ -1,0 +1,129 @@
+# =============================================================================
+# Round 3 regression teams — verify the a37ee97 fix set:
+#   1. skill startup race  (runtime waits for .opencode/skills before booting
+#      opencode — workers must actually use the skill tool)
+#   2. user customization files (AGENTS.md tail / TOOL.md / IDENTITY.md at
+#      agents/<w>/ merge into the generated agent.md)
+#   3. bootstrap self-heal  (bridge recovers when runtime.yaml lands late)
+#   4. bridge log timestamps
+# r3a-verify: custom files pre-seeded for v3-w1 only (v3-w2 = control);
+# r3b-quick : plain pipeline round on the new images.
+# =============================================================================
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v3-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: v3-lead
+  displayName: v3-lead
+  model: glm-5.3-flash
+  identity: |
+    你是回归验证团队 r3a-verify 的组长（copaw 运行时），负责验证「配置小工具
+    configkit」的交付质量：拆 2 个任务分派给 v3-w1、v3-w2，验收时用 taskflow
+    check 核对结果与交付物清单。
+  soul: |
+    风格：验收前实际核对交付物存在与测试输出；报告简洁分点。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v3-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: v3-w1
+  displayName: v3-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先读 skill 再动手：收到任务先
+    taskflow ack，完成后 taskflow submit 并通知协调者。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v3-w2
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: v3-w2
+  displayName: v3-w2
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先读 skill 再动手：收到任务先
+    taskflow ack，完成后 taskflow submit 并通知协调者。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v4-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: v4-lead
+  displayName: v4-lead
+  model: glm-5.3-flash
+  identity: |
+    你是快速回归团队 r3b-quick 的组长（copaw 运行时），负责「时间工具
+    timetool」单任务交付：派发、验收、完结项目。
+  soul: |
+    风格：小项目快速闭环；验收核对单测输出与 README。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v4-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: v4-w1
+  displayName: v4-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师。先读 skill 再动手：收到任务先
+    taskflow ack，完成后 taskflow submit 并通知协调者。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: r3a-verify
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R3 修复验证
+  description: configkit 配置小工具：验证 skill 生效与自定义文件 merge
+  teamName: r3a-verify
+  workerMembers:
+    - name: v3-lead
+      role: team_leader
+    - name: v3-w1
+      role: worker
+    - name: v3-w2
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: r3b-quick
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R3 快速回归
+  description: timetool 时间工具：新镜像全链路快速闭环
+  teamName: r3b-quick
+  workerMembers:
+    - name: v4-lead
+      role: team_leader
+    - name: v4-w1
+      role: worker
