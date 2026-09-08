@@ -26,7 +26,7 @@ global:
 controller:
   image:
     repository: agentteams/agentteams-controller
-    tag: v1.2.2-oct
+    tag: v1.2.2.5-oct
     pullPolicy: IfNotPresent
   workerBackend: "k8s"
   # agentteams/* images are imported into the 105 node's containerd only;
@@ -36,7 +36,7 @@ controller:
   env:
     # runtime=opencode workers run as cimicode-bridge pods (worker
     # masquerade); see internal/backend/kubernetes.go OpenCodeBridgeImage.
-    AGENTTEAMS_OPENCODE_BRIDGE_IMAGE: agentteams/cimicode-bridge:v0.0.8-oct
+    AGENTTEAMS_OPENCODE_BRIDGE_IMAGE: agentteams/cimicode-bridge:v0.1.7-oct
   resources:
     requests:
       cpu: 100m
@@ -53,6 +53,11 @@ cms:
 
 elementWeb:
   enabled: true
+  # Pin every component to the 105 node: k3s-103 is a shared node with a
+  # history of resource exhaustion (kubelet starvation, 2026-09-07), and the
+  # test images only exist in 105's containerd anyway.
+  nodeSelector:
+    kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
   service:
     type: NodePort
     port: 8080
@@ -90,6 +95,11 @@ storage:
   mode: managed          # in-namespace MinIO, fully isolated from s3-sim
   bucket: agentteams-storage
   minio:
+    nodeSelector:
+      kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 768Mi }
     auth:
       rootUser: oct-minio
       rootPassword: oct-minio-2026
@@ -105,8 +115,23 @@ matrix:
   synapse:
     adminUser: admin
     registrationSharedSecret: oct-reg-shared-2026
+    nodeSelector:
+      kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+    # The k3s-103 node went down twice (2026-09-07) under global OOM with the
+    # test postgres/synapse/minio among the victims. Keep every component
+    # capped so a runaway container can never exhaust the node again (the ns
+    # LimitRange/ResourceQuota in oct-resource-guards.yaml is the backstop for
+    # dynamically created worker pods).
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
     postgres:
       password: oct-synapse-pg-2026
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: 500m, memory: 512Mi }
     persistence:
       enabled: true
       size: 5Gi
@@ -122,21 +147,33 @@ higress:
   higress-core:
     gateway:
       replicas: 1
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
+      # global.local=true makes the chart declare hostPort=httpPort/httpsPort;
+      # the production higress gateway already binds 80/443 on the 105 node,
+      # so this instance moves to unprivileged ports (higress multi-instance
+      # convention). The service's targetPort must match.
+      httpPort: 18080
+      httpsPort: 18443
       service:
         type: NodePort
         ports:
           - name: http2
             port: 80
             protocol: TCP
-            targetPort: 80
+            targetPort: 18080
             nodePort: 32180
           - name: https
             port: 443
             protocol: TCP
-            targetPort: 443
+            targetPort: 18443
             nodePort: 30544
     controller:
       replicas: 1
+      # higress-controller was rescheduled onto k3s-103 after a helm upgrade;
+      # pin it alongside the rest of the stack.
+      nodeSelector:
+        kubernetes.io/hostname: extvdiadmin-vmware-virtual-platform
   higress-console:
     service:
       type: NodePort
