@@ -1,4 +1,4 @@
-"""S3/MinIO 启动引导：拉取调谐写入的 worker 配置三件套（一次性，仅启动时）。"""
+"""S3/MinIO 启动引导：拉取调谐写入的 worker 配置（openclaw.json / runtime.yaml 双载体）。"""
 from __future__ import annotations
 
 import json
@@ -13,17 +13,55 @@ from minio import Minio
 logger = logging.getLogger(__name__)
 
 
+def managed_runtime_type(runtime_yaml: str) -> str:
+    """从 MemberRuntimeConfig 快照读取 member.runtime（解析失败返回空串）。
+
+    managed runtime.yaml 是 worker 运行时类型的权威声明——
+    自愈轮询用它自裁决 opencode adapter（不等 operator 的 BRIDGE_RUNTIME_* env）。
+    """
+    try:
+        import yaml
+
+        doc = yaml.safe_load(runtime_yaml) or {}
+        member = doc.get("member") or {}
+        return str(member.get("runtime") or "")
+    except Exception:
+        return ""
+
+
+def inline_persona(runtime_yaml: str) -> tuple[str, str]:
+    """从 MemberRuntimeConfig 快照提取 (soul, identity-as-profile)。
+
+    Worker spec.soul / spec.identity 被 DeployMemberRuntimeConfig 投影进
+    desired.inlineConfig；YAML 解析失败降级为空串（generator 视两者均为可选），
+    不会让整个 bootstrap 失败。
+    """
+    try:
+        import yaml
+
+        doc = yaml.safe_load(runtime_yaml) or {}
+        inline = ((doc.get("desired") or {}).get("inlineConfig")) or {}
+        if not isinstance(inline, dict):
+            return "", ""
+        return str(inline.get("soul") or ""), str(inline.get("identity") or "")
+    except Exception as exc:
+        logger.warning("failed to parse inlineConfig from runtime.yaml: %s", exc)
+        return "", ""
+
+
 @dataclass
 class WorkerBootstrapConfig:
     """S3 拉取结果（仅存内存，不落盘）。
 
-    openclaw.json 解析为 dict；AGENTS.md / SOUL.md 保持原文。
-    兼容 camelCase/snake_case 两种字段写法。
+    openclaw.json 解析为 dict；AGENTS.md / SOUL.md / PROFILE.md / runtime.yaml
+    保持原文。兼容 camelCase/snake_case 两种字段写法。
     """
 
     openclaw: dict[str, Any]
     agents_md: str = ""
     soul_md: str = ""
+    profile_md: str = ""        # PROFILE.md（opencode persona 输入）
+    runtime_yaml: str = ""      # agents/<name>/runtime/runtime.yaml（MemberRuntimeConfig 快照）
 
     @property
     def matrix_config(self) -> dict[str, Any]:
@@ -64,6 +102,15 @@ class WorkerBootstrapConfig:
             or ""
         )
 
+    @property
+    def runtime_helper_url(self) -> str:
+        """sandbox AGENTS.md helper 服务地址（opencode adapter 用）。"""
+        return str(
+            self.bridge_runtime_config.get("helperUrl")
+            or self.bridge_runtime_config.get("helper_url")
+            or ""
+        )
+
 
 class S3Bootstrap:
     """MinIO S3 客户端封装：按 env 装配，按固定 key 拉取 worker 配置。"""
@@ -85,10 +132,13 @@ class S3Bootstrap:
 
         endpoint = endpoint.removeprefix("http://").removeprefix("https://")
         secure = os.getenv("AGENTTEAMS_FS_SECURE", "").lower() in {"1", "true", "yes"}
+        # 注意：AGENTTEAMS_STORAGE_PREFIX 是 copaw 运行时使用的 mc 别名/bucket 形态
+        # （如 "agentteams/agentteams-storage"）——不是 S3 key 前缀。controller 写入的
+        # bootstrap 对象就在 AGENTTEAMS_FS_BUCKET 内的 agents/<name>/... 路径下。
         return cls(
             client=Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure),
             bucket=bucket,
-            prefix=os.getenv("AGENTTEAMS_STORAGE_PREFIX", ""),
+            prefix="",
         )
 
     def _key(self, name: str) -> str:
@@ -110,20 +160,56 @@ class S3Bootstrap:
             logger.warning("failed to read bootstrap object %s: %s", name, exc)
             return None
 
-    def load(self, *, retries: int = 6, retry_interval_seconds: float = 5) -> WorkerBootstrapConfig | None:
-        """加载三件套：openclaw.json 重试 6×5s（等调谐写入），其余各读一次。
+    def publish(self, name: str, text: str) -> str | None:
+        """把 UTF-8 文本写到 agents/<worker>/<name> 下；返回写入的 key。
 
-        openclaw.json 拉不到返回 None；AGENTS.md/SOUL.md 拉不到当空串。
+        尽力而为的观测通道（如生成出来的 agent.md）：失败仅告警并返回
+        None——绝不影响 turn 主流程。
+        """
+        key = self._key(name)
+        try:
+            from io import BytesIO
+
+            self.client.put_object(
+                self.bucket, key, BytesIO(text.encode("utf-8")), len(text.encode("utf-8")),
+                content_type="text/markdown",
+            )
+            return key
+        except Exception as exc:
+            logger.warning("failed to publish object %s: %s", key, exc)
+            return None
+
+    def load(self, *, retries: int = 6, retry_interval_seconds: float = 5) -> WorkerBootstrapConfig | None:
+        """加载双载体：openclaw.json + runtime/runtime.yaml（各自独立重试）。
+
+        两个载体都重试：managed（opencode）worker 可能在 controller 推完
+        runtime/runtime.yaml 之前启动，单次不重试的读取曾把 bootstrap 卡在
+        不完整状态。openclaw.json 是 legacy cimicode 路径的载体
+        （bridge.runtime session/sandbox 绑定）；managed 运行时（qwenpaw
+        投影路径）不写 openclaw.json，仅 runtime.yaml 即为完整 bootstrap。
         """
         openclaw_text = None
+        runtime_yaml = ""
         for attempt in range(retries):
-            openclaw_text = self.read_text("openclaw.json")
-            if openclaw_text:
+            openclaw_text = openclaw_text or self.read_text("openclaw.json")
+            runtime_yaml = runtime_yaml or self.read_text("runtime/runtime.yaml")
+            if openclaw_text or runtime_yaml:
                 break
             if attempt + 1 < retries:
                 time.sleep(retry_interval_seconds)
+        # runtime.yaml-only 引导：persona 从 MemberRuntimeConfig 快照提取
+        # （matrix token 走 AGENTTEAMS_WORKER_MATRIX_TOKEN env，opencode 端点
+        # 走 BRIDGE_RUNTIME_* env）。
         if not openclaw_text:
-            return None
+            if not runtime_yaml:
+                return None
+            soul_md, profile_md = inline_persona(runtime_yaml)
+            return WorkerBootstrapConfig(
+                openclaw={},
+                runtime_yaml=runtime_yaml,
+                soul_md=soul_md,
+                profile_md=profile_md,
+            )
         try:
             openclaw = json.loads(openclaw_text)
         except json.JSONDecodeError as exc:
@@ -132,4 +218,8 @@ class S3Bootstrap:
             openclaw=openclaw,
             agents_md=self.read_text("AGENTS.md") or "",
             soul_md=self.read_text("SOUL.md") or "",
+            profile_md=self.read_text("PROFILE.md") or "",
+            # v2.4 generator 输入：agents/<name>/runtime/runtime.yaml
+            # （qwenpaw/opencode member 调谐分支写入的 MemberRuntimeConfig 快照）
+            runtime_yaml=runtime_yaml,
         )

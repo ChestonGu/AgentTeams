@@ -39,13 +39,20 @@ class HistoryConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """gateway runtime 配置（baseUrl/sessionId 等由 S3 bridge 段覆盖）。"""
 
-    adapter: str = "cimicode"
+    adapter: str = "cimicode"                          # cimicode / opencode
     base_url: str = "http://cimicode-gateway"
+    # opencode adapter：sandbox AGENTS.md helper 端点（默认与 base_url 同源——
+    # helper 与 opencode 同打在一个 sandbox 镜像的 :4097）
+    helper_url: str = ""
     template_id: str = "default-template"
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox
     auth_type: str = "none"                            # gateway 当前不鉴权
-    turn_timeout_seconds: int = 600                    # turn 超时（= SSE 读超时）
+    # opencode 的 POST /session/{id}/message 会阻塞到整轮 agent 结束，此值
+    # 约束的是"整轮"（代码 + 测试跑动辄超 10 分钟）。部署级可用
+    # BRIDGE_RUNTIME_TURN_TIMEOUT 覆盖。
+    turn_timeout_seconds: int = 3600                   # turn 超时（opencode 阻塞语义）
+    poll_interval_seconds: float = 1.0                 # opencode 轮询间隔
     submit_max_retries: int = 3                        # 提交重试（未实现）
     queue_max_pending: int = 8                         # 排队上限（未实现）
 
