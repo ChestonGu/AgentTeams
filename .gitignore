@@ -85,3 +85,5 @@ htmlcov/
 *.lz
 *.lzo
 ```
+# local test analysis artifacts (not for version control)
+agentteams-controller/task-analysis/
