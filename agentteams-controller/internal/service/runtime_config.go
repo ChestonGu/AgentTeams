@@ -182,6 +182,33 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 // existing runtime.yaml. It is used for remote-managed local workers whose
 // WorkerReconciler owns sensitive runtime fields such as matrix tokens and
 // gateway keys.
+// RuntimeConfigReadyForBootstrap reports whether the deployed runtime.yaml
+// for runtimeName is fully populated for a bridge bootstrap — today that
+// means member.matrixUserId has landed (the controller writes the first
+// version before the matrix user is registered and rewrites it after).
+// The bridge pod must not be created before this is true: its bootstrap
+// feeds the agent.md generator, which fails loud on a missing member
+// identity and strands the first mention. Missing/unreadable/unparsable
+// objects all report not-ready (never an error — the caller requeues).
+func (d *Deployer) RuntimeConfigReadyForBootstrap(ctx context.Context, runtimeName string) bool {
+	if d.oss == nil {
+		return true // no storage configured: nothing to gate on
+	}
+	runtimeName = strings.TrimSpace(runtimeName)
+	if runtimeName == "" {
+		return false
+	}
+	payload, err := d.oss.GetObject(ctx, memberRuntimeConfigObjectKey(runtimeName))
+	if err != nil {
+		return false
+	}
+	var doc memberRuntimeConfigDocument
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		return false
+	}
+	return strings.TrimSpace(doc.Member.MatrixUserID) != ""
+}
+
 func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error {
 	if d.oss == nil {
 		return fmt.Errorf("OSS client is required to deploy runtime config")

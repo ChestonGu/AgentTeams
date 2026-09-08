@@ -857,6 +857,24 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		DeployMode:  m.DeployMode,
 		WorkersDeps: workerDeps,
 	}
+	// Bootstrap readiness gate (managed runtimes only): the bridge pod's
+	// bootstrap feeds the agent.md generator from agents/<w>/runtime/
+	// runtime.yaml, and the generator fails loud when member.matrixUserId
+	// is missing — which strands the first delegated mention. The first
+	// runtime.yaml write happens before the matrix user registers; defer
+	// pod creation until the fully-populated rewrite has landed.
+	if backend.IsManagedRuntime(backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)) && d.Deployer != nil {
+		runtimeOwner := m.Name
+		if m.RuntimeName != "" {
+			runtimeOwner = m.RuntimeName
+		}
+		if !d.Deployer.RuntimeConfigReadyForBootstrap(ctx, runtimeOwner) {
+			log.FromContext(ctx).Info(
+				"runtime.yaml not fully populated yet (member.matrixUserId pending); deferring container creation",
+				"worker", m.Name, "runtimeOwner", runtimeOwner)
+			return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
 	if wb.Name() == "docker" {
 		token, requeueAfter, err := projectInitialDockerWorkerToken(ctx, d, m)
 		if err != nil {
