@@ -462,8 +462,36 @@ class BridgeApp:
                         user_md=self.worker_files.user_md or {},
                     )
                 except GenerateAgentMdError as exc:
-                    logger.error("agent.md generation failed: %s", exc)
-                    return
+                    # The controller enriches runtime.yaml after first write
+                    # (member.matrixUserId lands when the matrix user is
+                    # registered), and the bridge caches the boot-time copy.
+                    # A fail-loud on stale data must not strand the turn:
+                    # refetch once and retry before giving up.
+                    logger.warning(
+                        "agent.md generation failed on cached runtime.yaml; refetching bootstrap once: %s",
+                        exc,
+                    )
+                    if self.s3_bootstrap is not None:
+                        refetched = self.s3_bootstrap.load(retries=1)
+                        if refetched is not None and refetched.runtime_yaml:
+                            self.worker_files = refetched
+                            try:
+                                agent_md = build_agent_md_via_generator(
+                                    runtime_yaml=refetched.runtime_yaml,
+                                    soul_md=refetched.soul_md,
+                                    profile_md=refetched.profile_md,
+                                    user_md=refetched.user_md or {},
+                                )
+                                logger.info("agent.md generated after bootstrap refetch")
+                            except GenerateAgentMdError as retry_exc:
+                                logger.error("agent.md generation failed after refetch: %s", retry_exc)
+                                return
+                        else:
+                            logger.error("agent.md generation failed and refetch returned nothing: %s", exc)
+                            return
+                    else:
+                        logger.error("agent.md generation failed (no bootstrap to refetch): %s", exc)
+                        return
             else:
                 agent_md = build_agent_md(
                     agents_md=self.worker_files.agents_md if self.worker_files else "",
