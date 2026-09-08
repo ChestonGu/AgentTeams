@@ -36,7 +36,7 @@ controller:
   env:
     # runtime=opencode workers run as cimicode-bridge pods (worker
     # masquerade); see internal/backend/kubernetes.go OpenCodeBridgeImage.
-    AGENTTEAMS_OPENCODE_BRIDGE_IMAGE: agentteams/cimicode-bridge:v0.1.7-oct
+    AGENTTEAMS_OPENCODE_BRIDGE_IMAGE: agentteams/cimicode-bridge:v0.1.8-oct
   resources:
     requests:
       cpu: 100m
