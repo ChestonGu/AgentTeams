@@ -152,6 +152,34 @@ func TestApplyPodTemplate_MetadataAnnotationsMerge(t *testing.T) {
 	}
 }
 
+func TestApplyPodTemplate_EnvHybridMerge(t *testing.T) {
+	tmpl := corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		Containers: []corev1.Container{{
+			Name: "worker",
+			Env: []corev1.EnvVar{
+				// operator-provided extra: must ride along untouched
+				{Name: "COPAW_TOOL_GUARD_ENABLED", Value: "false"},
+				// collides with the overlay's AGENTTEAMS_RUNTIME: overlay wins
+				{Name: "AGENTTEAMS_RUNTIME", Value: "template-value"},
+			},
+		}},
+	}}
+	pod := ApplyPodTemplate(tmpl, baseOverlay())
+	env := map[string]string{}
+	for _, ev := range pod.Spec.Containers[0].Env {
+		env[ev.Name] = ev.Value
+	}
+	if env["COPAW_TOOL_GUARD_ENABLED"] != "false" {
+		t.Fatalf("template-only env dropped: %+v", env)
+	}
+	if env["AGENTTEAMS_RUNTIME"] != "k8s" {
+		t.Fatalf("overlay must win on env name collision: %+v", env)
+	}
+	if len(env) != 2 {
+		t.Fatalf("unexpected env size: %+v", env)
+	}
+}
+
 func TestApplyPodTemplate_NodeSelectorFromTemplate(t *testing.T) {
 	tmpl := corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 		NodeSelector: map[string]string{"type": "virtual-kubelet"},

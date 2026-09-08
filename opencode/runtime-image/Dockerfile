@@ -19,7 +19,10 @@ ARG OPENCODE_VERSION=latest
 ARG NPM_REGISTRY=https://registry.npmjs.org
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tini \
+    # ripgrep: the opencode skill tool shells out to rg to scan skill
+    # content — without it every skill invocation dies with
+    # "ripgrep execution failed" after a 130s hang (node-slim ships no rg).
+    && apt-get install -y --no-install-recommends ca-certificates tini ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --registry="${NPM_REGISTRY}" "opencode-ai@${OPENCODE_VERSION}" \
     && npm cache clean --force

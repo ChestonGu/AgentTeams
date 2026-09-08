@@ -1,0 +1,58 @@
+# =============================================================================
+# Round 4 regression — natural-flow verification after the controller env
+# hybrid merge + runtime ripgrep fixes:
+#   * v5-lead carries NO spec.env: the pod-template ConfigMap must inject
+#     COPAW_TOOL_GUARD_ENABLED=false automatically (guard never blocks)
+#   * the brief never mentions skills: if the worker loads task-management
+#     via the skill tool it is the natural AGENTS.md §4 flow, and the skill
+#     tool must now succeed (ripgrep present) instead of erroring
+# =============================================================================
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v5-lead
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  runtime: copaw
+  workerName: v5-lead
+  displayName: v5-lead
+  model: glm-5.3-flash
+  identity: |
+    你是自然回归团队 r4-natural 的组长（copaw 运行时），负责「单位换算工具
+    unitconv」的交付：拆分任务、分派 v5-w1、验收并完结项目。
+  soul: |
+    风格：验收时实际核对交付物与测试输出；报告简洁。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: v5-w1
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  workerName: v5-w1
+  displayName: v5-w1
+  model: native-config
+  soul: |
+    你是 opencode 运行时的 Python 工程师，交付高质量代码与测试。
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: r4-natural
+  namespace: opencode-team-test
+  labels:
+    agentteams.io/controller: agentteams-oct-controller
+spec:
+  displayName: R4 自然流程回归
+  description: unitconv 单位换算：自然流程验证（无任何 skill 提示）
+  teamName: r4-natural
+  workerMembers:
+    - name: v5-lead
+      role: team_leader
+    - name: v5-w1
+      role: worker

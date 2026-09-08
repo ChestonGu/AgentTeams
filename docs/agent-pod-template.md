@@ -83,7 +83,7 @@ Fields the **controller wins** (template-provided values are discarded):
 - `metadata.ownerReferences` — always inherited from the controller Pod
 - `spec.serviceAccountName`
 - `spec.automountServiceAccountToken` — forced to `false`
-- Agent container's `image`, `env`, `workingDir`, `imagePullPolicy`
+- Agent container's `image`, `workingDir`, `imagePullPolicy`
 
 Hybrid merges:
 
@@ -91,6 +91,7 @@ Hybrid merges:
 |---|---|
 | `metadata.labels` | template first, controller labels overwrite on key collision |
 | `metadata.annotations` | template first, controller annotations overwrite on key collision |
+| Agent container's `env` | template entries kept, controller entries overwrite on name collision (operator extras like `COPAW_TOOL_GUARD_ENABLED` ride along into every agent pod) |
 | Agent container's `resources` | `CreateRequest.Resources` (per-request) > template's resources > backend default |
 | Agent container's `volumeMounts` | template first, `agentteams-token` volumeMount always appended |
 | `spec.volumes` | template first, `agentteams-token` projected volume always appended |

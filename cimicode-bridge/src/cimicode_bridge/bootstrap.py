@@ -135,11 +135,14 @@ class S3Bootstrap:
 
     # User customization files surfaced into the generated agent.md. The
     # copaw/openclaw ecosystem historically offered AGENTS.md (system
-    # template + free-form user tail) plus optional IDENTITY.md/TOOL.md;
-    # current copaw no longer consumes the latter two, but users may still
-    # ship them at worker init — forward whatever exists so the opencode
-    # worker sees the same customization the copaw world intended.
-    USER_MD_FILES: tuple[str, ...] = ("AGENTS.md", "TOOL.md", "IDENTITY.md")
+    # template + free-form user tail) plus optional IDENTITY.md and
+    # TOOL.md/TOOLS.md (openclaw packages use the plural form); current
+    # copaw no longer consumes the latter, but user packages built on the
+    # openclaw template still ship them — forward whatever exists so the
+    # opencode worker sees the same customization the copaw world intended.
+    USER_MD_FILES: tuple[str, ...] = (
+        "AGENTS.md", "TOOLS.md", "TOOL.md", "IDENTITY.md",
+    )
     BUILTIN_END_MARKER = "<!-- agentteams-builtin-end -->"
 
     def load_user_md(self) -> dict[str, str]:
