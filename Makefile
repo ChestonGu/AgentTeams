@@ -214,11 +214,12 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 		-t $(LOCAL_QWENPAW_WORKER) \
 		.
 
-build-cimicode-bridge: ## Build cimicode-bridge Worker image
+build-cimicode-bridge: ## Build cimicode-bridge Worker image（上下文=仓库根：Dockerfile 需 COPY opencode/ 的 generator）
 	@echo "==> Building cimicode-bridge image: $(LOCAL_CIMICODE_BRIDGE)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-f cimicode-bridge/Dockerfile \
 		-t $(LOCAL_CIMICODE_BRIDGE) \
-		./cimicode-bridge/
+		.
 
 # ---------- Tag ----------
 
