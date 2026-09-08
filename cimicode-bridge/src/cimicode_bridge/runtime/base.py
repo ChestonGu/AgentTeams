@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -31,17 +31,6 @@ class RuntimeAdapter(Protocol):
 
     def capabilities(self) -> RuntimeCapabilities:
         """能力声明。"""
-        ...
-
-
-@runtime_checkable
-class EventDialect(Protocol):
-    """事件方言接口（"翻译官"）：把 runtime 原始事件翻译成 RuntimeEvent。"""
-
-    name: str
-
-    def translate(self, raw_event: dict[str, Any]) -> list[Any]:
-        """单事件翻译（未识别事件包进 data 透传，不丢弃）。"""
         ...
 
 

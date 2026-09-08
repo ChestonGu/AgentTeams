@@ -36,20 +36,24 @@ cimicode-bridge/
   deploy/deployment.yaml
   scripts/bridge-entrypoint.sh
   src/cimicode_bridge/
-    app.py                 # FastAPI 工厂、生命周期、消息编排
+    app.py                 # FastAPI 工厂、生命周期、消息编排（编排骨架）
     bootstrap.py           # S3/MinIO 配置读取
     config.py              # 本地 YAML 配置模型
     events.py              # RuntimeEvent 和消息模型
-    matrix_client.py       # mention 和角色过滤
     render.py              # agentMd 和 Matrix 消息内容
-    session.py             # CoPaw 风格 room history
+    session.py             # CoPaw 风格 room history（HistoryStore 单 room buffer + HistoryManager per-room 注册表）
+    api/routes.py          # HTTP 端点（探针 + 本地调试入口）
+    api/probes.py          # 探针状态模型
+    controller/client.py   # controller 交互（401 token 刷新）
+    matrix/filter.py       # mention 和角色过滤
     matrix/gateway.py      # Matrix AsyncClient、sync、发送
     runtime/client.py      # Gateway HTTP + SSE 客户端
     runtime/adapters.py    # Gateway 事件到 RuntimeEvent 的转换
+    runtime/turn.py        # Gateway 单轮调用编排（agentMd 组装 + chat + SSE 事件聚合）
     store/                 # memory/file/redis StateStore
 ```
 
-依赖方向：Matrix 协议放在 `matrix/gateway.py`，mention 规则放在 `matrix_client.py`，Gateway 协议放在 `runtime/`，FastAPI 只负责组装这些组件。
+依赖方向：Matrix 协议放在 `matrix/gateway.py`，mention 规则放在 `matrix/filter.py`，Gateway 单轮执行放在 `runtime/turn.py`，Gateway 协议放在 `runtime/`，三段式视野放在 `session.py`，HTTP 端点在 `api/routes.py`，controller 交互在 `controller/client.py`，FastAPI 只负责组装这些组件。
 
 ## 3. 配置来源
 
@@ -237,6 +241,8 @@ mentions
 ## 6. CoPaw 三段式群聊视野
 
 bridge 复用 CoPaw 的核心 history 语义，不复制整个 CoPaw runtime。
+
+三段式组装入口为 `session.HistoryManager`（per-room 注册表，懒创建单 room 的 `HistoryStore`）；app.py 通过 `record_ambient / build_context / clear` 三个方法操作 buffer，不直接触碰 dict。
 
 每个 room 有一个内存 `HistoryStore`，默认容量 200 条，超出后 FIFO 淘汰，并按 `event_id` 去重。
 

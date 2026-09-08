@@ -4,9 +4,6 @@ from __future__ import annotations
 from typing import Any
 
 from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
-from cimicode_bridge.runtime.base import EventDialect
-
-
 class CimicodeDialect:
     """cimicode 方言翻译器：message/done/error + part_id 缓冲聚合。
 
@@ -69,12 +66,3 @@ class CimicodeDialect:
                 data=data,
             )
         ]
-
-
-class GenericSseDialect(EventDialect):
-    """通用方言：任意事件一律视为一段完整文本（简单一对一场景用）。"""
-
-    name = "generic-sse"
-
-    def translate(self, raw_event: dict[str, Any]) -> list[RuntimeEvent]:
-        return [RuntimeEvent(kind=RuntimeEventKind.TEXT_DONE, text=str(raw_event.get("text", "")), data=raw_event)]

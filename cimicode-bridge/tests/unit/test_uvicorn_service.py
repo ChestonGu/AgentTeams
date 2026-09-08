@@ -98,3 +98,91 @@ def test_matrix_event_calls_gateway_and_sends_reply():
     assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
     assert bridge.matrix_gateway.typing_started == "!room:matrix.local"
     assert bridge.matrix_gateway.typing_stopped == "!room:matrix.local"
+
+
+def test_turn_runner_aggregates_events():
+    from cimicode_bridge.config import RuntimeConfig
+    from cimicode_bridge.runtime.turn import TurnRunner
+
+    class ErroringRuntime:
+        async def chat(self, **kwargs):
+            return [
+                RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="partial "),
+                RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, data={"code": "LLM_ERROR"}),
+            ]
+
+    runner = TurnRunner(config=RuntimeConfig(session_id="sess-1", sandbox_id="sandbox-1"))
+
+    # 正常聚合：delta 追加 + turn_completed 覆盖为权威全文
+    ok = runner.aggregate_reply(
+        [
+            RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="Hel"),
+            RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="lo"),
+            RuntimeEvent(kind=RuntimeEventKind.TURN_COMPLETED, text="Hello world"),
+        ]
+    )
+    assert ok.failed is False
+    assert ok.text == "Hello world"
+
+    # 失败聚合：failed=True 且保留已聚合文本
+    failed = runner.aggregate_reply(
+        [RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, data={"code": "LLM_ERROR"})]
+    )
+    assert failed.failed is True
+    assert "LLM_ERROR" in failed.error
+
+    # run_turn 透传 session/sandbox 并走同一聚合（用 fake client 验证请求体）
+    class FakeClient:
+        async def chat(self, **kwargs):
+            self.request = kwargs
+            return [RuntimeEvent(kind=RuntimeEventKind.TURN_COMPLETED, text="ok")]
+
+    client = FakeClient()
+    result = asyncio.run(
+        runner.run_turn(
+            client,
+            worker_files=WorkerBootstrapConfig(openclaw={}, agents_md="agent rules"),
+            room_id="!room:matrix.local",
+            event_id="$event-1",
+            user_message="hi",
+        )
+    )
+    assert client.request["session_id"] == "sess-1"
+    assert client.request["sandbox_id"] == "sandbox-1"
+    assert client.request["turn_id"] == "$event-1"
+    assert client.request["history"] == []
+    assert result.text == "ok"
+
+    # ErroringRuntime 路径：run_turn 返回 failed 结果
+    error_result = asyncio.run(
+        runner.run_turn(
+            ErroringRuntime(),
+            worker_files=None,
+            room_id="!room:matrix.local",
+            event_id="$event-2",
+            user_message="hi",
+        )
+    )
+    assert error_result.failed is True
+    assert error_result.text == "partial "
+
+
+def test_history_manager_room_scoping():
+    from cimicode_bridge.session import CURRENT_MESSAGE_MARKER, HistoryManager
+
+    manager = HistoryManager(capacity=10)
+
+    # 两个 room 的 buffer 互不串扰
+    manager.record_ambient("!room-a", "alice", "message in a", event_id="$a1")
+    manager.record_ambient("!room-b", "bob", "message in b", event_id="$b1")
+
+    context_a = manager.build_context("!room-a", "carol", "trigger")
+    context_b = manager.build_context("!room-b", "dave", "trigger")
+    assert "message in a" in context_a and "message in b" not in context_a
+    assert "message in b" in context_b and "message in a" not in context_b
+
+    # clear 后 build_context 只剩当前消息段（无历史标记）
+    manager.clear("!room-a")
+    context_after = manager.build_context("!room-a", "carol", "trigger")
+    assert "message in a" not in context_after
+    assert context_after.startswith(CURRENT_MESSAGE_MARKER)

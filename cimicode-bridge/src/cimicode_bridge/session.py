@@ -51,6 +51,33 @@ class HistoryStore:
 
 
 @dataclass
+class HistoryManager:
+    """per-room 群聊视野注册表：room_id → HistoryStore（懒创建）。
+
+    app.py 不直接操作 buffer dict，统一经由本类完成"旁听入库 / 三段式组装 / 回复后清空"。
+    """
+
+    capacity: int = 200                                   # 单 room buffer 上限（配置 history.max_entries 传入）
+    _rooms: dict[str, HistoryStore] = field(default_factory=dict)
+
+    def room(self, room_id: str) -> HistoryStore:
+        """取（或懒创建）该 room 的 buffer。"""
+        return self._rooms.setdefault(room_id, HistoryStore(capacity=self.capacity))
+
+    def record_ambient(self, room_id: str, sender: str, body: str, *, event_id: str | None = None) -> None:
+        """旁听入库：白名单内未 @ 当前 agent 的消息进 buffer（群聊视野来源）。"""
+        self.room(room_id).append(sender, body, event_id=event_id)
+
+    def build_context(self, room_id: str, sender: str, body: str) -> str:
+        """组装 CoPaw 三段式文本（历史段 + 当前消息段），触发 @ 的消息调用。"""
+        return self.room(room_id).build_context(f"{sender}: {body}")
+
+    def clear(self, room_id: str) -> None:
+        """清空该 room 的 buffer（turn 成功提交 / NO_REPLY 后调用）。"""
+        self.room(room_id).clear()
+
+
+@dataclass
 class SessionManager:
     """进程内 turn 记录器（调试用途；真正的 Session 状态在 gateway 侧）。"""
 

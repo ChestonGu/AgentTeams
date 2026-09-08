@@ -57,16 +57,20 @@ cimicode-bridge/
 ├── scripts/
 │   └── bridge-entrypoint.sh
 ├── src/cimicode_bridge/
-│   ├── app.py                 # FastAPI 工厂和消息编排
+│   ├── app.py                 # FastAPI 工厂和消息编排（编排骨架）
 │   ├── bootstrap.py           # S3/MinIO 配置读取
 │   ├── config.py              # YAML 配置模型
 │   ├── events.py              # RuntimeEvent 和消息模型
-│   ├── matrix_client.py       # mention 和角色过滤
 │   ├── render.py              # agentMd 和 Matrix 消息格式
-│   ├── session.py             # CoPaw 三段式 history
+│   ├── session.py             # CoPaw 三段式 history（HistoryStore + HistoryManager）
+│   ├── api/routes.py          # HTTP 端点（探针 + 本地调试入口）
+│   ├── api/probes.py          # 探针状态模型
+│   ├── controller/client.py   # controller 交互（401 token 刷新）
+│   ├── matrix/filter.py       # mention 和角色过滤
 │   ├── matrix/gateway.py      # Matrix AsyncClient、sync、发送
 │   ├── runtime/client.py      # Gateway HTTP + SSE
 │   ├── runtime/adapters.py    # SSE 到 RuntimeEvent
+│   ├── runtime/turn.py        # Gateway 单轮调用编排（agentMd + chat + 聚合）
 │   └── store/                 # memory/file/redis
 └── tests/unit/
 ```

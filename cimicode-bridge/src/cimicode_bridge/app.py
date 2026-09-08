@@ -1,24 +1,30 @@
-"""应用编排：FastAPI 工厂 + BridgeApp 生命周期 + Matrix→Gateway→Matrix 主链路。"""
+"""应用编排：FastAPI 工厂 + BridgeApp 生命周期 + 消息主链路（过滤→三段式→turn→回发）。
+
+职责划分：HTTP 端点在 api/routes，过滤决策在 matrix/filter，群聊视野 buffer 在
+session.HistoryManager，gateway 单轮调用在 runtime/turn，Matrix 收发在 matrix/gateway，
+controller 交互（401 刷新）在 controller/client——本模块只做装配与串联。
+"""
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 import logging
 import os
-import httpx
 from pathlib import Path
 from typing import Any
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
+from cimicode_bridge.api.routes import register_routes
 from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig
 from cimicode_bridge.config import BridgeConfig, load_config
-from cimicode_bridge.matrix_client import MentionFilter, RoleResolver
+from cimicode_bridge.controller.client import refresh_matrix_token
+from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
 from cimicode_bridge.matrix.gateway import MatrixGateway
-from cimicode_bridge.render import build_agent_md
 from cimicode_bridge.runtime.client import HttpSseRuntime
-from cimicode_bridge.session import HistoryStore, SessionManager
+from cimicode_bridge.runtime.turn import TurnRunner
+from cimicode_bridge.session import HistoryManager, SessionManager
 from cimicode_bridge.store.file import FileStore
 from cimicode_bridge.store.memory import MemoryStore
 from cimicode_bridge.store.redis import RedisStore
@@ -44,10 +50,11 @@ class BridgeApp:
     worker_files: WorkerBootstrapConfig | None = field(default=None, init=False)  # S3 拉取的三件套
     matrix_access_token: str = field(default="", init=False, repr=False)          # 仅存内存
     session_manager: SessionManager = field(default_factory=SessionManager)       # turn 记录（调试）
-    history_stores: dict[str, HistoryStore] = field(default_factory=dict)         # room_id → buffer
+    history_manager: HistoryManager = field(default_factory=HistoryManager)       # per-room 群聊视野 buffer
     mention_filter: MentionFilter = field(default_factory=MentionFilter)          # 收侧过滤器
     matrix_gateway: MatrixGateway | None = field(default=None, init=False)        # Matrix 传输层
     runtime_client: HttpSseRuntime | None = field(default=None, init=False)       # gateway 客户端
+    turn_runner: TurnRunner | None = field(default=None, init=False)              # gateway 单轮执行器
     matrix_task: asyncio.Task[None] | None = field(default=None, init=False)      # sync 循环任务
     state_store: Any | None = field(default=None, init=False)                     # since 持久化后端
 
@@ -85,11 +92,15 @@ class BridgeApp:
             ),
         )
         self.phase = "bootstrap"
+        # 群聊视野 buffer 容量（config.history.max_entries）
+        self.history_manager = HistoryManager(capacity=self.config.history.max_entries)
         # gateway HTTP/SSE 客户端
         self.runtime_client = HttpSseRuntime(
             self.config.runtime.base_url,
             timeout_seconds=self.config.runtime.turn_timeout_seconds,
         )
+        # gateway 单轮执行器（agentMd 组装 + chat 调用 + SSE 事件聚合）
+        self.turn_runner = TurnRunner(config=self.config.runtime)
         self.state_store = self._build_state_store()
         # Matrix homeserver：S3 优先，占位符 ${...} 则读 env；三者齐备才创建网关
         matrix_config = self.worker_files.matrix_config if self.worker_files else {}
@@ -104,7 +115,7 @@ class BridgeApp:
                 on_message=self.handle_matrix_message,
                 state_store=self.state_store,
                 since_key=f"matrix:since:{os.getenv('AGENTTEAMS_WORKER_NAME', 'worker')}",
-                refresh_token=self._refresh_matrix_token,
+                refresh_token=refresh_matrix_token,
             )
         self.runtime_healthy = False
         self.ready = False
@@ -123,31 +134,6 @@ class BridgeApp:
         if backend == "file":
             return FileStore()
         return MemoryStore()
-
-    async def _refresh_matrix_token(self) -> str | None:
-        """401 时调 controller 刷新 Matrix token（读 AUTH_TOKEN 或 token 文件）。"""
-        controller_url = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").rstrip("/")
-        auth_token = os.getenv("AGENTTEAMS_AUTH_TOKEN", "")
-        token_file = os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE", "")
-        if not auth_token and token_file:
-            try:
-                auth_token = Path(token_file).read_text(encoding="utf-8").strip()
-            except OSError:
-                return None
-        if not controller_url or not auth_token:
-            return None
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    f"{controller_url}/api/v1/credentials/matrix-token",
-                    headers={"Authorization": f"Bearer {auth_token}"},
-                )
-                response.raise_for_status()
-                token = response.json().get("access_token")
-            return str(token) if token else None
-        except Exception as exc:
-            logger.warning("Matrix token refresh failed: %s", exc)
-            return None
 
     async def start_background(self) -> None:
         """异步启动：拉起 Matrix sync 循环，等连接成功后翻转 ready。"""
@@ -203,16 +189,12 @@ class BridgeApp:
                 "message filtered event_id=%s sender=%s role=%s reason=%s mentions=%s body=%r",
                 event_id, sender, decision.role, decision.reason, decision.mentions, body[:80],
             )
-        history = self.history_stores.setdefault(
-            room_id,
-            HistoryStore(capacity=self.config.history.max_entries),
-        )
         if not decision.accepted:
             # 白名单内的非 mention 消息进 room buffer（群聊视野）
             if decision.reason == "not_mentioned" and decision.role in self.mention_filter.allowed_roles:
-                history.append(sender, body, event_id=event_id)
+                self.history_manager.record_ambient(room_id, sender, body, event_id=event_id)
             return
-        if self.runtime_client is None or self.matrix_gateway is None:
+        if self.runtime_client is None or self.matrix_gateway is None or self.turn_runner is None:
             return
         # session 绑定缺失（S3 未配置 sessionId/sandboxId）→ 拒绝处理
         if not self.config.runtime.session_id or not self.config.runtime.sandbox_id:
@@ -220,40 +202,24 @@ class BridgeApp:
             return
 
         # CoPaw 三段式群聊视野（history buffer + 当前消息）
-        user_message = history.build_context(f"{sender}: {body}")
+        user_message = self.history_manager.build_context(room_id, sender, body)
         await self.matrix_gateway.start_typing(room_id)
         try:
-            events = await self.runtime_client.chat(
-                session_id=self.config.runtime.session_id,
-                sandbox_id=self.config.runtime.sandbox_id,
-                turn_id=event_id,  # turnId = Matrix event_id（幂等键）
-                agent_md=build_agent_md(
-                    agents_md=self.worker_files.agents_md if self.worker_files else "",
-                    soul_md=self.worker_files.soul_md if self.worker_files else "",
-                    role=os.getenv("COORDINATION_ROLE", "worker"),
-                    leader=os.getenv("COORDINATION_LEADER", ""),
-                    team=os.getenv("COORDINATION_TEAM", ""),
-                    room=os.getenv("COORDINATION_ROOM", room_id),
-                    admin=os.getenv("COORDINATION_ADMIN", ""),
-                    workers=os.getenv("COORDINATION_WORKERS", ""),
-                ),
-                history=[],
+            result = await self.turn_runner.run_turn(
+                self.runtime_client,
+                worker_files=self.worker_files,
+                room_id=room_id,
+                event_id=event_id,
                 user_message=user_message,
             )
-            # 聚合 SSE 事件为完整回复文本
-            response_text = ""
-            for event in events:
-                if event.kind.value == "text_delta":
-                    response_text += event.text
-                elif event.kind.value == "turn_completed":
-                    response_text = event.text or response_text
-                elif event.kind.value in {"runtime_error", "turn_interrupted"}:
-                    logger.error("Gateway turn failed: %s", event.data or event.text)
-                    return
+            # turn 失败（runtime_error/turn_interrupted）：不清 buffer，保留群聊视野
+            if result.failed:
+                return
+            response_text = result.text
             # NO_REPLY：不发消息但照常清 buffer
             if response_text.strip() and response_text.strip() != "NO_REPLY":
                 await self.matrix_gateway.send_text(room_id, response_text)
-            history.clear()
+            self.history_manager.clear(room_id)
         except Exception:
             logger.exception("Matrix message handling failed event_id=%s", event_id)
         finally:
@@ -287,78 +253,5 @@ def create_app() -> FastAPI:
             await bridge.shutdown()
 
     app = FastAPI(title="cimicode-bridge", version="0.1.0", lifespan=lifespan)
-
-    @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        """存活探针：进程在即 ok。"""
-        return {"status": "ok"}
-
-    @app.get("/readyz")
-    def readyz() -> dict[str, bool]:
-        """就绪探针：Matrix 连接 + session 配置齐备才 true。"""
-        return {"ready": bridge.ready}
-
-    @app.get("/status")
-    def status() -> dict[str, Any]:
-        """本地只读状态接口（leader 探活 worker 用，spec §7.5）。"""
-        return bridge.status_payload()
-
-    @app.post("/api/v1/bridge/handle-message")
-    def handle_message(payload: dict[str, Any]) -> dict[str, Any]:
-        """本地调试入口：模拟 Matrix 消息，复用过滤与三段式组装（不真正调 gateway）。"""
-        body = str(payload.get("body", ""))
-        sender = str(payload.get("sender", ""))
-        event_id = str(payload.get("event_id", "evt-unknown"))
-        room_id = str(payload.get("room_id", "unknown-room"))
-        content = payload.get("content")
-
-        decision = bridge.mention_filter.evaluate(body, sender, content=content)
-        if not decision.accepted:
-            # 被拒消息：白名单内的非 mention 进 buffer
-            if decision.reason == "not_mentioned" and decision.role in bridge.mention_filter.allowed_roles:
-                history = bridge.history_stores.setdefault(
-                    room_id,
-                    HistoryStore(capacity=bridge.config.history.max_entries),
-                )
-                history.append(sender or "unknown", body, event_id=event_id)
-            bridge.phase = "idle"
-            return {
-                "accepted": False,
-                "forwarded": False,
-                "reason": decision.reason,
-                "session_id": None,
-                "event_id": event_id,
-                "room_id": room_id,
-                "mentions": decision.mentions,
-                "role": decision.role,
-            }
-
-        # 命中：组装三段式并记录 turn（HTTP 调试路径不真正调 gateway chat）
-        session_id = bridge.config.runtime.session_id or "configured-session"
-        history = bridge.history_stores.setdefault(
-            room_id,
-            HistoryStore(capacity=bridge.config.history.max_entries),
-        )
-        user_message = history.build_context(f"{sender}: {body}")
-        bridge.session_manager.start_session(session_id)
-        bridge.session_manager.add_turn(session_id, event_id, body)
-        history.clear()
-        bridge.phase = "message_forwarded"
-        bridge.matrix_connected = True
-        bridge.runtime_healthy = True
-        bridge.ready = True
-
-        return {
-            "accepted": True,
-            "forwarded": True,
-            "session_id": session_id,
-            "event_id": event_id,
-            "room_id": room_id,
-            "mentions": decision.mentions,
-            "sender": sender,
-            "role": decision.role,
-            "user_message": user_message,
-            "sandbox_id": bridge.config.runtime.sandbox_id,
-        }
-
+    register_routes(app, bridge)
     return app

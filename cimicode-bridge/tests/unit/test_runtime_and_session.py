@@ -1,7 +1,7 @@
 from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
 from cimicode_bridge.bootstrap import WorkerBootstrapConfig
-from cimicode_bridge.matrix_client import MentionFilter, RoleResolver
-from cimicode_bridge.probes import ProbeStatus, create_probe_status
+from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
+from cimicode_bridge.api.probes import ProbeStatus, create_probe_status
 from cimicode_bridge.runtime.adapters import CimicodeDialect
 from cimicode_bridge.session import HistoryStore, SessionManager
 
