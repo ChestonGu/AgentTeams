@@ -1,8 +1,11 @@
+import asyncio
+
 from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
 from cimicode_bridge.bootstrap import WorkerBootstrapConfig
 from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
 from cimicode_bridge.api.probes import ProbeStatus, create_probe_status
 from cimicode_bridge.runtime.adapters import CimicodeDialect
+from cimicode_bridge.runtime.client import HttpSseRuntime
 from cimicode_bridge.session import HistoryStore, SessionManager
 
 
@@ -145,3 +148,102 @@ def test_session_manager_keeps_latest_turn():
 
     assert manager.current_turn("s1") == "turn-2"
     assert manager.turn_history("s1")[-1]["content"] == "second"
+
+
+# ----------------------------------------------------------------------
+# HttpSseRuntime：真实走 httpx-sse（aconnect_sse）+ 本地回环 SSE 帧
+# ----------------------------------------------------------------------
+def _sse_response(body: bytes, status: int = 200, ct: str = "text/event-stream"):
+    async def handler(reader, writer):
+        writer.write(
+            f"HTTP/1.1 {status} Status\r\n"
+            f"Content-Type: {ct}\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        await writer.drain()
+        # 保持连接一小会，确保客户端读完所有帧（writer 立即关闭会 ReadError）
+        await asyncio.sleep(0.05)
+        writer.close()
+
+    return handler
+
+
+async def _serve_sse(handler):
+    """起本地回环 server，返回 (base_url, srv)。"""
+    srv = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    return f"http://127.0.0.1:{port}", srv
+
+
+async def _translate_stream():
+    """标准 httpx-sse 路径：data.event 作为事件名，JSON 多次分帧都能解析。"""
+    frames = (
+        b'data: {"event":"message","delta":"hello"}\n\n'
+        b'data: {"event":"done","content":"hello world"}\n\n'
+    )
+    base_url, srv = await _serve_sse(_sse_response(frames))
+    try:
+        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        events = await rt.chat(
+            session_id="s1", sandbox_id="sb1", turn_id="t1",
+            agent_md="md", history=[], user_message="hi",
+        )
+    finally:
+        srv.close()
+        await srv.wait_closed()
+    kinds = [e.kind for e in events]
+    assert kinds == [RuntimeEventKind.TEXT_DELTA, RuntimeEventKind.TURN_COMPLETED]
+    assert next(e for e in events if e.kind == RuntimeEventKind.TEXT_DELTA).text == "hello"
+    assert next(e for e in events if e.kind == RuntimeEventKind.TURN_COMPLETED).text == "hello world"
+
+
+async def _interrupted_on_gap():
+    """SSE 流结束仍无 done → 补 turn_interrupted（断流兜底）。"""
+    frames = b'data: {"event":"message","delta":"partial"}\n\n'
+    base_url, srv = await _serve_sse(_sse_response(frames))
+    try:
+        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        events = await rt.chat(
+            session_id="s1", sandbox_id="sb1", turn_id="t1",
+            agent_md="md", history=[], user_message="hi",
+        )
+    finally:
+        srv.close()
+        await srv.wait_closed()
+    assert any(e.kind == RuntimeEventKind.TURN_INTERRUPTED for e in events)
+
+
+async def _raises_on_non_2xx():
+    """非 2xx 响应：httpx-sse 不会自动 raise，bridge 侧显式 raise_for_status。"""
+    import httpx
+
+    base_url, srv = await _serve_sse(
+        _sse_response(b"", status=500, ct="text/plain")
+    )
+    try:
+        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        try:
+            await rt.chat(
+                session_id="s1", sandbox_id="sb1", turn_id="t1",
+                agent_md="md", history=[], user_message="hi",
+            )
+        except httpx.HTTPStatusError:
+            pass  # 期望抛错
+        else:
+            raise AssertionError("expected HTTPStatusError on 500")
+    finally:
+        srv.close()
+        await srv.wait_closed()
+
+
+def test_http_sse_runtime_translates_stream():
+    asyncio.run(_translate_stream())
+
+
+def test_http_sse_runtime_appends_interrupted_on_gap():
+    asyncio.run(_interrupted_on_gap())
+
+
+def test_http_sse_runtime_raises_on_non_2xx():
+    asyncio.run(_raises_on_non_2xx())

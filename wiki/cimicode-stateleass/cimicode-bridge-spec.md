@@ -11,6 +11,12 @@
 - **cimicode**：无状态 Gateway，通道为 `POST /v1/gateway/session/chat` + SSE。
 - **opencode**：opencode headless server，通道为 REST + 轮询，bridge 自管会话生命周期。
 
+**adapter 是可扩展的，不止这两种。** bridge 核心（app / mention / 三段式 / Matrix 收发）保持 runtime 无关，runtime 差异全部收敛到 `runtime/` 下的 `RuntimeAdapter` 实现（SPI 契约在 `runtime/base.py`），由 `runtime/registry.py` 工厂按 `runtime.adapter` 分派。新出现一个 Gateway 后端（例如 cimicode gateway 的另一个接口、或某种新运行时）时，**不改 bridge 核心**，只需：
+
+1. 在 `runtime/` 新增一个实现 `RuntimeAdapter`（`name` / `health` / `chat` / `capabilities`）的适配器类，把它的协议（HTTP + SSE 或 REST + 轮询）翻译成统一的 `RuntimeEvent` 列表；
+2. 在 `runtime/registry.py` 的 `build_runtime_adapter()` 里加一个分支，把 `runtime.adapter` 的字符串映射到该类；
+3. 若新 runtime 有特有能力（如支持 destroy / artifact），在 `RuntimeCapabilities` 里声明，core 会走对应降级路径。
+
 cimicode 链路：
 
 ```text
@@ -373,7 +379,9 @@ opencode 分支由 bridge 自管会话生命周期：`sessionId` 为空时首轮
 
 ### 8.3 SSE
 
-cimicode 路径用 `httpx` 读取 SSE，但 **SSE 行解析为手写实现**（`runtime/client.py` `stream_sse()`，按空行分帧、`data:` 行拼接为 JSON），**不依赖 `httpx-sse`**（其 `aconnect_sse` 在容器内两种用法均异常，对应修复 commit `3f2bf596`）。`pyproject.toml` 仍保留 `httpx-sse` 依赖，目前为死依赖。
+cimicode 路径用标准 **`httpx` + `httpx-sse`**（`aconnect_sse`）读取 SSE 流，事件名/内容一律从 `data` 里的 JSON 取（网关契约：事件名内嵌于 `data.event`，而非 SSE 顶层 `event:` 行），由 `CimicodeDialect` 翻译，`data` 内嵌事件名与手写解析两种来源都兼容。
+
+**为什么要钉 `httpx<0.28`**：`httpx-sse` 0.4.3（最新版，无更高版本）的 `aconnect_sse` 内部是 `async with client.stream(...) as response:`，要求 `AsyncClient.stream()` 是 **context manager**。而 `httpx` 0.28 把 `stream()` 的签名改成了返回 **`AsyncIterator[Response]`**——`async with` 一个迭代器会抛 `TypeError`（缺 `__aenter__`），改成 `async for` 也一样失败（崩溃点就在 `client.stream()`）。因此 bridge 通过 `pyproject.toml` 约束 `httpx>=0.27.0,<0.28`，让 httpx-sse 保持可用。若未来 httpx-sse 发布支持 0.28 的版本，可放开该上界。
 
 ```text
 data: {"event":"message","delta":"你好"}
