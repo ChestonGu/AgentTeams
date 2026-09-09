@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // k8sUpdateMaxRetries is the max attempts for Get→patch spec→Update against
@@ -459,6 +461,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.ChannelPolicy != nil {
 			team.Spec.ChannelPolicy = req.ChannelPolicy
 		}
+		if req.HumanMembers != nil {
+			team.Spec.HumanMembers = req.HumanMembers
+		}
 		if req.WorkerMembers != nil {
 			team.Spec.WorkerMembers = req.WorkerMembers
 		}
@@ -478,6 +483,228 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
 		return
 	}
+}
+
+type teamMutationValidationError struct {
+	err error
+}
+
+func (e *teamMutationValidationError) Error() string { return e.err.Error() }
+
+func (e *teamMutationValidationError) Unwrap() error { return e.err }
+
+func (h *ResourceHandler) updateTeamWith(ctx context.Context, name string, mutate func(*v1beta1.Team) error) (*v1beta1.Team, error) {
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var team v1beta1.Team
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &team); err != nil {
+			return nil, err
+		}
+		if err := mutate(&team); err != nil {
+			return nil, &teamMutationValidationError{err: err}
+		}
+		if err := h.client.Update(ctx, &team); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return nil, err
+		}
+		return &team, nil
+	}
+	return nil, fmt.Errorf("team update retries exhausted")
+}
+
+func (h *ResourceHandler) writeTeamMutationError(w http.ResponseWriter, operation string, err error) {
+	var validationErr *teamMutationValidationError
+	if errors.As(err, &validationErr) {
+		httpStatus := http.StatusBadRequest
+		httputil.WriteError(w, httpStatus, validationErr.Error())
+		return
+	}
+	writeK8sError(w, operation, err)
+}
+
+func auditTeamMembershipMutation(ctx context.Context, operation, teamName string, memberNames []string, err error) {
+	logger := log.FromContext(ctx).WithName("team-membership")
+	caller := authpkg.CallerFromContext(ctx)
+	fields := []interface{}{
+		"operation", operation,
+		"team", teamName,
+		"members", memberNames,
+	}
+	if caller != nil {
+		fields = append(fields, "caller", caller.Username, "callerRole", caller.Role)
+	}
+	if err != nil {
+		fields = append(fields, "result", "failed")
+		logger.Error(err, "team membership mutation", fields...)
+		return
+	}
+	fields = append(fields, "result", "success")
+	logger.Info("team membership mutation", fields...)
+}
+
+func (h *ResourceHandler) AddHumanMembers(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var requested []v1beta1.TeamMemberSpec
+	if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members, err := mergeHumanMembers(team.Spec.HumanMembers, requested, true)
+		if err != nil {
+			return err
+		}
+		team.Spec.HumanMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "invite-human", name, humanMemberNames(requested), err)
+		h.writeTeamMutationError(w, "add human members", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "invite-human", name, humanMemberNames(requested), nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) RemoveHumanMember(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	memberName := r.PathValue("memberName")
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members, err := mergeHumanMembers(team.Spec.HumanMembers, []v1beta1.TeamMemberSpec{{Name: memberName}}, false)
+		if err != nil {
+			return err
+		}
+		team.Spec.HumanMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "kick-human", name, []string{memberName}, err)
+		h.writeTeamMutationError(w, "remove human member", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "kick-human", name, []string{memberName}, nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) AddWorkerMembers(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var requested []v1beta1.TeamWorkerRef
+	if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members := append([]v1beta1.TeamWorkerRef(nil), team.Spec.WorkerMembers...)
+		members = appendWorkerMembers(members, requested)
+		if err := h.validateTeamWorkerMembers(r.Context(), name, members); err != nil {
+			return err
+		}
+		team.Spec.WorkerMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "invite-worker", name, workerMemberNames(requested), err)
+		h.writeTeamMutationError(w, "add worker members", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "invite-worker", name, workerMemberNames(requested), nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) RemoveWorkerMember(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	memberName := r.PathValue("memberName")
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members := removeWorkerMember(team.Spec.WorkerMembers, memberName)
+		if err := h.validateTeamWorkerMembers(r.Context(), name, members); err != nil {
+			return err
+		}
+		team.Spec.WorkerMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "kick-worker", name, []string{memberName}, err)
+		h.writeTeamMutationError(w, "remove worker member", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "kick-worker", name, []string{memberName}, nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func humanMemberNames(members []v1beta1.TeamMemberSpec) []string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		names = append(names, member.Name)
+	}
+	return names
+}
+
+func workerMemberNames(members []v1beta1.TeamWorkerRef) []string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		names = append(names, member.Name)
+	}
+	return names
+}
+
+func mergeHumanMembers(current, requested []v1beta1.TeamMemberSpec, add bool) ([]v1beta1.TeamMemberSpec, error) {
+	result := append([]v1beta1.TeamMemberSpec(nil), current...)
+	seen := make(map[string]struct{}, len(result))
+	for _, member := range result {
+		if member.Name == "" {
+			return nil, fmt.Errorf("humanMembers.name is required")
+		}
+		if _, ok := seen[member.Name]; ok {
+			return nil, fmt.Errorf("human %s is listed more than once", member.Name)
+		}
+		seen[member.Name] = struct{}{}
+	}
+	if add {
+		for _, member := range requested {
+			if member.Name == "" {
+				return nil, fmt.Errorf("humanMembers.name is required")
+			}
+			if _, ok := seen[member.Name]; !ok {
+				result = append(result, member)
+				seen[member.Name] = struct{}{}
+			}
+		}
+		return result, nil
+	}
+	removeName := requested[0].Name
+	result = result[:0]
+	for _, member := range current {
+		if member.Name != removeName {
+			result = append(result, member)
+		}
+	}
+	return result, nil
+}
+
+func appendWorkerMembers(current, requested []v1beta1.TeamWorkerRef) []v1beta1.TeamWorkerRef {
+	seen := make(map[string]struct{}, len(current))
+	for _, member := range current {
+		seen[member.Name] = struct{}{}
+	}
+	for _, member := range requested {
+		if _, ok := seen[member.Name]; !ok {
+			current = append(current, member)
+			seen[member.Name] = struct{}{}
+		}
+	}
+	return current
+}
+
+func removeWorkerMember(current []v1beta1.TeamWorkerRef, name string) []v1beta1.TeamWorkerRef {
+	result := make([]v1beta1.TeamWorkerRef, 0, len(current))
+	for _, member := range current {
+		if member.Name != name {
+			result = append(result, member)
+		}
+	}
+	return result
 }
 
 func (h *ResourceHandler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -821,6 +1048,13 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 		resp.WorkerNames = append(resp.WorkerNames, ref.Name)
 	}
 	for _, ms := range t.Status.Members {
+		resp.MemberStatuses = append(resp.MemberStatuses, TeamMemberStatusResponse{
+			Name:         ms.Name,
+			Ready:        ms.Ready,
+			Role:         ms.Role,
+			MatrixUserID: ms.MatrixUserID,
+			RoomID:       ms.RoomID,
+		})
 		if len(ms.ExposedPorts) == 0 {
 			continue
 		}

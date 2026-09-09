@@ -81,6 +81,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionGet, "team", nameFn)(http.HandlerFunc(rh.GetTeam)))
 	mux.Handle("PUT /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "team", nameFn)(http.HandlerFunc(rh.UpdateTeam)))
 	mux.Handle("DELETE /api/v1/teams/{name}", mw.RequireAuthz(authpkg.ActionDelete, "team", nameFn)(http.HandlerFunc(rh.DeleteTeam)))
+	mux.Handle("POST /api/v1/teams/{name}/human-members", mw.RequireAuthz(authpkg.ActionInvite, "team", nameFn)(http.HandlerFunc(rh.AddHumanMembers)))
+	mux.Handle("DELETE /api/v1/teams/{name}/human-members/{memberName}", mw.RequireAuthz(authpkg.ActionKick, "team", nameFn)(http.HandlerFunc(rh.RemoveHumanMember)))
+	mux.Handle("POST /api/v1/teams/{name}/worker-members", mw.RequireAuthz(authpkg.ActionInvite, "team", nameFn)(http.HandlerFunc(rh.AddWorkerMembers)))
+	mux.Handle("DELETE /api/v1/teams/{name}/worker-members/{memberName}", mw.RequireAuthz(authpkg.ActionKick, "team", nameFn)(http.HandlerFunc(rh.RemoveWorkerMember)))
 
 	// Humans
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
