@@ -38,9 +38,9 @@ func (s source) ensurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, m
 	var creds *service.HumanCredentials
 	var err error
 	if deviceAware, ok := s.deps.Provisioner.(interface {
-		EnsureHumanUserWithOptions(context.Context, string, string) (*service.HumanCredentials, error)
+		EnsureHumanUserWithOptions(context.Context, string, string, string) (*service.HumanCredentials, error)
 	}); ok {
-		creds, err = deviceAware.EnsureHumanUserWithOptions(ctx, spec.EffectiveUsername(metadataName), deviceID)
+		creds, err = deviceAware.EnsureHumanUserWithOptions(ctx, spec.EffectiveUsername(metadataName), spec.InitialPassword, deviceID)
 	} else {
 		creds, err = s.deps.Provisioner.EnsureHumanUser(ctx, spec.EffectiveUsername(metadataName))
 	}

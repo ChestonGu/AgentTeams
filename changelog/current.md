@@ -1,0 +1,1 @@
+- fix(controller): pass pinned Human password into first Matrix provisioning and audit sso-login actions
