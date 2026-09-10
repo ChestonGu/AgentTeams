@@ -146,6 +146,9 @@ func (f *fakeTeamMatrix) SendMessage(context.Context, string, string, string) er
 func (f *fakeTeamMatrix) SendMessageAsAdmin(context.Context, string, string) error { return nil }
 
 func (f *fakeTeamMatrix) Login(context.Context, string, string) (string, error) { return "", nil }
+func (f *fakeTeamMatrix) LoginWithOptions(context.Context, string, string, matrix.LoginOptions) (string, error) {
+	return "", nil
+}
 
 func (f *fakeTeamMatrix) SetDisplayName(_ context.Context, userID, token, displayName string) error {
 	f.setNames = append(f.setNames, displayNameCall{userID: userID, token: token, displayName: displayName})

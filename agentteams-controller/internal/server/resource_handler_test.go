@@ -920,15 +920,13 @@ func TestCreateHuman_InitialPassword(t *testing.T) {
 		t.Errorf("Spec.InitialPassword=%q, want s3cret", human.Spec.InitialPassword)
 	}
 
-	// The create response echoes the pinned password even though the
-	// controller has not reconciled yet (status.initialPassword is empty),
-	// so the caller sees the value it requested.
+	// The create response must not echo the pinned password.
 	var resp map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if got, _ := resp["initialPassword"].(string); got != "s3cret" {
-		t.Errorf("response initialPassword=%v, want s3cret", resp["initialPassword"])
+	if _, present := resp["initialPassword"]; present {
+		t.Errorf("response leaked initialPassword: %v", resp["initialPassword"])
 	}
 }
 

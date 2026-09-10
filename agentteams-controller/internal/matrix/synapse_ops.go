@@ -400,7 +400,11 @@ func (o *SynapseMatrixOps) HealthCheck(ctx context.Context) error {
 // has no register-vs-login distinction), so UserRef.Created is not meaningful
 // on Synapse.
 func (o *SynapseMatrixOps) ProvisionUser(ctx context.Context, spec UserSpec) (*UserRef, *UserCredentials, error) {
-	uc, err := o.synapseAdmin.EnsureUser(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password})
+	return o.ProvisionUserWithOptions(ctx, spec, LoginOptions{})
+}
+
+func (o *SynapseMatrixOps) ProvisionUserWithOptions(ctx context.Context, spec UserSpec, opts LoginOptions) (*UserRef, *UserCredentials, error) {
+	uc, err := o.synapseAdmin.EnsureUserWithOptions(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password}, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -423,6 +427,10 @@ func (o *SynapseMatrixOps) ProvisionUserViaAppService(ctx context.Context, local
 // LoginUser implements MatrixOps.LoginUser for Synapse via password login.
 func (o *SynapseMatrixOps) LoginUser(ctx context.Context, username, password string) (string, error) {
 	return o.matrixClient.Login(ctx, username, password)
+}
+
+func (o *SynapseMatrixOps) LoginUserWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error) {
+	return o.matrixClient.LoginWithOptions(ctx, username, password, opts)
 }
 
 // LoginUserViaAppService implements MatrixOps.LoginUserViaAppService for

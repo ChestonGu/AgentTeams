@@ -45,7 +45,7 @@ type MockProvisioner struct {
 	JoinRoomAsFn                   func(ctx context.Context, roomID, userToken string) error
 	KickFromRoomFn                 func(ctx context.Context, roomID, userID, reason string) error
 	ForceLeaveRoomFn               func(ctx context.Context, userID, roomID string) error
-	LeaveManagerRoomFn               func(ctx context.Context, roomID string) error
+	LeaveManagerRoomFn             func(ctx context.Context, roomID string) error
 	DeactivateHumanUserFn          func(ctx context.Context, userID string) error
 	ProvisionTeamRoomsFn           func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
 	ArchiveTeamRoomsFn             func(ctx context.Context, req service.TeamRoomArchiveRequest) error
@@ -87,7 +87,7 @@ type MockProvisioner struct {
 		JoinRoomAs                   []joinRoomAsCall
 		KickFromRoom                 []kickFromRoomCall
 		ForceLeaveRoom               []roomMembershipCall
-		LeaveManagerRoom               []string
+		LeaveManagerRoom             []string
 		DeactivateHumanUser          []string
 		ProvisionTeamRooms           []service.TeamRoomRequest
 		ArchiveTeamRooms             []service.TeamRoomArchiveRequest
@@ -236,7 +236,7 @@ func (m *MockProvisioner) clearCallsLocked() {
 		JoinRoomAs                   []joinRoomAsCall
 		KickFromRoom                 []kickFromRoomCall
 		ForceLeaveRoom               []roomMembershipCall
-			LeaveManagerRoom               []string
+		LeaveManagerRoom             []string
 		DeactivateHumanUser          []string
 		ProvisionTeamRooms           []service.TeamRoomRequest
 		ArchiveTeamRooms             []service.TeamRoomArchiveRequest
@@ -577,6 +577,10 @@ func (m *MockProvisioner) LoginWithPassword(ctx context.Context, name, password 
 	return "mock-pw-token-" + name, nil
 }
 
+func (m *MockProvisioner) LoginWithPasswordAndOptions(ctx context.Context, name, password, deviceID string) (string, error) {
+	return m.LoginWithPassword(ctx, name, password)
+}
+
 func (m *MockProvisioner) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
 	m.mu.Lock()
 	m.Calls.SetDisplayName = append(m.Calls.SetDisplayName, displayNameCall{UserID: userID, AccessToken: accessToken, DisplayName: displayName})
@@ -631,7 +635,6 @@ func (m *MockProvisioner) ForceLeaveRoom(ctx context.Context, userID, roomID str
 	}
 	return nil
 }
-
 
 // LeaveManagerRoom records the call and invokes LeaveManagerRoomFn if set.
 func (m *MockProvisioner) LeaveManagerRoom(ctx context.Context, roomID string) error {

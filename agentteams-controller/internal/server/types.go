@@ -169,14 +169,24 @@ type TeamMemberStatusResponse struct {
 // --- Human API types ---
 
 type CreateHumanRequest struct {
-	Name              string   `json:"name"`
-	DisplayName       string   `json:"displayName"`
+	Name              string                      `json:"name"`
+	DisplayName       string                      `json:"displayName"`
+	Email             string                      `json:"email,omitempty"`
+	PermissionLevel   int                         `json:"permissionLevel"`
+	AccessibleTeams   []string                    `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                    `json:"accessibleWorkers,omitempty"`
+	Note              string                      `json:"note,omitempty"`
+	InitialPassword   string                      `json:"initialPassword,omitempty"`
+	IdentitySource    *v1beta1.IdentitySourceSpec `json:"identitySource,omitempty"`
+}
+
+type UpdateHumanRequest struct {
+	DisplayName       string   `json:"displayName,omitempty"`
 	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
+	PermissionLevel   *int     `json:"permissionLevel,omitempty"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
 }
 
 type HumanResponse struct {
@@ -189,7 +199,6 @@ type HumanResponse struct {
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
 	Rooms             []string `json:"rooms,omitempty"`
 	Message           string   `json:"message,omitempty"`
 }

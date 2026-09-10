@@ -50,7 +50,19 @@ func (p *Provisioner) RegisterAppServiceUser(ctx context.Context, username strin
 // to password reset + login. The returned HumanCredentials always carries a
 // Password since legacy auth has no AS bypass.
 func (p *Provisioner) RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error) {
-	_, uc, err := p.matrixOps.ProvisionUser(ctx, matrix.UserSpec{Username: username})
+	return p.registerLegacyUserWithOptions(ctx, username, matrix.LoginOptions{})
+}
+
+func (p *Provisioner) registerLegacyUserWithOptions(ctx context.Context, username string, opts matrix.LoginOptions) (*HumanCredentials, error) {
+	var uc *matrix.UserCredentials
+	var err error
+	if provisioner, ok := p.matrixOps.(interface {
+		ProvisionUserWithOptions(context.Context, matrix.UserSpec, matrix.LoginOptions) (*matrix.UserRef, *matrix.UserCredentials, error)
+	}); ok {
+		_, uc, err = provisioner.ProvisionUserWithOptions(ctx, matrix.UserSpec{Username: username}, opts)
+	} else {
+		_, uc, err = p.matrixOps.ProvisionUser(ctx, matrix.UserSpec{Username: username})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("register legacy human %s: %w", username, err)
 	}
@@ -60,6 +72,16 @@ func (p *Provisioner) RegisterLegacyUser(ctx context.Context, username string) (
 		Password:    uc.Password,
 		Created:     uc.Created,
 	}, nil
+}
+
+// EnsureHumanUserWithOptions is the optional device-aware first-provisioning
+// path used by the HTTP login action. Existing reconciler callers continue to
+// use EnsureHumanUser and therefore keep their historical login behavior.
+func (p *Provisioner) EnsureHumanUserWithOptions(ctx context.Context, username, deviceID string) (*HumanCredentials, error) {
+	if p.MatrixAppServiceEnabled() {
+		return p.RegisterAppServiceUser(ctx, username)
+	}
+	return p.registerLegacyUserWithOptions(ctx, username, matrix.LoginOptions{DeviceID: deviceID})
 }
 
 // SetUserPassword writes a password for an existing Matrix account via
@@ -83,6 +105,10 @@ func (p *Provisioner) LoginAppServiceUser(ctx context.Context, username string) 
 // the controller has the user's stored InitialPassword.
 func (p *Provisioner) LoginWithPassword(ctx context.Context, username, password string) (string, error) {
 	return p.matrixOps.LoginUser(ctx, username, password)
+}
+
+func (p *Provisioner) LoginWithPasswordAndOptions(ctx context.Context, username, password, deviceID string) (string, error) {
+	return p.matrixOps.LoginUserWithOptions(ctx, username, password, matrix.LoginOptions{DeviceID: deviceID})
 }
 
 // =========================================================================

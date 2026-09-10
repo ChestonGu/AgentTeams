@@ -49,6 +49,12 @@ type EnsureUserRequest struct {
 	Password string // if empty, a secure random password is generated
 }
 
+// LoginOptions controls optional Matrix client login behavior.
+// DeviceID is omitted from the wire request when empty.
+type LoginOptions struct {
+	DeviceID string
+}
+
 // UserCredentials holds the result of a successful EnsureUser call.
 type UserCredentials struct {
 	UserID      string // full Matrix user ID, e.g. @alice:domain

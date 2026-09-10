@@ -105,6 +105,10 @@ func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayNa
 // friendly display name on the next re-provision, resurrecting the raw
 // localpart in rooms until the next generation-gated sync fired.
 func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
+	return s.EnsureUserWithOptions(ctx, req, LoginOptions{})
+}
+
+func (s *SynapseClient) EnsureUserWithOptions(ctx context.Context, req EnsureUserRequest, opts LoginOptions) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
 		var err error
@@ -139,7 +143,7 @@ func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	}
 
 	// Login to obtain an access token for the (now guaranteed) account.
-	token, err := s.Login(ctx, req.Username, password)
+	token, err := s.LoginWithOptions(ctx, req.Username, password, opts)
 	if err != nil {
 		return nil, fmt.Errorf("synapse login %s after create: %w", req.Username, err)
 	}

@@ -220,6 +220,8 @@ type HumanProvisioner interface {
 
 	// LoginWithPassword obtains a token via the password login flow.
 	LoginWithPassword(ctx context.Context, username, password string) (string, error)
+	// LoginWithPasswordAndOptions obtains a token with an optional device ID.
+	LoginWithPasswordAndOptions(ctx context.Context, username, password, deviceID string) (string, error)
 
 	// SetDisplayName updates the Matrix profile displayname for the user.
 	// Requires a user-scoped access token.

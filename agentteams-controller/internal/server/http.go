@@ -66,7 +66,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- Declarative resource CRUD ---
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
 	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
+	rh.requireHumanPassword = deps.Provisioner != nil && !deps.Provisioner.MatrixAppServiceEnabled()
 	nameFn := authpkg.NameFromPath
+	humanLoginHandler := NewHumanLoginHandler(deps.Client, deps.Namespace, deps.ControllerName, deps.Provisioner)
 
 	// Workers
 	mux.Handle("POST /api/v1/workers", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(rh.CreateWorker)))
@@ -90,7 +92,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
 	mux.Handle("GET /api/v1/humans", mw.RequireAuthz(authpkg.ActionList, "human", nil)(http.HandlerFunc(rh.ListHumans)))
 	mux.Handle("GET /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionGet, "human", nameFn)(http.HandlerFunc(rh.GetHuman)))
+	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
+	mux.Handle("POST /api/v1/humans/sso-login", mw.RequireAuthz(authpkg.ActionLogin, "human", nil)(http.HandlerFunc(humanLoginHandler.Login)))
 
 	// Managers
 	mux.Handle("POST /api/v1/managers", mw.RequireAuthz(authpkg.ActionCreate, "manager", nil)(http.HandlerFunc(rh.CreateManager)))

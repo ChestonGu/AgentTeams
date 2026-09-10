@@ -20,6 +20,7 @@ const (
 	ActionSTS                Action = "sts"
 	ActionStatus             Action = "status"
 	ActionRefreshMatrixToken Action = "refresh-matrix-token"
+	ActionLogin              Action = "login"
 	ActionGateway            Action = "gateway"
 )
 

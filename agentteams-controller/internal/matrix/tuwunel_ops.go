@@ -301,7 +301,11 @@ func roomMetadataState(m *RoomMetadata) []StateEvent {
 // orphan-recovery fallback). An empty spec.Password yields a generated one,
 // which is returned in the UserCredentials.
 func (o *TuwunelMatrixOps) ProvisionUser(ctx context.Context, spec UserSpec) (*UserRef, *UserCredentials, error) {
-	uc, err := o.TuwunelClient.EnsureUser(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password})
+	return o.ProvisionUserWithOptions(ctx, spec, LoginOptions{})
+}
+
+func (o *TuwunelMatrixOps) ProvisionUserWithOptions(ctx context.Context, spec UserSpec, opts LoginOptions) (*UserRef, *UserCredentials, error) {
+	uc, err := o.TuwunelClient.EnsureUserWithOptions(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password}, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -322,6 +326,10 @@ func (o *TuwunelMatrixOps) ProvisionUserViaAppService(ctx context.Context, local
 // LoginUser implements MatrixOps.LoginUser for Tuwunel via password login.
 func (o *TuwunelMatrixOps) LoginUser(ctx context.Context, username, password string) (string, error) {
 	return o.TuwunelClient.Login(ctx, username, password)
+}
+
+func (o *TuwunelMatrixOps) LoginUserWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error) {
+	return o.TuwunelClient.LoginWithOptions(ctx, username, password, opts)
 }
 
 // LoginUserViaAppService implements MatrixOps.LoginUserViaAppService for

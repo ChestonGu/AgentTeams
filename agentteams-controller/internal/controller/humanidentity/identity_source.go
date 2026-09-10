@@ -59,6 +59,18 @@ type Credentials struct {
 	Created bool
 }
 
+// EnsurePrecreatedOptions carries request-scoped provisioning options that
+// must not become part of Human spec or status.
+type EnsurePrecreatedOptions struct {
+	DeviceID string
+}
+
+// DeviceAwareIdentitySource is an optional extension for imperative callers.
+// The reconciler intentionally uses the base IdentitySource contract.
+type DeviceAwareIdentitySource interface {
+	EnsurePrecreatedWithOptions(context.Context, *v1beta1.HumanSpec, string, EnsurePrecreatedOptions) (Credentials, error)
+}
+
 const (
 	KeyLegacyPassword = "legacy_password"
 	KeyExternalSSO    = "external_sso"

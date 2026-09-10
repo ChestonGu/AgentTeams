@@ -77,6 +77,7 @@ type Client interface {
 
 	// Login obtains an access token for an existing user.
 	Login(ctx context.Context, username, password string) (string, error)
+	LoginWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error)
 
 	// SetDisplayName updates a user's profile displayname.
 	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
@@ -188,6 +189,10 @@ func (c *matrixClient) ensureAdminToken(ctx context.Context) (string, error) {
 }
 
 func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
+	return c.EnsureUserWithOptions(ctx, req, LoginOptions{})
+}
+
+func (c *TuwunelClient) EnsureUserWithOptions(ctx context.Context, req EnsureUserRequest, opts LoginOptions) (*UserCredentials, error) {
 	password := req.Password
 	if password == "" {
 		var err error
@@ -234,7 +239,7 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 	}
 
 	// Registration failed with M_USER_IN_USE �?try login
-	token, err := c.Login(ctx, req.Username, password)
+	token, err := c.LoginWithOptions(ctx, req.Username, password, opts)
 	if err == nil {
 		return &UserCredentials{
 			UserID:      c.UserID(req.Username),
@@ -269,7 +274,7 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 			return nil, ctx.Err()
 		case <-time.After(baseDelay * time.Duration(attempt)):
 		}
-		token, lastErr = c.Login(ctx, req.Username, password)
+		token, lastErr = c.LoginWithOptions(ctx, req.Username, password, opts)
 		if lastErr == nil {
 			return &UserCredentials{
 				UserID:      userID,
@@ -284,6 +289,10 @@ func (c *TuwunelClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (
 }
 
 func (c *matrixClient) Login(ctx context.Context, username, password string) (string, error) {
+	return c.LoginWithOptions(ctx, username, password, LoginOptions{})
+}
+
+func (c *matrixClient) LoginWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error) {
 	body := map[string]interface{}{
 		"type": "m.login.password",
 		"identifier": map[string]string{
@@ -291,6 +300,9 @@ func (c *matrixClient) Login(ctx context.Context, username, password string) (st
 			"user": username,
 		},
 		"password": password,
+	}
+	if opts.DeviceID != "" {
+		body["device_id"] = opts.DeviceID
 	}
 	var resp struct {
 		AccessToken string `json:"access_token"`

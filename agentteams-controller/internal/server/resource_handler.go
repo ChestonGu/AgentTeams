@@ -32,6 +32,7 @@ type ResourceHandler struct {
 	backend   *backend.Registry
 
 	defaultWorkerRuntime string
+	requireHumanPassword bool
 
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
@@ -737,6 +738,14 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if req.IdentitySource != nil && (req.IdentitySource.Issuer == "" || req.IdentitySource.Subject == "") {
+		httputil.WriteError(w, http.StatusBadRequest, "identitySource issuer and subject are required together")
+		return
+	}
+	if req.IdentitySource == nil && h.requireHumanPassword && req.InitialPassword == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "initialPassword is required for legacy_password humans")
+		return
+	}
 
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{
@@ -751,6 +760,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,
 			InitialPassword:   req.InitialPassword,
+			IdentitySource:    req.IdentitySource,
 		},
 	}
 
@@ -793,6 +803,60 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+}
+
+func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "human name is required")
+		return
+	}
+
+	var req UpdateHumanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			writeK8sError(w, "get human for update", err)
+			return
+		}
+
+		if req.DisplayName != "" {
+			human.Spec.DisplayName = req.DisplayName
+		}
+		if req.Email != "" {
+			human.Spec.Email = req.Email
+		}
+		if req.PermissionLevel != nil {
+			human.Spec.PermissionLevel = *req.PermissionLevel
+		}
+		if req.AccessibleTeams != nil {
+			human.Spec.AccessibleTeams = req.AccessibleTeams
+		}
+		if req.AccessibleWorkers != nil {
+			human.Spec.AccessibleWorkers = req.AccessibleWorkers
+		}
+		if req.Note != "" {
+			human.Spec.Note = req.Note
+		}
+
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human", err)
+			return
+		}
+
+		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+		return
+	}
 }
 
 func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
@@ -1089,13 +1153,6 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 }
 
 func humanToResponse(h *v1beta1.Human) HumanResponse {
-	// Prefer the status value (the password actually set on the Matrix
-	// account); before the first reconcile it is empty, so fall back to the
-	// spec value the caller pinned at create time.
-	initialPassword := h.Status.InitialPassword
-	if initialPassword == "" {
-		initialPassword = h.Spec.InitialPassword
-	}
 	resp := HumanResponse{
 		Name:              h.Name,
 		Phase:             h.Status.Phase,
@@ -1106,7 +1163,6 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
-		InitialPassword:   initialPassword,
 		Rooms:             h.Status.Rooms,
 		Message:           h.Status.Message,
 	}
