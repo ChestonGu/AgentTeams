@@ -120,24 +120,29 @@ type UpdateTeamRequest struct {
 }
 
 type TeamResponse struct {
-	Name               string                       `json:"name"`
-	DisplayName        string                       `json:"displayName,omitempty"`
-	TeamName           string                       `json:"teamName,omitempty"`
-	Phase              string                       `json:"phase"`
-	Description        string                       `json:"description,omitempty"`
-	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
-	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
-	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
-	LeaderName         string                       `json:"leaderName"`
-	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
-	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
-	LeaderDMRoomID     string                       `json:"leaderDMRoomID,omitempty"`
-	LeaderReady        bool                         `json:"leaderReady"`
-	ReadyWorkers       int                          `json:"readyWorkers"`
-	TotalWorkers       int                          `json:"totalWorkers"`
-	Message            string                       `json:"message,omitempty"`
-	WorkerNames        []string                     `json:"workerNames,omitempty"`
-	WorkerExposedPorts map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	Name          string                   `json:"name"`
+	DisplayName   string                   `json:"displayName,omitempty"`
+	TeamName      string                   `json:"teamName,omitempty"`
+	Phase         string                   `json:"phase"`
+	Description   string                   `json:"description,omitempty"`
+	Admin         *v1beta1.TeamAdminSpec   `json:"admin,omitempty"`
+	HumanMembers  []v1beta1.TeamMemberSpec `json:"humanMembers,omitempty"`
+	WorkerMembers []v1beta1.TeamWorkerRef  `json:"workerMembers"`
+	// WorkerMemberDetails exposes per-member resolved metadata such as
+	// displayName and Matrix user id so API callers can show friendly names
+	// without fetching each referenced Worker separately.
+	WorkerMemberDetails []TeamWorkerDetail           `json:"workerMemberDetails,omitempty"`
+	LeaderName          string                       `json:"leaderName"`
+	HeartbeatEvery      string                       `json:"heartbeatEvery,omitempty"`
+	TeamRoomID          string                       `json:"teamRoomID,omitempty"`
+	LeaderDMRoomID      string                       `json:"leaderDMRoomID,omitempty"`
+	LeaderReady         bool                         `json:"leaderReady"`
+	ReadyWorkers        int                          `json:"readyWorkers"`
+	TotalWorkers        int                          `json:"totalWorkers"`
+	Message             string                       `json:"message,omitempty"`
+	WorkerNames         []string                     `json:"workerNames,omitempty"`
+	WorkerExposedPorts  map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	MemberStatuses      []TeamMemberStatusResponse   `json:"memberStatuses,omitempty"`
 }
 
 type TeamListResponse struct {
@@ -145,17 +150,43 @@ type TeamListResponse struct {
 	Total int            `json:"total"`
 }
 
+// TeamWorkerDetail provides resolved information for one Team worker member.
+type TeamWorkerDetail struct {
+	Name         string `json:"name"`
+	Role         string `json:"role,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+}
+
+type TeamMemberStatusResponse struct {
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	Role         string `json:"role,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+	RoomID       string `json:"roomID,omitempty"`
+}
+
 // --- Human API types ---
 
 type CreateHumanRequest struct {
-	Name              string   `json:"name"`
-	DisplayName       string   `json:"displayName"`
+	Name              string                      `json:"name"`
+	DisplayName       string                      `json:"displayName"`
+	Email             string                      `json:"email,omitempty"`
+	PermissionLevel   int                         `json:"permissionLevel"`
+	AccessibleTeams   []string                    `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                    `json:"accessibleWorkers,omitempty"`
+	Note              string                      `json:"note,omitempty"`
+	InitialPassword   string                      `json:"initialPassword,omitempty"`
+	IdentitySource    *v1beta1.IdentitySourceSpec `json:"identitySource,omitempty"`
+}
+
+type UpdateHumanRequest struct {
+	DisplayName       string   `json:"displayName,omitempty"`
 	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
+	PermissionLevel   *int     `json:"permissionLevel,omitempty"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
 }
 
 type HumanResponse struct {
@@ -168,7 +199,6 @@ type HumanResponse struct {
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
 	Rooms             []string `json:"rooms,omitempty"`
 	Message           string   `json:"message,omitempty"`
 }

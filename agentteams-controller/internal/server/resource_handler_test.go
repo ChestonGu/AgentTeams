@@ -516,6 +516,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
+			HumanMembers:   []v1beta1.TeamMemberSpec{{Name: "old-human", Role: "coordinator"}},
 			HeartbeatEvery: "30m",
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "alpha-lead", Role: "team_leader"},
@@ -529,6 +530,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 
 	updateBody := []byte(`{
 		"heartbeatEvery":"45m",
+		"humanMembers":[{"name":"new-human","role":"coordinator"}],
 		"workerMembers":[
 			{"name":"alpha-lead","role":"team_leader"},
 			{"name":"alpha-qa","role":"worker"}
@@ -549,6 +551,9 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	if updated.Spec.HeartbeatEvery != "45m" {
 		t.Fatalf("heartbeatEvery = %q, want 45m", updated.Spec.HeartbeatEvery)
 	}
+	if got, want := updated.Spec.HumanMembers, []v1beta1.TeamMemberSpec{{Name: "new-human", Role: "coordinator"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("humanMembers = %#v, want %#v", got, want)
+	}
 	if got, want := updated.Spec.WorkerMembers, []v1beta1.TeamWorkerRef{
 		{Name: "alpha-lead", Role: "team_leader"},
 		{Name: "alpha-qa", Role: "worker"},
@@ -565,6 +570,93 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.WorkerMembers, updated.Spec.WorkerMembers) {
 		t.Fatalf("workerMembers = %#v, want %#v", resp.WorkerMembers, updated.Spec.WorkerMembers)
+	}
+}
+
+func TestTeamMemberOperationsAreIdempotentAndValidateLeader(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-lead", Namespace: "default"}}
+	dev := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
+	qa := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-qa", Namespace: "default"}}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "alice", Role: "coordinator"}},
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "alpha-lead", Role: "team_leader"},
+				{Name: "alpha-dev", Role: "worker"},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, dev, qa, team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	addHuman := httptest.NewRequest(http.MethodPost, "/api/v1/teams/alpha-team/human-members", bytes.NewReader([]byte(`[{"name":"bob","role":"coordinator"},{"name":"alice"}]`)))
+	addHuman.SetPathValue("name", "alpha-team")
+	addHumanRec := httptest.NewRecorder()
+	handler.AddHumanMembers(addHumanRec, addHuman)
+	if addHumanRec.Code != http.StatusOK {
+		t.Fatalf("add human status = %d: %s", addHumanRec.Code, addHumanRec.Body.String())
+	}
+
+	addWorker := httptest.NewRequest(http.MethodPost, "/api/v1/teams/alpha-team/worker-members", bytes.NewReader([]byte(`[{"name":"alpha-qa","role":"worker"}]`)))
+	addWorker.SetPathValue("name", "alpha-team")
+	addWorkerRec := httptest.NewRecorder()
+	handler.AddWorkerMembers(addWorkerRec, addWorker)
+	if addWorkerRec.Code != http.StatusOK {
+		t.Fatalf("add worker status = %d: %s", addWorkerRec.Code, addWorkerRec.Body.String())
+	}
+
+	removeWorker := httptest.NewRequest(http.MethodDelete, "/api/v1/teams/alpha-team/worker-members/alpha-qa", nil)
+	removeWorker.SetPathValue("name", "alpha-team")
+	removeWorker.SetPathValue("memberName", "alpha-qa")
+	removeWorkerRec := httptest.NewRecorder()
+	handler.RemoveWorkerMember(removeWorkerRec, removeWorker)
+	if removeWorkerRec.Code != http.StatusOK {
+		t.Fatalf("remove worker status = %d: %s", removeWorkerRec.Code, removeWorkerRec.Body.String())
+	}
+
+	removeLeader := httptest.NewRequest(http.MethodDelete, "/api/v1/teams/alpha-team/worker-members/alpha-lead", nil)
+	removeLeader.SetPathValue("name", "alpha-team")
+	removeLeader.SetPathValue("memberName", "alpha-lead")
+	removeLeaderRec := httptest.NewRecorder()
+	handler.RemoveWorkerMember(removeLeaderRec, removeLeader)
+	if removeLeaderRec.Code != http.StatusBadRequest {
+		t.Fatalf("remove leader status = %d, want %d: %s", removeLeaderRec.Code, http.StatusBadRequest, removeLeaderRec.Body.String())
+	}
+
+	var stored v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if got, want := len(stored.Spec.WorkerMembers), 2; got != want {
+		t.Fatalf("worker member count = %d, want %d", got, want)
+	}
+}
+
+func TestTeamResponseIncludesMemberStatuses(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Status: v1beta1.TeamStatus{Members: []v1beta1.TeamMemberStatus{{
+			Name: "alpha-lead", Ready: true, Role: "team_leader", MatrixUserID: "@lead:matrix", RoomID: "!room:matrix",
+		}}},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/alpha-team", nil)
+	req.SetPathValue("name", "alpha-team")
+	rec := httptest.NewRecorder()
+	handler.GetTeam(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get team status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var response TeamResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode team response: %v", err)
+	}
+	if len(response.MemberStatuses) != 1 || response.MemberStatuses[0].RoomID != "!room:matrix" || !response.MemberStatuses[0].Ready {
+		t.Fatalf("memberStatuses = %#v", response.MemberStatuses)
 	}
 }
 
@@ -828,15 +920,13 @@ func TestCreateHuman_InitialPassword(t *testing.T) {
 		t.Errorf("Spec.InitialPassword=%q, want s3cret", human.Spec.InitialPassword)
 	}
 
-	// The create response echoes the pinned password even though the
-	// controller has not reconciled yet (status.initialPassword is empty),
-	// so the caller sees the value it requested.
+	// The create response must not echo the pinned password.
 	var resp map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if got, _ := resp["initialPassword"].(string); got != "s3cret" {
-		t.Errorf("response initialPassword=%v, want s3cret", resp["initialPassword"])
+	if _, present := resp["initialPassword"]; present {
+		t.Errorf("response leaked initialPassword: %v", resp["initialPassword"])
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // k8sUpdateMaxRetries is the max attempts for Get→patch spec→Update against
@@ -30,6 +32,7 @@ type ResourceHandler struct {
 	backend   *backend.Registry
 
 	defaultWorkerRuntime string
+	requireHumanPassword bool
 
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
@@ -360,7 +363,25 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
+	resp := teamToResponse(&team)
+	// Enrich member details with resolved displayName and Matrix user ID.
+	if len(team.Spec.WorkerMembers) > 0 {
+		for _, ref := range team.Spec.WorkerMembers {
+			var wk v1beta1.Worker
+			detail := TeamWorkerDetail{Name: ref.Name, Role: ref.Role}
+			if err := h.client.Get(r.Context(), client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &wk); err == nil {
+				if wk.Spec.DisplayName != "" {
+					detail.DisplayName = wk.Spec.DisplayName
+				} else {
+					detail.DisplayName = ref.Name
+				}
+				detail.MatrixUserID = wk.Status.MatrixUserID
+			}
+			resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
+		}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +393,25 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 
 	teams := make([]TeamResponse, 0, len(list.Items))
 	for i := range list.Items {
-		teams = append(teams, teamToResponse(&list.Items[i]))
+		resp := teamToResponse(&list.Items[i])
+		// Enrich per-member details so callers can show displayName without
+		// issuing extra requests.
+		if len(list.Items[i].Spec.WorkerMembers) > 0 {
+			for _, ref := range list.Items[i].Spec.WorkerMembers {
+				var wk v1beta1.Worker
+				detail := TeamWorkerDetail{Name: ref.Name, Role: ref.Role}
+				if err := h.client.Get(r.Context(), client.ObjectKey{Name: ref.Name, Namespace: h.namespace}, &wk); err == nil {
+					if wk.Spec.DisplayName != "" {
+						detail.DisplayName = wk.Spec.DisplayName
+					} else {
+						detail.DisplayName = ref.Name
+					}
+					detail.MatrixUserID = wk.Status.MatrixUserID
+				}
+				resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
+			}
+		}
+		teams = append(teams, resp)
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, TeamListResponse{Teams: teams, Total: len(teams)})
@@ -423,6 +462,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.ChannelPolicy != nil {
 			team.Spec.ChannelPolicy = req.ChannelPolicy
 		}
+		if req.HumanMembers != nil {
+			team.Spec.HumanMembers = req.HumanMembers
+		}
 		if req.WorkerMembers != nil {
 			team.Spec.WorkerMembers = req.WorkerMembers
 		}
@@ -442,6 +484,228 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
 		return
 	}
+}
+
+type teamMutationValidationError struct {
+	err error
+}
+
+func (e *teamMutationValidationError) Error() string { return e.err.Error() }
+
+func (e *teamMutationValidationError) Unwrap() error { return e.err }
+
+func (h *ResourceHandler) updateTeamWith(ctx context.Context, name string, mutate func(*v1beta1.Team) error) (*v1beta1.Team, error) {
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var team v1beta1.Team
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &team); err != nil {
+			return nil, err
+		}
+		if err := mutate(&team); err != nil {
+			return nil, &teamMutationValidationError{err: err}
+		}
+		if err := h.client.Update(ctx, &team); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return nil, err
+		}
+		return &team, nil
+	}
+	return nil, fmt.Errorf("team update retries exhausted")
+}
+
+func (h *ResourceHandler) writeTeamMutationError(w http.ResponseWriter, operation string, err error) {
+	var validationErr *teamMutationValidationError
+	if errors.As(err, &validationErr) {
+		httpStatus := http.StatusBadRequest
+		httputil.WriteError(w, httpStatus, validationErr.Error())
+		return
+	}
+	writeK8sError(w, operation, err)
+}
+
+func auditTeamMembershipMutation(ctx context.Context, operation, teamName string, memberNames []string, err error) {
+	logger := log.FromContext(ctx).WithName("team-membership")
+	caller := authpkg.CallerFromContext(ctx)
+	fields := []interface{}{
+		"operation", operation,
+		"team", teamName,
+		"members", memberNames,
+	}
+	if caller != nil {
+		fields = append(fields, "caller", caller.Username, "callerRole", caller.Role)
+	}
+	if err != nil {
+		fields = append(fields, "result", "failed")
+		logger.Error(err, "team membership mutation", fields...)
+		return
+	}
+	fields = append(fields, "result", "success")
+	logger.Info("team membership mutation", fields...)
+}
+
+func (h *ResourceHandler) AddHumanMembers(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var requested []v1beta1.TeamMemberSpec
+	if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members, err := mergeHumanMembers(team.Spec.HumanMembers, requested, true)
+		if err != nil {
+			return err
+		}
+		team.Spec.HumanMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "invite-human", name, humanMemberNames(requested), err)
+		h.writeTeamMutationError(w, "add human members", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "invite-human", name, humanMemberNames(requested), nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) RemoveHumanMember(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	memberName := r.PathValue("memberName")
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members, err := mergeHumanMembers(team.Spec.HumanMembers, []v1beta1.TeamMemberSpec{{Name: memberName}}, false)
+		if err != nil {
+			return err
+		}
+		team.Spec.HumanMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "kick-human", name, []string{memberName}, err)
+		h.writeTeamMutationError(w, "remove human member", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "kick-human", name, []string{memberName}, nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) AddWorkerMembers(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var requested []v1beta1.TeamWorkerRef
+	if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members := append([]v1beta1.TeamWorkerRef(nil), team.Spec.WorkerMembers...)
+		members = appendWorkerMembers(members, requested)
+		if err := h.validateTeamWorkerMembers(r.Context(), name, members); err != nil {
+			return err
+		}
+		team.Spec.WorkerMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "invite-worker", name, workerMemberNames(requested), err)
+		h.writeTeamMutationError(w, "add worker members", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "invite-worker", name, workerMemberNames(requested), nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func (h *ResourceHandler) RemoveWorkerMember(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	memberName := r.PathValue("memberName")
+	team, err := h.updateTeamWith(r.Context(), name, func(team *v1beta1.Team) error {
+		members := removeWorkerMember(team.Spec.WorkerMembers, memberName)
+		if err := h.validateTeamWorkerMembers(r.Context(), name, members); err != nil {
+			return err
+		}
+		team.Spec.WorkerMembers = members
+		return nil
+	})
+	if err != nil {
+		auditTeamMembershipMutation(r.Context(), "kick-worker", name, []string{memberName}, err)
+		h.writeTeamMutationError(w, "remove worker member", err)
+		return
+	}
+	auditTeamMembershipMutation(r.Context(), "kick-worker", name, []string{memberName}, nil)
+	httputil.WriteJSON(w, http.StatusOK, teamToResponse(team))
+}
+
+func humanMemberNames(members []v1beta1.TeamMemberSpec) []string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		names = append(names, member.Name)
+	}
+	return names
+}
+
+func workerMemberNames(members []v1beta1.TeamWorkerRef) []string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		names = append(names, member.Name)
+	}
+	return names
+}
+
+func mergeHumanMembers(current, requested []v1beta1.TeamMemberSpec, add bool) ([]v1beta1.TeamMemberSpec, error) {
+	result := append([]v1beta1.TeamMemberSpec(nil), current...)
+	seen := make(map[string]struct{}, len(result))
+	for _, member := range result {
+		if member.Name == "" {
+			return nil, fmt.Errorf("humanMembers.name is required")
+		}
+		if _, ok := seen[member.Name]; ok {
+			return nil, fmt.Errorf("human %s is listed more than once", member.Name)
+		}
+		seen[member.Name] = struct{}{}
+	}
+	if add {
+		for _, member := range requested {
+			if member.Name == "" {
+				return nil, fmt.Errorf("humanMembers.name is required")
+			}
+			if _, ok := seen[member.Name]; !ok {
+				result = append(result, member)
+				seen[member.Name] = struct{}{}
+			}
+		}
+		return result, nil
+	}
+	removeName := requested[0].Name
+	result = result[:0]
+	for _, member := range current {
+		if member.Name != removeName {
+			result = append(result, member)
+		}
+	}
+	return result, nil
+}
+
+func appendWorkerMembers(current, requested []v1beta1.TeamWorkerRef) []v1beta1.TeamWorkerRef {
+	seen := make(map[string]struct{}, len(current))
+	for _, member := range current {
+		seen[member.Name] = struct{}{}
+	}
+	for _, member := range requested {
+		if _, ok := seen[member.Name]; !ok {
+			current = append(current, member)
+			seen[member.Name] = struct{}{}
+		}
+	}
+	return current
+}
+
+func removeWorkerMember(current []v1beta1.TeamWorkerRef, name string) []v1beta1.TeamWorkerRef {
+	result := make([]v1beta1.TeamWorkerRef, 0, len(current))
+	for _, member := range current {
+		if member.Name != name {
+			result = append(result, member)
+		}
+	}
+	return result
 }
 
 func (h *ResourceHandler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -474,6 +738,14 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if req.IdentitySource != nil && (req.IdentitySource.Issuer == "" || req.IdentitySource.Subject == "") {
+		httputil.WriteError(w, http.StatusBadRequest, "identitySource issuer and subject are required together")
+		return
+	}
+	if req.IdentitySource == nil && h.requireHumanPassword && req.InitialPassword == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "initialPassword is required for legacy_password humans")
+		return
+	}
 
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{
@@ -488,6 +760,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,
 			InitialPassword:   req.InitialPassword,
+			IdentitySource:    req.IdentitySource,
 		},
 	}
 
@@ -530,6 +803,60 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
+}
+
+func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "human name is required")
+		return
+	}
+
+	var req UpdateHumanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			writeK8sError(w, "get human for update", err)
+			return
+		}
+
+		if req.DisplayName != "" {
+			human.Spec.DisplayName = req.DisplayName
+		}
+		if req.Email != "" {
+			human.Spec.Email = req.Email
+		}
+		if req.PermissionLevel != nil {
+			human.Spec.PermissionLevel = *req.PermissionLevel
+		}
+		if req.AccessibleTeams != nil {
+			human.Spec.AccessibleTeams = req.AccessibleTeams
+		}
+		if req.AccessibleWorkers != nil {
+			human.Spec.AccessibleWorkers = req.AccessibleWorkers
+		}
+		if req.Note != "" {
+			human.Spec.Note = req.Note
+		}
+
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human", err)
+			return
+		}
+
+		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+		return
+	}
 }
 
 func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
@@ -785,6 +1112,13 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 		resp.WorkerNames = append(resp.WorkerNames, ref.Name)
 	}
 	for _, ms := range t.Status.Members {
+		resp.MemberStatuses = append(resp.MemberStatuses, TeamMemberStatusResponse{
+			Name:         ms.Name,
+			Ready:        ms.Ready,
+			Role:         ms.Role,
+			MatrixUserID: ms.MatrixUserID,
+			RoomID:       ms.RoomID,
+		})
 		if len(ms.ExposedPorts) == 0 {
 			continue
 		}
@@ -819,13 +1153,6 @@ func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 }
 
 func humanToResponse(h *v1beta1.Human) HumanResponse {
-	// Prefer the status value (the password actually set on the Matrix
-	// account); before the first reconcile it is empty, so fall back to the
-	// spec value the caller pinned at create time.
-	initialPassword := h.Status.InitialPassword
-	if initialPassword == "" {
-		initialPassword = h.Spec.InitialPassword
-	}
 	resp := HumanResponse{
 		Name:              h.Name,
 		Phase:             h.Status.Phase,
@@ -836,7 +1163,6 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		AccessibleWorkers: h.Spec.AccessibleWorkers,
 		Note:              h.Spec.Note,
 		MatrixUserID:      h.Status.MatrixUserID,
-		InitialPassword:   initialPassword,
 		Rooms:             h.Status.Rooms,
 		Message:           h.Status.Message,
 	}

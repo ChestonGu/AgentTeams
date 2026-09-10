@@ -5,6 +5,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
 type source struct {
@@ -26,7 +27,23 @@ func (s source) DeriveMatrixUserID(spec *v1beta1.HumanSpec, metadataName string)
 }
 
 func (s source) EnsurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, metadataName string) (humanidentity.Credentials, error) {
-	creds, err := s.deps.Provisioner.EnsureHumanUser(ctx, spec.EffectiveUsername(metadataName))
+	return s.ensurePrecreated(ctx, spec, metadataName, "")
+}
+
+func (s source) EnsurePrecreatedWithOptions(ctx context.Context, spec *v1beta1.HumanSpec, metadataName string, opts humanidentity.EnsurePrecreatedOptions) (humanidentity.Credentials, error) {
+	return s.ensurePrecreated(ctx, spec, metadataName, opts.DeviceID)
+}
+
+func (s source) ensurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, metadataName, deviceID string) (humanidentity.Credentials, error) {
+	var creds *service.HumanCredentials
+	var err error
+	if deviceAware, ok := s.deps.Provisioner.(interface {
+		EnsureHumanUserWithOptions(context.Context, string, string, string) (*service.HumanCredentials, error)
+	}); ok {
+		creds, err = deviceAware.EnsureHumanUserWithOptions(ctx, spec.EffectiveUsername(metadataName), spec.InitialPassword, deviceID)
+	} else {
+		creds, err = s.deps.Provisioner.EnsureHumanUser(ctx, spec.EffectiveUsername(metadataName))
+	}
 	if err != nil {
 		return humanidentity.Credentials{}, err
 	}

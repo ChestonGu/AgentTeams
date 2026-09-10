@@ -798,9 +798,15 @@ func teamWorkerEntries(members []teamWorkerMember, leaderName string) []service.
 		if member.ref.Name == leaderName {
 			continue
 		}
+		display := member.worker.Spec.DisplayName
+		if display == "" {
+			display = member.ref.Name
+		}
 		entries = append(entries, service.TeamWorkerEntry{
-			Name:   member.runtimeName,
-			RoomID: member.worker.Status.RoomID,
+			Name:         member.runtimeName,
+			RoomID:       member.worker.Status.RoomID,
+			DisplayName:  display,
+			MatrixUserID: member.worker.Status.MatrixUserID,
 		})
 	}
 	return entries
@@ -1486,12 +1492,28 @@ func (r *TeamReconciler) runtimeConfigTeamMembers(t *v1beta1.Team, desiredMember
 			RuntimeName: member.RuntimeName,
 			Role:        member.Role.String(),
 		}
+		// Prefer the member's Spec.DisplayName, fallback to the member name.
+		disp := member.Spec.DisplayName
+		if disp == "" {
+			disp = member.Name
+		}
+		entry.DisplayName = disp
+		// Populate Matrix IDs / room from Team status when available, then
+		// fall back to any cached Existing* values on the MemberContext and
+		// finally to the provisioner-derived mapping.
 		if ms := t.Status.MemberByName(member.Name); ms != nil {
 			entry.MatrixUserID = ms.MatrixUserID
 			entry.PersonalRoomID = ms.RoomID
 		}
-		if entry.MatrixUserID == "" && r.Provisioner != nil && entry.RuntimeName != "" {
-			entry.MatrixUserID = r.Provisioner.MatrixUserID(entry.RuntimeName)
+		if entry.MatrixUserID == "" {
+			if member.ExistingMatrixUserID != "" {
+				entry.MatrixUserID = member.ExistingMatrixUserID
+			} else if r.Provisioner != nil && entry.RuntimeName != "" {
+				entry.MatrixUserID = r.Provisioner.MatrixUserID(entry.RuntimeName)
+			}
+		}
+		if entry.PersonalRoomID == "" && member.ExistingRoomID != "" {
+			entry.PersonalRoomID = member.ExistingRoomID
 		}
 		roster = append(roster, entry)
 	}

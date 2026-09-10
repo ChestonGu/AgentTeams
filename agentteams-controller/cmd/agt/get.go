@@ -145,7 +145,7 @@ func getTeamsCmd() *cobra.Command {
 					or(t.DisplayName, "-"),
 					or(t.Phase, "Pending"),
 					t.LeaderName,
-					strings.Join(t.WorkerNames, ","),
+					formatWorkerList(t.WorkerNames, t.WorkerMembers, t.WorkerMemberDetails),
 					ready,
 				})
 			}
@@ -333,6 +333,12 @@ type teamResp struct {
 	Message           string              `json:"message,omitempty"`
 	WorkerNames       []string            `json:"workerNames,omitempty"`
 	WorkerMembers     []map[string]string `json:"workerMembers"`
+	WorkerMemberDetails []struct {
+		Name        string `json:"name"`
+		Role        string `json:"role,omitempty"`
+		DisplayName string `json:"displayName,omitempty"`
+		MatrixUserID string `json:"matrixUserID,omitempty"`
+	} `json:"workerMemberDetails,omitempty"`
 }
 
 type teamAdminResp struct {
@@ -424,12 +430,33 @@ func teamDetail(t teamResp) []KeyValue {
 		{"LeaderHeartbeat", teamHeartbeatText(t.LeaderHeartbeat)},
 		{"WorkerIdleTimeout", t.WorkerIdleTimeout},
 		{"LeaderReady", strconv.FormatBool(t.LeaderReady)},
-		{"Workers", strings.Join(t.WorkerNames, ", ")},
+		{"Workers", formatWorkerList(t.WorkerNames, t.WorkerMembers, t.WorkerMemberDetails)},
 		{"ReadyWorkers", fmt.Sprintf("%d/%d", t.ReadyWorkers, t.TotalWorkers)},
 		{"TeamRoomID", t.TeamRoomID},
 		{"LeaderDMRoomID", t.LeaderDMRoomID},
 		{"Message", t.Message},
 	}
+}
+
+func formatWorkerList(names []string, refs []map[string]string, details []struct{
+	Name string `json:"name"`
+	Role string `json:"role,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+}) string {
+	// Prefer details when available.
+	if len(details) > 0 {
+		var parts []string
+		for _, d := range details {
+			if d.DisplayName != "" && d.DisplayName != d.Name {
+				parts = append(parts, fmt.Sprintf("%s(@%s)", d.DisplayName, d.Name))
+			} else {
+				parts = append(parts, d.Name)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return strings.Join(names, ", ")
 }
 
 func teamHeartbeatText(hb *teamHeartbeatResp) string {

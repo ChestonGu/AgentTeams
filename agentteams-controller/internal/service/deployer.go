@@ -125,6 +125,8 @@ type RuntimeConfigTeamMember struct {
 	Role           string `json:"role,omitempty"`
 	MatrixUserID   string `json:"matrixUserId,omitempty"`
 	PersonalRoomID string `json:"personalRoomId,omitempty"`
+	// DisplayName is the friendly name for the member (optional).
+	DisplayName    string `json:"displayName,omitempty"`
 }
 
 // CoordinationDeployRequest describes coordination context injection for a team leader.
@@ -146,6 +148,10 @@ type CoordinationDeployRequest struct {
 type TeamWorkerEntry struct {
 	Name   string
 	RoomID string
+	// DisplayName is the friendly name to show in leader AGENTS.md. May be empty.
+	DisplayName string
+	// MatrixUserID is the member's Matrix MXID, if known.
+	MatrixUserID string
 }
 
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
@@ -473,7 +479,12 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			if member.Role != "worker" {
 				continue
 			}
-			teamWorkers = append(teamWorkers, TeamWorkerEntry{Name: member.RuntimeName, RoomID: member.PersonalRoomID})
+			teamWorkers = append(teamWorkers, TeamWorkerEntry{
+				Name:         member.RuntimeName,
+				RoomID:       member.PersonalRoomID,
+				DisplayName:  member.DisplayName,
+				MatrixUserID: member.MatrixUserID,
+			})
 		}
 		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
 			LeaderName:         req.Name,
@@ -638,7 +649,12 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 
 	teamWorkers := make([]agentconfig.TeamWorkerInfo, 0, len(req.TeamWorkers))
 	for _, tw := range req.TeamWorkers {
-		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: tw.Name, RoomID: tw.RoomID})
+		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{
+			Name:         tw.Name,
+			RoomID:       tw.RoomID,
+			DisplayName:  tw.DisplayName,
+			MatrixUserID: tw.MatrixUserID,
+		})
 	}
 
 	coordCtx := agentconfig.CoordinationContext{

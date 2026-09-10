@@ -895,9 +895,9 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrixOps.UserIDFor)
-	teamRoomName := req.TeamName
+	teamRoomName := fmt.Sprintf("Team: %s", req.TeamName)
 	if req.DisplayName != "" {
-		teamRoomName = req.DisplayName
+		teamRoomName = fmt.Sprintf("Team: %s", req.DisplayName)
 	}
 	teamRoom, err := p.matrixOps.CreateRoom(ctx, matrix.RoomSpec{
 		Name:           teamRoomName,

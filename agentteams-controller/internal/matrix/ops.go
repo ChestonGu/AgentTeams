@@ -171,6 +171,8 @@ type MatrixOps interface {
 	// LoginUser obtains a fresh access token for an existing user via
 	// username/password login.
 	LoginUser(ctx context.Context, username, password string) (string, error)
+	// LoginUserWithOptions obtains a token with optional Matrix login options.
+	LoginUserWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error)
 
 	// LoginUserViaAppService obtains a fresh access token for an existing
 	// user via the Application Service login flow
@@ -438,7 +440,21 @@ func (o *LegacyClientOps) HealthCheck(ctx context.Context) error {
 
 // ProvisionUser forwards to client.EnsureUser (password-mode provisioning).
 func (o *LegacyClientOps) ProvisionUser(ctx context.Context, spec UserSpec) (*UserRef, *UserCredentials, error) {
-	uc, err := o.client.EnsureUser(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password})
+	return o.ProvisionUserWithOptions(ctx, spec, LoginOptions{})
+}
+
+func (o *LegacyClientOps) ProvisionUserWithOptions(ctx context.Context, spec UserSpec, opts LoginOptions) (*UserRef, *UserCredentials, error) {
+	provisioner, ok := o.client.(interface {
+		EnsureUserWithOptions(context.Context, EnsureUserRequest, LoginOptions) (*UserCredentials, error)
+	})
+	if !ok {
+		uc, err := o.client.EnsureUser(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password})
+		if err != nil {
+			return nil, nil, err
+		}
+		return &UserRef{UserID: uc.UserID, Created: uc.Created}, uc, nil
+	}
+	uc, err := provisioner.EnsureUserWithOptions(ctx, EnsureUserRequest{Username: spec.Username, Password: spec.Password}, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -457,6 +473,10 @@ func (o *LegacyClientOps) ProvisionUserViaAppService(ctx context.Context, localp
 // LoginUser forwards to client.Login.
 func (o *LegacyClientOps) LoginUser(ctx context.Context, username, password string) (string, error) {
 	return o.client.Login(ctx, username, password)
+}
+
+func (o *LegacyClientOps) LoginUserWithOptions(ctx context.Context, username, password string, opts LoginOptions) (string, error) {
+	return o.client.LoginWithOptions(ctx, username, password, opts)
 }
 
 // LoginUserViaAppService forwards to client.LoginAppServiceUser.

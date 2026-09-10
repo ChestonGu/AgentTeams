@@ -15,9 +15,12 @@ const (
 	ActionSleep              Action = "sleep"
 	ActionEnsureReady        Action = "ensure-ready"
 	ActionReady              Action = "ready"
+	ActionInvite             Action = "invite"
+	ActionKick               Action = "kick"
 	ActionSTS                Action = "sts"
 	ActionStatus             Action = "status"
 	ActionRefreshMatrixToken Action = "refresh-matrix-token"
+	ActionLogin              Action = "login"
 	ActionGateway            Action = "gateway"
 )
 
