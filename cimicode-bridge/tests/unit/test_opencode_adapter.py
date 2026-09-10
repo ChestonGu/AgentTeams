@@ -8,7 +8,7 @@ import pytest
 
 from cimicode_bridge.config import RuntimeConfig
 from cimicode_bridge.events import RuntimeEventKind
-from cimicode_bridge.runtime.client import HttpSseRuntime
+from cimicode_bridge.runtime.cimicode_adapter import CimicodeAdapter
 from cimicode_bridge.runtime.opencode_adapter import OpenCodeAdapter
 from cimicode_bridge.runtime.registry import build_runtime_adapter
 
@@ -92,7 +92,7 @@ def _adapter(**kwargs) -> OpenCodeAdapter:
 class TestFactory:
     def test_cimicode_dispatch(self):
         cfg = RuntimeConfig(adapter="cimicode")
-        assert isinstance(build_runtime_adapter(cfg), HttpSseRuntime)
+        assert isinstance(build_runtime_adapter(cfg), CimicodeAdapter)
 
     def test_opencode_dispatch(self):
         cfg = RuntimeConfig(adapter="opencode", base_url="http://sandbox:4096", helper_url="http://sandbox:4097")

@@ -6,14 +6,14 @@ bridge 核心必须保持 runtime 无关——本工厂是唯一知道"哪个 ad
 from __future__ import annotations
 
 from cimicode_bridge.config import RuntimeConfig
-from cimicode_bridge.runtime.client import HttpSseRuntime
+from cimicode_bridge.runtime.cimicode_adapter import CimicodeAdapter
 from cimicode_bridge.runtime.opencode_adapter import OpenCodeAdapter
 
 
 def build_runtime_adapter(runtime: RuntimeConfig):
     """按配置构建 runtime adapter：cimicode（SSE gateway）/ opencode（REST+轮询）。"""
     if runtime.adapter == "cimicode":
-        return HttpSseRuntime(
+        return CimicodeAdapter(
             runtime.base_url,
             timeout_seconds=runtime.turn_timeout_seconds,
         )

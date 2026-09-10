@@ -4,8 +4,7 @@ from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
 from cimicode_bridge.bootstrap import WorkerBootstrapConfig
 from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
 from cimicode_bridge.api.probes import ProbeStatus, create_probe_status
-from cimicode_bridge.runtime.adapters import CimicodeDialect
-from cimicode_bridge.runtime.client import HttpSseRuntime
+from cimicode_bridge.runtime.cimicode_adapter import CimicodeAdapter, CimicodeDialect
 from cimicode_bridge.session import HistoryStore, SessionManager
 
 
@@ -151,7 +150,7 @@ def test_session_manager_keeps_latest_turn():
 
 
 # ----------------------------------------------------------------------
-# HttpSseRuntime：真实走 httpx-sse（aconnect_sse）+ 本地回环 SSE 帧
+# CimicodeAdapter：真实走 httpx-sse（aconnect_sse）+ 本地回环 SSE 帧
 # ----------------------------------------------------------------------
 def _sse_response(body: bytes, status: int = 200, ct: str = "text/event-stream"):
     async def handler(reader, writer):
@@ -184,7 +183,7 @@ async def _translate_stream():
     )
     base_url, srv = await _serve_sse(_sse_response(frames))
     try:
-        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        rt = CimicodeAdapter(base_url, timeout_seconds=5)
         events = await rt.chat(
             session_id="s1", sandbox_id="sb1", turn_id="t1",
             agent_md="md", history=[], user_message="hi",
@@ -203,7 +202,7 @@ async def _interrupted_on_gap():
     frames = b'data: {"event":"message","delta":"partial"}\n\n'
     base_url, srv = await _serve_sse(_sse_response(frames))
     try:
-        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        rt = CimicodeAdapter(base_url, timeout_seconds=5)
         events = await rt.chat(
             session_id="s1", sandbox_id="sb1", turn_id="t1",
             agent_md="md", history=[], user_message="hi",
@@ -222,7 +221,7 @@ async def _raises_on_non_2xx():
         _sse_response(b"", status=500, ct="text/plain")
     )
     try:
-        rt = HttpSseRuntime(base_url, timeout_seconds=5)
+        rt = CimicodeAdapter(base_url, timeout_seconds=5)
         try:
             await rt.chat(
                 session_id="s1", sandbox_id="sb1", turn_id="t1",

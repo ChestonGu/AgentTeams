@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from cimicode_bridge.app import BridgeApp, create_app
 from cimicode_bridge.bootstrap import WorkerBootstrapConfig
 from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
-from cimicode_bridge.runtime.client import HttpSseRuntime
+from cimicode_bridge.runtime.cimicode_adapter import CimicodeAdapter
 
 
 class FakeRuntime:
