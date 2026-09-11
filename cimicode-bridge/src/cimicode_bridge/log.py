@@ -15,7 +15,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_FORMAT = ("%(asctime)s [%(levelname)s] [%(threadName)s(%(thread)d)] "
+              "%(name)s %(filename)s:%(lineno)d: %(message)s")
 DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024     # 5 MiB
 MAX_LOG_MAX_BYTES = 20 * 1024 * 1024        # 20 MiB（超限回落默认，防误配打满卷）
 DEFAULT_LOG_BACKUP_COUNT = 3
