@@ -23,6 +23,7 @@ from cimicode_bridge.api.routes import register_routes
 from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig, managed_runtime_type
 from cimicode_bridge.config import BridgeConfig, load_config
 from cimicode_bridge.controller.client import fetch_worker_runtime_env, refresh_matrix_token
+from cimicode_bridge.log import setup_logging
 from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
 from cimicode_bridge.matrix.gateway import MatrixGateway
 from cimicode_bridge.prompt import GenerateAgentMdError, build_agent_md_via_generator
@@ -78,10 +79,9 @@ class BridgeApp:
         """同步装配：加载配置 → env 覆盖 → 拉 S3 → 装配过滤器/adapter/Matrix 网关。"""
         # 根级日志配置：不配的话 cimicode_bridge.* 只继承 WARNING，
         # INFO 级（sync 建立、消息决策）全被吞掉，而 uvicorn 自己的访问日志还在。
-        logging.basicConfig(
-            level=os.getenv("BRIDGE_LOG_LEVEL", "INFO"),
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        )
+        # console(stderr) + 可选容器内轮转文件（BRIDGE_LOG_FILE，emptyDir 卷），
+        # nio/httpx 噪音压到 WARNING——见 log.py。
+        setup_logging()
         config_path = Path(self.config_path)
         self.config = load_config(config_path)
         # 部署级 env 覆盖（pod env；Worker CR spec.env 注入）

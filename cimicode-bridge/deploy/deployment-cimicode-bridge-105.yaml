@@ -82,6 +82,13 @@ spec:
             # ---------- StateStore ----------
             - name: BRIDGE_REDIS_URL
               value: ""
+
+            # ---------- 日志（容器内轮转文件，emptyDir 卷，容器重启不丢） ----------
+            - name: BRIDGE_LOG_FILE
+              value: "/var/log/cimicode-bridge/bridge.log"
+          volumeMounts:
+            - name: bridge-logs
+              mountPath: /var/log/cimicode-bridge
           livenessProbe:
             httpGet:
               path: /healthz
@@ -101,6 +108,11 @@ spec:
             limits:
               cpu: "1"
               memory: 512Mi
+      # 日志卷：pod 级 emptyDir——容器重启不丢（CrashLoop 排障可 exec 进去看
+      # 历史文件），pod 删除即弃（节点侧仍有 kubelet 的 /var/log/pods 兜底）
+      volumes:
+        - name: bridge-logs
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

@@ -503,6 +503,24 @@ POST /api/v1/bridge/handle-message
 
 `/api/v1/bridge/handle-message` 是本地调试入口。它复用 mention 和三段式组装逻辑，但接受的 HTTP 请求不会自动调用真实 Gateway chat；真实 Gateway 调用由 Matrix 回调路径执行。
 
+### 10.1 日志（log.py）
+
+装配在 `BridgeApp.start()` 的 `setup_logging()`（对齐 qwenpaw_worker/log.py 形态），双通道：
+
+- **console（stderr）**：始终启用，`kubectl logs` 实时看
+- **轮转文件**：`BRIDGE_LOG_FILE` 设置时启用（`RotatingFileHandler`，UTF-8，目录自动创建）；部署清单挂 emptyDir 卷（`/var/log/cimicode-bridge/bridge.log`）——**容器重启不丢（CrashLoop 排障可 exec 看历史），pod 删除即弃**（节点侧 kubelet `/var/log/pods` 仍是兜底）。路径不可写时降级纯 console 并告警，不拒启
+
+env 旋钮（带边界防误配，形态同 qwenpaw_worker）：
+
+```text
+BRIDGE_LOG_LEVEL           # 级别（数字或名称，默认 INFO）
+BRIDGE_LOG_FILE            # 文件路径；空 = 纯 console（本地开发/测试路径不变）
+BRIDGE_LOG_MAX_BYTES       # 默认 5 MiB，上限 20 MiB，非法/低于下限回落默认
+BRIDGE_LOG_BACKUP_COUNT    # 默认 3，上限 50
+```
+
+其他行为：handler 打标记实现幂等重配（复用不叠加）；`nio`/`httpx`/`httpcore`/`asyncio` 压到 WARNING（三方 INFO 洪水不淹没 bridge 决策日志）；不做 S3 上传（与 copaw 的 WORKING_DIR 落盘不同——bridge 无镜像目录，文件通道仅 pod 内）。
+
 ## 11. StateStore
 
 当前提供统一异步接口：

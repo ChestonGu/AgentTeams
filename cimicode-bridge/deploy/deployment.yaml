@@ -22,6 +22,13 @@ spec:
           envFrom:
             - secretRef:
                 name: agentteams-worker-env
+          env:
+            # 日志（容器内轮转文件，emptyDir 卷，容器重启不丢；留空=纯 stdout）
+            - name: BRIDGE_LOG_FILE
+              value: "/var/log/cimicode-bridge/bridge.log"
+          volumeMounts:
+            - name: bridge-logs
+              mountPath: /var/log/cimicode-bridge
           livenessProbe:
             httpGet:
               path: /healthz
@@ -37,6 +44,9 @@ spec:
             limits:
               cpu: "1"
               memory: 512Mi
+      volumes:
+        - name: bridge-logs
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
