@@ -24,6 +24,7 @@ node_modules/
 venv/
 .venv/
 __pycache__/
+*.egg-info/
 .mypy_cache/
 .pytest_cache/
 dist/
