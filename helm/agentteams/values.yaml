@@ -168,11 +168,9 @@ storage:
         cpu: 500m
         memory: 1Gi
     service:
-      type: ClusterIP   # ClusterIP keeps the StatefulSet's headless (clusterIP: None) service; NodePort/LB expose api+console for browser access
+      type: ClusterIP
       apiPort: 9000
       consolePort: 9001
-      apiNodePort: ""    # set only when type: NodePort (e.g. 31600)
-      consoleNodePort: "" # set only when type: NodePort (e.g. 31601)
     persistence:
       enabled: true
       size: 10Gi
