@@ -7,8 +7,12 @@
 - `cimicode-stateless`：bridge 直调外部 cimicode 平台（绑定来自 Worker CR 的
   `cimicodeGatewayUrl`/`sessionId`/`sandboxId`/`templateId`，经 controller 投影进
   runtime.yaml 顶层 bridge 段）；
-- `cimicode-pod`：`operator/` 供给单 cimicode Deployment+svc，并 patch Worker CR
-  env `BRIDGE_RUNTIME_ADAPTER`/`BRIDGE_RUNTIME_BASE_URL`，bridge 自愈轮询接上。
+- `cimicode-pod`：`operator/` 供给单 cimicode pod（`cimicode-runtime/` 合并镜像：
+  换皮 opencode + 协作工具 + skills，单容器无 sandbox）——Deployment+svc（runtime
+  :4096 / helper :4097 双端口）+ FS 凭据 Secret（bridge pod env 明文只读复制），
+  并 patch Worker CR env `BRIDGE_RUNTIME_ADAPTER`/`_BASE_URL`/`_HELPER_URL`，
+  bridge 自愈轮询接上。传输契约见
+  [contract/adapter-contract.md](contract/adapter-contract.md)。
 
 裁决顺序：显式 env > runtime.yaml bridge 段 > 未定态（bridge 不建 client，轮询等）。
 设计/操作权威：[docs/worker-bridge运行时替换与协作流转详解.md](docs/worker-bridge运行时替换与协作流转详解.md)、
@@ -35,9 +39,10 @@ runtime.yaml 渲染，**不再解析 canonical AGENTS.md**）后作为 system pr
 | `bridge/` | **bridge 进程本体 + 其工具**（原顶层 `cimicode-bridge/` 已并入；镜像名 `agentteams/cimicode-bridge` 不变，构建上下文=仓库根）：`src/` FastAPI 进程（matrix 防护、turn 编排、adapter 裁决）+ `generate_agent_md.py`/`agentteams_log.py`（agent.md **生成**工具与统一日志模块，部署进镜像 /opt/agenttools/，生成器源模板 + runtime.yaml 结构化渲染，fail-loud）+ `tests/unit/`（进程 pytest）与 `tests/`（生成器 golden） | 契约 §6 v2.4 ✅ |
 | `template/worker-bridge-agent/` | worker 模板（**AGENTS.md = 源模板**：骨架固化 + §2-§8 静态 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两个占位符；5 skills + scripts 部署副本） | T4-T7 ✅ |
 | `template/worker-bridge-leader-agent/` | leader 模板 starter（AGENTS.md 参考 + task-management leader 版 skill + projectflow 三件套），未部署 | leader 预置 ✅ |
-| `contract/` | `interface-contract.md` v2.4（§0 架构决策 / env / 镜像布局 / shared 唯一同步 / 消息 / 命令（worker §5.1-5.3 + leader §5.4）/ **统一日志 §5.5** / agent.md **生成契约 §6**（源模板 + runtime.yaml + persona）/ 职责矩阵）+ `controller-handover.md` v2.4（零代码改动 + qwenpaw/edge 分支前提） | T8-T9 ✅（v2 重写） |
-| `operator/` | **worker-bridge-operator**：watch runtime=worker-bridge 的 Worker CR，按 `spec.adapterMode` 分派——`cimicode-stateless` 零供给；`cimicode-pod`（含空值）供给单 cimicode Deployment+svc（命名 `<w>-cimicode` / `<w>-cimicode-svc`，角色后缀式；`CIMICODE_IMAGE` 必填、`CIMICODE_PORT` 默认 8080）并 patch Worker env `BRIDGE_RUNTIME_*` | v3 §4.3 ✅ |
-| `cimicode-sandbox/` | pod 模式 cimicode 运行时镜像构建上下文 | v3 ✅ |
+| `contract/` | `interface-contract.md` v2.4（§0 架构决策 / env / 镜像布局 / shared 唯一同步 / 消息 / 命令（worker §5.1-5.3 + leader §5.4）/ **统一日志 §5.5** / agent.md **生成契约 §6**（源模板 + runtime.yaml + persona）/ 职责矩阵）+ `controller-handover.md` v2.4（零代码改动 + qwenpaw/edge 分支前提）+ `adapter-contract.md` v1.0（adapter 两形态传输契约：stateless SSE / pod opencode REST+轮询、端口与接线三键、已知限制） | T8-T9 ✅（v2 重写；adapter 契约 2026-09-13 增补） |
+| `operator/` | **worker-bridge-operator**：watch runtime=worker-bridge 的 Worker CR，按 `spec.adapterMode` 分派——`cimicode-stateless` 零供给；`cimicode-pod`（含空值）供给单 cimicode Deployment+svc（命名 `<w>-cimicode` / `<w>-cimicode-svc`，角色后缀式；双端口 runtime:4096/helper:4097，`CIMICODE_IMAGE` 必填、端口/探针默认按 cimicode-runtime 镜像契约）+ FS 凭据 Secret `<w>-cimicode-fs`（从 controller 组装的 bridge pod env 明文只读复制，secretKeyRef 注入）+ 工作 env（WORKER_NAME/FS_*/TEAM/MATRIX_USER_ID——team 经 Team CR workerMembers 反查，MATRIX_USER_ID 以 status.matrixUserID 为权威）并 patch Worker env `BRIDGE_RUNTIME_*` 三键；bridge pod 未起时本轮推迟（下一轮重试） | v3 §4.3 ✅（真实运行时改造 2026-09-13） |
+| `cimicode-runtime/` | **cimicode pod 合并镜像构建上下文**（单容器：opencode serve :4096 + sandbox helper :4097 + taskflow/agentteams-sync/mc + skills 全套 + 烘焙智谱 provider；`ZHIPU_API_KEY` build-arg 必填，仓库内占位符） | 真实运行时 ✅（2026-09-13） |
+| `cimicode-sandbox/` | cimicode 运行时自建沙箱的基础镜像构建上下文（stateless 形态 cimicode 自用时） | v3 ✅ |
 
 冒烟/模拟器等测试资产（`verify/`、smoke 记录）按分支规整方案不随本分支搬运，留在源分支 `dev-v1.2.2-opencode-ben-test` 可追溯。
 
@@ -65,6 +70,7 @@ cd cli/taskflow && python -m unittest discover -s tests   # 40 个（taskflow + 
 cd cli/sync && python -m unittest discover -s tests       # 10 个（agentteams-sync）
 cd cli/projectflow && python -m unittest discover -s tests # 20 个（leader core + CLI + 与 worker 闭环）
 cd bridge && python -m unittest discover -s tests -p "test_generate_agent_md.py" # 43 个（生成工具：golden×2 + coordination.go 文案对齐 + 解析器/Persona/CLI；进程单测另跑 pytest tests/unit）
+cd ../operator && python -m pytest tests -q    # 18 个（operator：svc 双端口/env+secretKeyRef/drift/三键 patch/GC/推迟供给）
 
 # 生成工具（bridge 调用形态；runtime.yaml/SOUL/PROFILE 均从 MinIO 拉下后传路径）
 python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
