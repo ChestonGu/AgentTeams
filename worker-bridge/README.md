@@ -36,7 +36,7 @@ runtime.yaml 渲染，**不再解析 canonical AGENTS.md**）后作为 system pr
 | `template/worker-bridge-agent/` | worker 模板（**AGENTS.md = 源模板**：骨架固化 + §2-§8 静态 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两个占位符；5 skills + scripts 部署副本） | T4-T7 ✅ |
 | `template/worker-bridge-leader-agent/` | leader 模板 starter（AGENTS.md 参考 + task-management leader 版 skill + projectflow 三件套），未部署 | leader 预置 ✅ |
 | `contract/` | `interface-contract.md` v2.4（§0 架构决策 / env / 镜像布局 / shared 唯一同步 / 消息 / 命令（worker §5.1-5.3 + leader §5.4）/ **统一日志 §5.5** / agent.md **生成契约 §6**（源模板 + runtime.yaml + persona）/ 职责矩阵）+ `controller-handover.md` v2.4（零代码改动 + qwenpaw/edge 分支前提） | T8-T9 ✅（v2 重写） |
-| `operator/` | **worker-bridge-operator**：watch runtime=worker-bridge 的 Worker CR，按 `spec.adapterMode` 分派——`cimicode-stateless` 零供给；`cimicode-pod`（含空值）供给单 cimicode Deployment+svc（`CIMICODE_IMAGE` 必填、`CIMICODE_PORT` 默认 8080）并 patch Worker env `BRIDGE_RUNTIME_*` | v3 §4.3 ✅ |
+| `operator/` | **worker-bridge-operator**：watch runtime=worker-bridge 的 Worker CR，按 `spec.adapterMode` 分派——`cimicode-stateless` 零供给；`cimicode-pod`（含空值）供给单 cimicode Deployment+svc（命名 `<w>-cimicode` / `<w>-cimicode-svc`，角色后缀式；`CIMICODE_IMAGE` 必填、`CIMICODE_PORT` 默认 8080）并 patch Worker env `BRIDGE_RUNTIME_*` | v3 §4.3 ✅ |
 | `bridge-runtime/` | **bridge 进程本体**（原顶层 `cimicode-bridge/`，镜像名 `agentteams/cimicode-bridge` 不变）：src/tests/config/scripts + Dockerfile（构建上下文=仓库根，捆绑 `bridge/` 生成器与 `template/` 源模板） | T8 前置 ✅ |
 | `cimicode-sandbox/` | pod 模式 cimicode 运行时镜像构建上下文 | v3 ✅ |
 

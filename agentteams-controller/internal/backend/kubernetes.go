@@ -239,11 +239,25 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	podName := req.ContainerName
 	if podName == "" {
 		podName = k.podName(req.NamePrefix, req.Name)
+		if req.Runtime == RuntimeWorkerBridge {
+			// Role suffix: bridge pods end in "-bridge" so `kubectl get pods`
+			// tells the masquerade bridge pod apart from agent-runtime pods.
+			podName += bridgePodSuffix
+		}
 	}
-	if _, err := targetClient.Pods(targetNS).Get(ctx, podName, metav1.GetOptions{}); err == nil {
-		return nil, fmt.Errorf("%w: pod %q", ErrConflict, podName)
-	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("kubernetes get pod %s: %w", podName, err)
+	// Conflict-check every name the worker's pod may occupy (see
+	// workerPodNames): a stale pod under the sibling name must surface as
+	// a conflict, not silently strand beside the freshly created one.
+	conflictNames := []string{podName}
+	if req.ContainerName == "" {
+		conflictNames = k.workerPodNames(req.Name)
+	}
+	for _, candidate := range conflictNames {
+		if _, err := targetClient.Pods(targetNS).Get(ctx, candidate, metav1.GetOptions{}); err == nil {
+			return nil, fmt.Errorf("%w: pod %q", ErrConflict, candidate)
+		} else if !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("kubernetes get pod %s: %w", candidate, err)
+		}
 	}
 
 	if req.Env == nil {
@@ -419,13 +433,17 @@ func (k *K8sBackend) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("resolve client for delete: %w", err)
 	}
-	podName := k.workerPodName(name)
-	err = targetClient.Pods(targetNS).Delete(ctx, podName, metav1.DeleteOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("kubernetes delete pod %s: %w", podName, err)
+	// Delete every name the worker's pod may occupy (plain + "-bridge"):
+	// a runtime switch between bridge and agent images must not strand the
+	// sibling-named pod.
+	for _, podName := range k.workerPodNames(name) {
+		err := targetClient.Pods(targetNS).Delete(ctx, podName, metav1.DeleteOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("kubernetes delete pod %s: %w", podName, err)
+		}
 	}
 	return nil
 }
@@ -435,12 +453,12 @@ func (k *K8sBackend) Start(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("resolve client for start: %w", err)
 	}
-	pod, err := targetClient.Pods(targetNS).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("%w: worker %q", ErrNotFound, name)
-	}
+	pod, err := k.findWorkerPod(ctx, targetClient, targetNS, name)
 	if err != nil {
-		return fmt.Errorf("kubernetes get pod %s: %w", k.workerPodName(name), err)
+		return err
+	}
+	if pod == nil {
+		return fmt.Errorf("%w: worker %q", ErrNotFound, name)
 	}
 
 	switch pod.Status.Phase {
@@ -460,12 +478,12 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 	if err != nil {
 		return nil, fmt.Errorf("resolve client for status: %w", err)
 	}
-	pod, err := targetClient.Pods(targetNS).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return &WorkerResult{Name: name, Backend: "k8s", Status: StatusNotFound}, nil
-	}
+	pod, err := k.findWorkerPod(ctx, targetClient, targetNS, name)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes get pod %s: %w", k.workerPodName(name), err)
+		return nil, err
+	}
+	if pod == nil {
+		return &WorkerResult{Name: name, Backend: "k8s", Status: StatusNotFound}, nil
 	}
 	status := normalizeK8sPodPhase(pod.Status.Phase)
 	var message string
@@ -583,6 +601,36 @@ func (k *K8sBackend) podName(prefix, name string) string {
 
 func (k *K8sBackend) workerPodName(name string) string {
 	return k.containerPrefix + name
+}
+
+// bridgePodSuffix is appended to derived pod names for the worker-bridge
+// runtime so the masquerade bridge pod is recognizable on sight
+// (`agentteams-worker-<name>-bridge`). Explicit ContainerName requests
+// (managers) bypass the suffix.
+const bridgePodSuffix = "-bridge"
+
+// workerPodNames lists the pod names a worker's pod may live under, in
+// lookup order: the plain prefixed name (agent runtimes), then the
+// worker-bridge runtime name (created with the "-bridge" suffix).
+func (k *K8sBackend) workerPodNames(name string) []string {
+	plain := k.workerPodName(name)
+	return []string{plain, plain + bridgePodSuffix}
+}
+
+// findWorkerPod fetches the worker's pod trying workerPodNames in order.
+// Returns (nil, nil) when no pod exists under any candidate name.
+func (k *K8sBackend) findWorkerPod(ctx context.Context, targetClient K8sCoreClient, targetNS, name string) (*corev1.Pod, error) {
+	for _, podName := range k.workerPodNames(name) {
+		pod, err := targetClient.Pods(targetNS).Get(ctx, podName, metav1.GetOptions{})
+		if err == nil {
+			return pod, nil
+		}
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		return nil, fmt.Errorf("kubernetes get pod %s: %w", podName, err)
+	}
+	return nil, nil
 }
 
 // workerNamePrefix returns the default worker SA name prefix, e.g.

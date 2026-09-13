@@ -11,12 +11,14 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
                           projection of spec.cimicodeGatewayUrl/sessionId/...).
                           This operator touches nothing.
     cimicode-pod        → own a single cimicode Deployment + Service:
-                              Service     cimicode-<worker>-svc  (<port>)
-                              Deployment  cimicode-<worker>
+                              Service     <worker>-cimicode-svc  (<port>)
+                              Deployment  <worker>-cimicode
+                          (role-suffixed so pod names read at a glance: the
+                          Deployment's pods are <worker>-cimicode-<rs>-<hash>)
                           and point the Worker CR spec.env at it (the bridge
                           pod picks it up via self-heal polling):
                               BRIDGE_RUNTIME_ADAPTER=cimicode-pod
-                              BRIDGE_RUNTIME_BASE_URL=http://cimicode-<w>-svc.<ns>.svc:<port>
+                              BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc.<ns>.svc:<port>
     (empty)             → treated as cimicode-pod, mirroring the controller's
                           projection normalization (empty adapterMode with any
                           binding field → cimicode-pod).
@@ -161,10 +163,10 @@ class StackOperator:
         )
 
     def cimicode_svc_name(self, worker: str) -> str:
-        return f"cimicode-{worker}-svc"
+        return f"{worker}-cimicode-svc"
 
     def cimicode_deploy_name(self, worker: str) -> str:
-        return f"cimicode-{worker}"
+        return f"{worker}-cimicode"
 
     def cimicode_deployment(self, worker: str) -> client.V1Deployment:
         name = self.cimicode_deploy_name(worker)

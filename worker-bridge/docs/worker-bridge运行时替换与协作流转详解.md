@@ -35,7 +35,7 @@ controller 不感知"opencode"这个运行时（CRD enum 也没有它）。实�
 
 ```
 Worker CR (runtime 留空 → opencode)
-   ├─ controller  → 创建 agentteams-worker-<w> pod（镜像=cimicode-bridge）
+   ├─ controller  → 创建 agentteams-worker-<w>-bridge pod（镜像=cimicode-bridge，命名带 -bridge 角色后缀）
    ├─ operator    → 创建 opencode-<w> + opencode-<w>-sandbox deployment/svc/secret
    └─ Team CR     → 把 <w> 拉进团队，写 runtime.yaml，建/进 Matrix 房间
 ```
@@ -46,7 +46,7 @@ Worker CR (runtime 留空 → opencode)
                        Matrix (Synapse)
                     ┌───────┴────────┐
               leader(copaw)      bridge worker pod
-              pl-lead 型          agentteams-worker-<w>（cimicode-bridge）
+              pl-lead 型          agentteams-worker-<w>-bridge（cimicode-bridge）
                     │                │ matrix sync(mention 过滤)
                     │  @mention      │
                     │                ▼

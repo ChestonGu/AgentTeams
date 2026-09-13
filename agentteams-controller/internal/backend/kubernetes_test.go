@@ -362,6 +362,52 @@ func TestK8sCreateConflict(t *testing.T) {
 	}
 }
 
+func TestK8sCreateWorkerBridgePodSuffix(t *testing.T) {
+	b := newTestK8sBackend()
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:    "carol",
+		Image:   "agentteams/cimicode-bridge:test",
+		Runtime: RuntimeWorkerBridge,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	// Derived pod name carries the role suffix; the plain name stays free.
+	if _, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-carol-bridge", metav1.GetOptions{}); err != nil {
+		t.Fatalf("expected suffixed bridge pod: %v", err)
+	}
+	if _, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-carol", metav1.GetOptions{}); err == nil {
+		t.Fatal("plain-name pod should not exist for worker-bridge runtime")
+	}
+	// Status resolves the suffixed pod via the name cascade.
+	result, err := b.Status(context.Background(), "carol")
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if result.Status == StatusNotFound {
+		t.Fatalf("status cascade missed the suffixed pod: %s", result.Status)
+	}
+	// A stale pod under the sibling (plain) name must conflict, not coexist.
+	if _, err := b.Create(context.Background(), CreateRequest{Name: "carol", Runtime: RuntimeWorkerBridge}); err == nil {
+		t.Fatal("expected conflict error against sibling-named pod")
+	}
+	// Delete sweeps every candidate name.
+	if _, err := b.client.Pods("agentteams").Create(context.Background(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "agentteams-worker-carol", Namespace: "agentteams"},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed plain pod: %v", err)
+	}
+	if err := b.Delete(context.Background(), "carol"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	for _, name := range []string{"agentteams-worker-carol", "agentteams-worker-carol-bridge"} {
+		if _, err := b.client.Pods("agentteams").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+			t.Fatalf("pod %s should be deleted", name)
+		}
+	}
+}
+
 func TestK8sStatus(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -699,14 +745,14 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:            "agentteams",
-				WorkerImage:          "agentteams/worker-agent:latest",
-				CopawWorkerImage:     "agentteams/copaw-worker:latest",
-				HermesWorkerImage:    "agentteams/hermes-worker:latest",
-				QwenPawWorkerImage:   "agentteams/qwenpaw-worker:latest",
-				WorkerBridgeImage:    "agentteams/cimicode-bridge:latest",
-				WorkerCPU:            "1000m",
-				WorkerMemory:         "2Gi",
+				Namespace:          "agentteams",
+				WorkerImage:        "agentteams/worker-agent:latest",
+				CopawWorkerImage:   "agentteams/copaw-worker:latest",
+				HermesWorkerImage:  "agentteams/hermes-worker:latest",
+				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
+				WorkerBridgeImage:  "agentteams/cimicode-bridge:latest",
+				WorkerCPU:          "1000m",
+				WorkerMemory:       "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -717,7 +763,11 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 				t.Fatalf("Create failed: %v", err)
 			}
 
-			pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
+			podName := "agentteams-worker-x"
+			if tc.runtime == RuntimeWorkerBridge {
+				podName += bridgePodSuffix
+			}
+			pod, err := b.client.Pods("agentteams").Get(context.Background(), podName, metav1.GetOptions{})
 			if err != nil {
 				t.Fatalf("Get pod failed: %v", err)
 			}
@@ -738,10 +788,10 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 func TestK8sCreateWorkerBridgeKeepsImageWorkdir(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:        "agentteams",
+		Namespace:         "agentteams",
 		WorkerBridgeImage: "agentteams/cimicode-bridge:latest",
-		WorkerCPU:        "1000m",
-		WorkerMemory:     "2Gi",
+		WorkerCPU:         "1000m",
+		WorkerMemory:      "2Gi",
 	}, "agentteams-worker-", nil)
 
 	if _, err := b.Create(context.Background(), CreateRequest{
@@ -750,7 +800,7 @@ func TestK8sCreateWorkerBridgeKeepsImageWorkdir(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-ocw", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-ocw-bridge", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get pod failed: %v", err)
 	}
@@ -773,9 +823,9 @@ func TestK8sCreateWorkerBridgeKeepsImageWorkdir(t *testing.T) {
 func TestK8sCreateWorkerBridgeImageFailFast(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:   "agentteams",
-		WorkerImage: "agentteams/worker-agent:latest", // must NOT be picked up
-		WorkerCPU:   "1000m",
+		Namespace:    "agentteams",
+		WorkerImage:  "agentteams/worker-agent:latest", // must NOT be picked up
+		WorkerCPU:    "1000m",
 		WorkerMemory: "2Gi",
 	}, "agentteams-worker-", nil)
 
