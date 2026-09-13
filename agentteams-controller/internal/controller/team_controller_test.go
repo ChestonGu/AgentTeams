@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
+	"errors"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -111,13 +112,10 @@ func TestReconcileTeamNormal_FailsEmptyTeamSpec(t *testing.T) {
 	rig := newTeamReconcileRig(t, team)
 
 	out, _, err := rig.reconcile("empty-team")
-	if err == nil {
-		t.Fatal("reconcile succeeded, want empty team spec failure")
+	if err != nil {
+		t.Fatalf("reconcile returned a hard error; failures are reported via status: %v", err)
 	}
 	want := "workerMembers must not be empty"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error=%q, want %q", err.Error(), want)
-	}
 	if out.Status.Phase != "Failed" {
 		t.Fatalf("phase=%q, want Failed", out.Status.Phase)
 	}
@@ -363,8 +361,10 @@ func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileTeam: %v", err)
 	}
-	if result.RequeueAfter != reconcileInterval {
-		t.Errorf("RequeueAfter=%v, want %v", result.RequeueAfter, reconcileInterval)
+	// activeRequeue adds 0-10% positive jitter to reconcileInterval, so the
+	// assertion must be a range, not exact equality.
+	if result.RequeueAfter < reconcileInterval || result.RequeueAfter > reconcileInterval+reconcileInterval/10+time.Second {
+		t.Errorf("RequeueAfter=%v, want within [%v, %v+10%% jitter]", result.RequeueAfter, reconcileInterval, reconcileInterval)
 	}
 	if team.Status.Phase != "Active" {
 		t.Errorf("Phase=%q, want Active", team.Status.Phase)
@@ -1069,8 +1069,10 @@ func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *test
 	if team.Status.Phase != "Active" {
 		t.Errorf("Phase=%q, want Active", team.Status.Phase)
 	}
-	if result.RequeueAfter != reconcileInterval {
-		t.Errorf("RequeueAfter=%v, want %v", result.RequeueAfter, reconcileInterval)
+	// activeRequeue adds 0-10% positive jitter to reconcileInterval, so the
+	// assertion must be a range, not exact equality.
+	if result.RequeueAfter < reconcileInterval || result.RequeueAfter > reconcileInterval+reconcileInterval/10+time.Second {
+		t.Errorf("RequeueAfter=%v, want within [%v, %v+10%% jitter]", result.RequeueAfter, reconcileInterval, reconcileInterval)
 	}
 	if !team.Status.LeaderReady {
 		t.Errorf("LeaderReady=false, want true")
@@ -1847,5 +1849,193 @@ func TestDeriveTeamWithResolvedIdentities_BackfillsHumanMembers(t *testing.T) {
 	// Source team must remain untouched.
 	if team.Spec.HumanMembers[0].MatrixUserID != "@coord:matrix.local" {
 		t.Fatal("source team HumanMembers mutated; expected deep copy")
+	}
+}
+
+// fastPathTeamFixture builds the fully-converged Active team the reconcile
+// fast path needs: generation observed, every member reported ready, and a
+// team room recorded in status. Members mirror TestReconcileTeamTeamReferences_HappyPath
+// so resolveTeamMembers succeeds without degradation.
+func fastPathTeamFixture(t *testing.T) (*v1beta1.Team, *v1beta1.Worker, *v1beta1.Worker) {
+	t.Helper()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default", Generation: 1},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:              "Active",
+			ObservedGeneration: 1,
+			LeaderReady:        true,
+			ReadyWorkers:       1,
+			TotalWorkers:       1,
+			TeamRoomID:         "!team:matrix.local",
+		},
+	}
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "copaw", Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			SpecHash:       "leader-hash",
+			Phase:          "Running",
+			MatrixUserID:   "@lead:matrix.local",
+			RoomID:         "!room-lead:matrix.local",
+			ContainerState: "running",
+		},
+	}
+	worker1 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "copaw", Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			SpecHash:       "dev-hash",
+			Phase:          "Running",
+			MatrixUserID:   "@dev:matrix.local",
+			RoomID:         "!room-dev:matrix.local",
+			ContainerState: "ready",
+		},
+	}
+	return team, leaderWorker, worker1
+}
+
+// reconcileFastPathTeam persists the fixture and runs one reconcileTeam pass.
+func reconcileFastPathTeam(t *testing.T, r *TeamReconciler, team *v1beta1.Team) reconcile.Result {
+	t.Helper()
+	ctx := context.Background()
+	patchBase := client.MergeFrom(team.DeepCopy())
+	if err := r.Status().Patch(ctx, team, patchBase); err != nil {
+		t.Fatalf("persist team status: %v", err)
+	}
+	patchBase = client.MergeFrom(team.DeepCopy())
+	result, err := r.reconcileTeam(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
+	}
+	return result
+}
+
+// TestReconcileTeamFastPath_RunsFullPassOnRoomMembershipDrift pins the
+// self-heal: an Active team whose room lost a member (e.g. an invite the
+// homeserver dropped, or a kicked worker) must fall through to the full
+// provisioning pass, which re-invites and re-joins the missing member.
+// Without this probe the fast path would skip reconciliation forever and
+// the room would stay silently understaffed.
+func TestReconcileTeamFastPath_RunsFullPassOnRoomMembershipDrift(t *testing.T) {
+	team, leaderWorker, worker1 := fastPathTeamFixture(t)
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+	var (
+		probeRoom   string
+		probeLeader string
+		probeWorker []string
+	)
+	prov.MissingTeamRoomMembersFn = func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+		probeRoom = roomID
+		probeLeader = leaderName
+		probeWorker = workerNames
+		return []string{"@dev:matrix.local"}, nil
+	}
+
+	r := &TeamReconciler{Client: c, Provisioner: prov, Deployer: deployer}
+	reconcileFastPathTeam(t, r, team)
+
+	if probeRoom != "!team:matrix.local" {
+		t.Fatalf("probe room = %q, want !team:matrix.local", probeRoom)
+	}
+	// Runtime names must match the full pass's identity source
+	// (EffectiveWorkerName), otherwise the probe would report phantom drift
+	// and cause permanent full-pass churn.
+	if probeLeader != "lead" {
+		t.Fatalf("probe leader = %q, want lead (EffectiveWorkerName)", probeLeader)
+	}
+	if len(probeWorker) != 1 || probeWorker[0] != "dev" {
+		t.Fatalf("probe workers = %v, want [dev]", probeWorker)
+	}
+	if len(prov.Calls.ProvisionTeamRooms) != 1 {
+		t.Fatalf("ProvisionTeamRooms calls=%d, want 1 (drift must trigger the full reconcile pass)", len(prov.Calls.ProvisionTeamRooms))
+	}
+}
+
+// TestReconcileTeamFastPath_SkipsWhenRoomFullyStaffed pins the fast path:
+// a healthy room lets the reconcile skip the full provisioning pass.
+func TestReconcileTeamFastPath_SkipsWhenRoomFullyStaffed(t *testing.T) {
+	team, leaderWorker, worker1 := fastPathTeamFixture(t)
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+	probes := 0
+	prov.MissingTeamRoomMembersFn = func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+		probes++
+		return nil, nil
+	}
+
+	r := &TeamReconciler{Client: c, Provisioner: prov, Deployer: deployer}
+	result := reconcileFastPathTeam(t, r, team)
+
+	if probes != 1 {
+		t.Fatalf("drift probe calls=%d, want 1", probes)
+	}
+	if len(prov.Calls.ProvisionTeamRooms) != 0 {
+		t.Fatalf("ProvisionTeamRooms calls=%d, want 0 (healthy room must take the fast path)", len(prov.Calls.ProvisionTeamRooms))
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatalf("RequeueAfter=%v, want the periodic active requeue", result.RequeueAfter)
+	}
+}
+
+// TestReconcileTeamFastPath_KeepsFastPathOnProbeError pins the
+// fail-open semantics: a homeserver read error must NOT demote every
+// healthy team into a full provisioning pass (a Synapse blip would
+// otherwise stampede all teams through room creation).
+func TestReconcileTeamFastPath_KeepsFastPathOnProbeError(t *testing.T) {
+	team, leaderWorker, worker1 := fastPathTeamFixture(t)
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+	prov.MissingTeamRoomMembersFn = func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+		return nil, errors.New("synapse unavailable")
+	}
+
+	r := &TeamReconciler{Client: c, Provisioner: prov, Deployer: deployer}
+	result := reconcileFastPathTeam(t, r, team)
+
+	if len(prov.Calls.ProvisionTeamRooms) != 0 {
+		t.Fatalf("ProvisionTeamRooms calls=%d, want 0 (probe errors must keep the fast path)", len(prov.Calls.ProvisionTeamRooms))
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatalf("RequeueAfter=%v, want the periodic active requeue", result.RequeueAfter)
 	}
 }

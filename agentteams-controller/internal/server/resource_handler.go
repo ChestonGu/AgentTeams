@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -84,7 +85,14 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
-	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
+	// Persist spec.runtime exactly as submitted. Resolving the install-time
+	// default into the CR breaks namespaces whose live Worker CRD enum lacks
+	// that value (e.g. "worker-bridge" before the enum lands cluster-wide): the
+	// create is rejected before the reconciler ever runs. The worker
+	// reconciler applies AGENTTEAMS_DEFAULT_WORKER_RUNTIME via
+	// RuntimeFallback, so an omitted runtime resolves identically without
+	// being pinned in the CR.
+	runtime := req.Runtime
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -107,6 +115,11 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Expose:           req.Expose,
 			ChannelPolicy:    req.ChannelPolicy,
 			Resources:        req.Resources,
+			AdapterMode:      req.AdapterMode,
+			CimicodeGatewayUrl: req.CimicodeGatewayUrl,
+			SessionId:        req.SessionId,
+			SandboxId:        req.SandboxId,
+			TemplateId:       req.TemplateId,
 			ContainerManaged: &containerManaged,
 			State:            req.State,
 		},
@@ -222,6 +235,25 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Image != "" {
 			worker.Spec.Image = req.Image
+		}
+		// worker-bridge binding re-point: non-empty overwrites, empty leaves
+		// the CR field untouched (binding updates flow to runtime.yaml via the
+		// bridge-section projection and are picked up by the running bridge,
+		// never a pod rebuild).
+		if req.AdapterMode != "" {
+			worker.Spec.AdapterMode = req.AdapterMode
+		}
+		if req.CimicodeGatewayUrl != "" {
+			worker.Spec.CimicodeGatewayUrl = req.CimicodeGatewayUrl
+		}
+		if req.SessionId != "" {
+			worker.Spec.SessionId = req.SessionId
+		}
+		if req.SandboxId != "" {
+			worker.Spec.SandboxId = req.SandboxId
+		}
+		if req.TemplateId != "" {
+			worker.Spec.TemplateId = req.TemplateId
 		}
 		if req.Identity != "" {
 			worker.Spec.Identity = req.Identity
@@ -739,6 +771,11 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		Skills:           w.Spec.Skills,
 		McpServers:       w.Spec.McpServers,
 		Package:          w.Spec.Package,
+		AdapterMode:      w.Spec.AdapterMode,
+		CimicodeGatewayUrl: w.Spec.CimicodeGatewayUrl,
+		SessionId:        w.Spec.SessionId,
+		SandboxId:        w.Spec.SandboxId,
+		TemplateId:       w.Spec.TemplateId,
 		BackendRuntime:   w.Spec.GetBackendRuntime(),
 		ContainerManaged: w.Spec.DesiredContainerMan(),
 		ChannelPolicy:    w.Spec.ChannelPolicy,
@@ -749,6 +786,14 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
+	}
+	for k, v := range w.Spec.Env {
+		if strings.HasPrefix(k, "BRIDGE_RUNTIME_") {
+			if resp.RuntimeEnv == nil {
+				resp.RuntimeEnv = map[string]string{}
+			}
+			resp.RuntimeEnv[k] = v
+		}
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})

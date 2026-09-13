@@ -1753,6 +1753,60 @@ func TestHashAppliedWorkerSpec_IncludesPodFields(t *testing.T) {
 	})
 }
 
+// TestHashAppliedWorkerSpec_ExcludesWorkerBridgeBindingFields locks in that
+// the worker-bridge binding fields are excluded from the applied-spec hash:
+// they are projected to the runtime.yaml bridge section and picked up by the
+// running bridge via self-heal polling — re-pointing a binding must rebind
+// the bridge, never rebuild the pod.
+func TestHashAppliedWorkerSpec_ExcludesWorkerBridgeBindingFields(t *testing.T) {
+	base := v1beta1.WorkerSpec{
+		Runtime: "worker-bridge",
+		Image:   "bridge:v1",
+	}
+	baseHash := hashAppliedWorkerSpec(base)
+
+	t.Run("add full binding", func(t *testing.T) {
+		bound := base
+		bound.AdapterMode = "cimicode-stateless"
+		bound.CimicodeGatewayUrl = "http://cimicode.internal:8080"
+		bound.SessionId = "sess-1"
+		bound.SandboxId = "sbx-1"
+		bound.TemplateId = "tpl-1"
+		if got := hashAppliedWorkerSpec(bound); got != baseHash {
+			t.Fatalf("bridge binding fields must not affect hash: got %q, want %q", got, baseHash)
+		}
+	})
+
+	t.Run("re-point sessionId alone", func(t *testing.T) {
+		repointed := base
+		repointed.SessionId = "sess-2"
+		if got := hashAppliedWorkerSpec(repointed); got != baseHash {
+			t.Fatalf("sessionId re-point must not affect hash: got %q, want %q", got, baseHash)
+		}
+	})
+
+	t.Run("adapterMode switch must not affect hash", func(t *testing.T) {
+		podMode := base
+		podMode.AdapterMode = "cimicode-pod"
+		if got := hashAppliedWorkerSpec(podMode); got != baseHash {
+			t.Fatalf("adapterMode must not affect hash: got %q, want %q", got, baseHash)
+		}
+	})
+
+	// The resources-aware variant must exclude them too.
+	t.Run("resources-aware variant", func(t *testing.T) {
+		resources := &v1beta1.AgentResourceRequirements{Limits: v1beta1.AgentResourceValues{CPU: "500m"}}
+		plain := base
+		plain.SessionId = "sess-1"
+		bound := base
+		bound.SessionId = "sess-999"
+		if got, want := hashAppliedWorkerSpecForRuntimeAndResources(bound, "worker-bridge", resources),
+			hashAppliedWorkerSpecForRuntimeAndResources(plain, "worker-bridge", resources); got != want {
+			t.Fatalf("binding change must not affect resources-aware hash: got %q, want %q", got, want)
+		}
+	})
+}
+
 func TestHashAppliedWorkerSpec_ExcludesConfigAndPermissionOnlyFields(t *testing.T) {
 	base := v1beta1.WorkerSpec{
 		Model: "gpt-4",

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -686,6 +687,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_worker_bridge_uses_bridge_image", RuntimeWorkerBridge, "", "agentteams/cimicode-bridge:latest", RuntimeWorkerBridge},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
@@ -697,13 +699,14 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:          "agentteams",
-				WorkerImage:        "agentteams/worker-agent:latest",
-				CopawWorkerImage:   "agentteams/copaw-worker:latest",
-				HermesWorkerImage:  "agentteams/hermes-worker:latest",
-				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-				WorkerCPU:          "1000m",
-				WorkerMemory:       "2Gi",
+				Namespace:            "agentteams",
+				WorkerImage:          "agentteams/worker-agent:latest",
+				CopawWorkerImage:     "agentteams/copaw-worker:latest",
+				HermesWorkerImage:    "agentteams/hermes-worker:latest",
+				QwenPawWorkerImage:   "agentteams/qwenpaw-worker:latest",
+				WorkerBridgeImage:    "agentteams/cimicode-bridge:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -725,6 +728,79 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 				t.Fatalf("runtime label = %q, want %q", got, tc.wantLabel)
 			}
 		})
+	}
+}
+
+// TestK8sCreateWorkerBridgeKeepsImageWorkdir pins the bridge-pod contract: the
+// cimicode-bridge image resolves its config from its own WORKDIR, so the
+// backend must NOT inject the /root/agentteams-fs working dir (and HOME)
+// it applies to agent runtimes — doing so strands the relative config path.
+func TestK8sCreateWorkerBridgeKeepsImageWorkdir(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:        "agentteams",
+		WorkerBridgeImage: "agentteams/cimicode-bridge:latest",
+		WorkerCPU:        "1000m",
+		WorkerMemory:     "2Gi",
+	}, "agentteams-worker-", nil)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "ocw",
+		Runtime: RuntimeWorkerBridge,
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-ocw", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	c := pod.Spec.Containers[0]
+	if c.WorkingDir != "" {
+		t.Fatalf("WorkingDir = %q, want empty (image WORKDIR)", c.WorkingDir)
+	}
+	for _, ev := range c.Env {
+		if ev.Name == "HOME" {
+			t.Fatalf("HOME env injected for worker-bridge pod: %q", ev.Value)
+		}
+	}
+}
+
+// TestK8sCreateWorkerBridgeImageFailFast pins the fail-fast contract: when
+// neither spec.image nor AGENTTEAMS_WORKER_BRIDGE_IMAGE names a bridge image,
+// Create must fail instead of silently falling through to the generic
+// WorkerImage — a bridge pod running an openclaw worker image wedges at
+// bootstrap with no actionable signal.
+func TestK8sCreateWorkerBridgeImageFailFast(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:   "agentteams",
+		WorkerImage: "agentteams/worker-agent:latest", // must NOT be picked up
+		WorkerCPU:   "1000m",
+		WorkerMemory: "2Gi",
+	}, "agentteams-worker-", nil)
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:    "wbw",
+		Runtime: RuntimeWorkerBridge,
+	})
+	if err == nil {
+		t.Fatal("Create succeeded, want fail-fast error for missing bridge image")
+	}
+	if want := "no image for worker-bridge runtime"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want substring %q", err.Error(), want)
+	}
+
+	// spec.image alone is enough — no env fallback required.
+	b2 := NewK8sBackendWithClient(newFakeK8sCoreClient(), K8sConfig{
+		Namespace: "agentteams",
+		WorkerCPU: "1000m", WorkerMemory: "2Gi",
+	}, "agentteams-worker-", nil)
+	if _, err := b2.Create(context.Background(), CreateRequest{
+		Name:    "wbw2",
+		Runtime: RuntimeWorkerBridge,
+		Image:   "registry.local/cimicode-bridge:v0.2.0",
+	}); err != nil {
+		t.Fatalf("Create with spec.image failed: %v", err)
 	}
 }
 

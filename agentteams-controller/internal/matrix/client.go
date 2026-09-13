@@ -723,10 +723,26 @@ func (c *matrixClient) JoinRoom(ctx context.Context, roomID, userToken string) e
 	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
 		return nil
 	}
-	// Idempotent: user already in the room.
+	// Synapse occasionally answers /join of an already-joined user with 403
+	// M_FORBIDDEN "... already in the room". Treating that as unconditional
+	// success used to mask real drift (a join that never happened read as
+	// joined). Verify against the room's actual membership before trusting
+	// the "already" claim.
 	if statusCode == http.StatusForbidden && resp.ErrCode == "M_FORBIDDEN" {
 		if strings.Contains(strings.ToLower(resp.Error), "already") {
-			return nil
+			userID, whoErr := c.accessTokenUserID(ctx, userToken)
+			if whoErr != nil {
+				return fmt.Errorf("join room %s: already-in-room verification failed (whoami): %w", roomID, whoErr)
+			}
+			joined, membersErr := c.isUserJoined(ctx, roomID, userID)
+			if membersErr != nil {
+				return fmt.Errorf("join room %s: already-in-room verification failed (members): %w", roomID, membersErr)
+			}
+			if joined {
+				return nil
+			}
+			return fmt.Errorf("join room %s: homeserver claimed %s already in the room but membership says otherwise",
+				roomID, userID)
 		}
 	}
 	return fmt.Errorf("join room %s: HTTP %d %s %s: %s",
@@ -885,6 +901,22 @@ func (c *matrixClient) ListRoomMembersWithToken(ctx context.Context, roomID, use
 		})
 	}
 	return members, nil
+}
+
+// isUserJoined reports whether userID is currently joined (membership
+// "join") to roomID, read with the admin token so it bypasses in-room
+// visibility rules.
+func (c *matrixClient) isUserJoined(ctx context.Context, roomID, userID string) (bool, error) {
+	members, err := c.ListRoomMembers(ctx, roomID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range members {
+		if m.UserID == userID && m.Membership == "join" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *matrixClient) InviteToRoom(ctx context.Context, roomID, userID string) error {

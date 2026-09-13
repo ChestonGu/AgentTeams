@@ -32,8 +32,16 @@ type K8sConfig struct {
 	HermesWorkerImage    string
 	OpenHumanWorkerImage string
 	QwenPawWorkerImage   string
-	WorkerCPU            string
-	WorkerMemory         string
+	// WorkerBridgeImage is the cimicode-bridge image used for
+	// runtime=worker-bridge workers: the pod masquerades as the worker (same
+	// identity labels, env, runtime.yaml projection) while the conversation
+	// loop lives in an external runtime the bridge calls. Deliberately no
+	// default — it comes from AGENTTEAMS_WORKER_BRIDGE_IMAGE (helm values at
+	// install, upgraded per release); Create fails fast when neither spec.image
+	// nor the env is set rather than silently falling back to an openclaw image.
+	WorkerBridgeImage string
+	WorkerCPU         string
+	WorkerMemory      string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -264,6 +272,13 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
 			image = k.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeWorkerBridge && k.config.WorkerBridgeImage != "":
+			image = k.config.WorkerBridgeImage
+		case req.Runtime == RuntimeWorkerBridge:
+			// Fail fast instead of falling through to the generic WorkerImage:
+			// a bridge pod silently running an openclaw worker image wedges at
+			// bootstrap with no actionable signal.
+			return nil, fmt.Errorf("no image for worker-bridge runtime: set spec.image or AGENTTEAMS_WORKER_BRIDGE_IMAGE")
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -274,6 +289,11 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 
 	if req.WorkingDir == "" {
 		switch {
+		case req.Runtime == RuntimeWorkerBridge:
+			// The bridge image anchors its config to its own WORKDIR
+			// (/opt/bridge, relative "config/bridge.example.yaml"); overriding
+			// it here would silently strand the config lookup. The bridge has
+			// no local workspace — files live in the sandbox pod.
 		case req.Runtime == RuntimeCopaw:
 			req.WorkingDir = fmt.Sprintf("/root/agentteams-fs/agents/%s", req.Name)
 			if req.Env == nil {
@@ -746,6 +766,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeHermes
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
+	case RuntimeWorkerBridge:
+		return RuntimeWorkerBridge
 	default:
 		return RuntimeOpenClaw
 	}

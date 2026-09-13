@@ -472,15 +472,39 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	// Team through the informer, defeating the purpose of the fast path.
 	if t.Status.Phase == "Active" && t.Generation == t.Status.ObservedGeneration {
 		if t.Status.LeaderReady && t.Status.ReadyWorkers == t.Status.TotalWorkers {
-			logger.Info("team healthy, skipping full reconcile",
-				"team", t.Name, "uid", t.UID,
-				"phase", t.Status.Phase,
-				"attempt", t.Status.ReconcileAttempt,
-				"leaderReady", t.Status.LeaderReady,
-				"readyWorkers", t.Status.ReadyWorkers,
-				"totalWorkers", t.Status.TotalWorkers,
-				"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
-			return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+			// Container readiness cannot see room membership drift (a lost
+			// invite leaves the team room silently understaffed forever, and
+			// nothing re-enters the provisioning path). Probe the room before
+			// taking the fast path; on drift fall through to the full pass,
+			// which re-invites and re-joins missing members. A probe transport
+			// failure keeps the fast path — a Synapse blip must not stampede
+			// every healthy team through full provisioning; the next reconcile
+			// retries the probe.
+			missing, probe := r.teamRoomDrift(ctx, t)
+			switch probe {
+			case roomDriftProbeOK:
+				if len(missing) == 0 {
+					logger.Info("team healthy, skipping full reconcile",
+						"team", t.Name, "uid", t.UID,
+						"phase", t.Status.Phase,
+						"attempt", t.Status.ReconcileAttempt,
+						"leaderReady", t.Status.LeaderReady,
+						"readyWorkers", t.Status.ReadyWorkers,
+						"totalWorkers", t.Status.TotalWorkers,
+						"roomMembersVerified", true,
+						"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
+					return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+				}
+				logger.Info("team room membership drift detected; running full reconcile",
+					"team", t.Name, "room", t.Status.TeamRoomID, "missing", missing)
+			case roomDriftProbeFailed:
+				logger.Info("team room membership check failed; keeping fast path",
+					"team", t.Name, "room", t.Status.TeamRoomID)
+				return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+			case roomDriftProbeNotApplicable:
+				// No room recorded yet, or member resolution failed — the
+				// full pass owns both; fall through.
+			}
 		}
 		// A member is not ready — fall through to the full pass to recover it.
 	}
@@ -583,7 +607,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	teamWorkerEntries := teamWorkerEntries(members, leaderRef.Name)
 	leaderRuntime := r.teamMemberRuntime(leaderMember)
 
-	if leaderRuntime != backend.RuntimeQwenPaw {
+	if !backend.IsManagedRuntime(leaderRuntime) {
 		// Overlay Team Leader built-ins onto the team-reference leader Worker before
 		// injecting the team coordination context. The Worker still owns its
 		// lifecycle and credentials; this only restores role-specific prompt and
@@ -629,7 +653,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		if r.teamMemberRuntime(rm) == backend.RuntimeQwenPaw {
+		if backend.IsManagedRuntime(r.teamMemberRuntime(rm)) {
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
@@ -678,7 +702,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			role = RoleTeamLeader
 		}
-		if r.teamMemberRuntime(rm) != backend.RuntimeQwenPaw {
+		if !backend.IsManagedRuntime(r.teamMemberRuntime(rm)) {
 			policy := r.teamChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
 			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
 				WorkerName:     rm.runtimeName,
@@ -750,6 +774,52 @@ func (r *TeamReconciler) setWorkerTeamAnnotation(ctx context.Context, worker *v1
 		worker.Annotations[v1beta1.AnnotationWorkerTeamName] = teamName
 	}
 	return r.Patch(ctx, worker, client.MergeFrom(base))
+}
+
+// roomDriftProbe is the outcome of the fast-path room-membership probe.
+//   - roomDriftProbeOK: the probe ran; missing is authoritative.
+//   - roomDriftProbeFailed: the homeserver read errored — keep the fast
+//     path (a Synapse blip must not stampede healthy teams through full
+//     provisioning); the next reconcile retries the probe.
+//   - roomDriftProbeNotApplicable: no room recorded yet or member
+//     resolution failed — the full pass owns both; fall through to it.
+type roomDriftProbe int
+
+const (
+	roomDriftProbeOK roomDriftProbe = iota
+	roomDriftProbeFailed
+	roomDriftProbeNotApplicable
+)
+
+// teamRoomDrift is the fast-path room-membership probe. See roomDriftProbe
+// for the outcome semantics.
+func (r *TeamReconciler) teamRoomDrift(ctx context.Context, t *v1beta1.Team) ([]string, roomDriftProbe) {
+	logger := log.FromContext(ctx)
+	if t.Status.TeamRoomID == "" {
+		return nil, roomDriftProbeNotApplicable
+	}
+	leaderRef, _, err := validateWorkerMembers(t.Spec.WorkerMembers)
+	if err != nil {
+		return nil, roomDriftProbeNotApplicable
+	}
+	members, degradedMsgs := r.resolveTeamMembers(ctx, t)
+	if len(degradedMsgs) > 0 {
+		// A referenced Worker CR is missing — the full pass owns that
+		// failure mode; fall through to it.
+		return nil, roomDriftProbeNotApplicable
+	}
+	missing, err := r.Provisioner.MissingTeamRoomMembers(
+		ctx,
+		t.Status.TeamRoomID,
+		teamLeaderMember(members, leaderRef.Name).runtimeName,
+		teamWorkerRuntimeNames(members, leaderRef.Name),
+	)
+	if err != nil {
+		logger.Info("team room membership check failed; keeping fast path",
+			"team", t.Name, "room", t.Status.TeamRoomID, "error", err.Error())
+		return nil, roomDriftProbeFailed
+	}
+	return missing, roomDriftProbeOK
 }
 
 func (r *TeamReconciler) resolveTeamMembers(ctx context.Context, t *v1beta1.Team) ([]teamWorkerMember, []string) {
@@ -827,7 +897,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if runtime != backend.RuntimeQwenPaw && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !backend.IsManagedRuntime(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -979,7 +1049,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if _, err := r.Provisioner.RefreshWorkerCredentials(ctx, w.Name, runtimeName, ""); err != nil {
 		return fmt.Errorf("revoke team storage access: %w", err)
 	}
-	if runtime != backend.RuntimeQwenPaw {
+	if !backend.IsManagedRuntime(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:         runtimeName,
 			TeamName:           "",
@@ -1019,7 +1089,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
 	}
-	if runtime == backend.RuntimeQwenPaw {
+	if backend.IsManagedRuntime(runtime) {
 		return nil
 	}
 	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -1205,7 +1275,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 		if err := r.Get(ctx, key, &leaderW); err == nil {
 			leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
 			runtime := backend.ResolveRuntime(leaderW.Spec.Runtime, r.DefaultRuntime)
-			if runtime != backend.RuntimeQwenPaw {
+			if !backend.IsManagedRuntime(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
 					Enabled:    false,

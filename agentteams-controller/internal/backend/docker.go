@@ -28,6 +28,10 @@ type DockerConfig struct {
 	HermesWorkerImage    string // default hermes worker image (AGENTTEAMS_HERMES_WORKER_IMAGE)
 	OpenHumanWorkerImage string // default openhuman worker image (AGENTTEAMS_OPENHUMAN_WORKER_IMAGE)
 	QwenPawWorkerImage   string // default qwenpaw worker image (AGENTTEAMS_QWENPAW_WORKER_IMAGE)
+	// WorkerBridgeImage is the cimicode-bridge image for runtime=worker-bridge
+	// workers (AGENTTEAMS_WORKER_BRIDGE_IMAGE). No default: Create fails fast
+	// when neither spec.image nor the env is set — see K8sConfig.WorkerBridgeImage.
+	WorkerBridgeImage string // default worker-bridge image (AGENTTEAMS_WORKER_BRIDGE_IMAGE)
 	DefaultNetwork       string // default Docker network (default "agentteams-net")
 }
 
@@ -119,6 +123,12 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && d.config.QwenPawWorkerImage != "":
 			image = d.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeWorkerBridge && d.config.WorkerBridgeImage != "":
+			image = d.config.WorkerBridgeImage
+		case req.Runtime == RuntimeWorkerBridge:
+			// Fail fast rather than fall through to the generic WorkerImage —
+			// same rationale as the K8s backend.
+			return nil, fmt.Errorf("no image for worker-bridge runtime: set spec.image or AGENTTEAMS_WORKER_BRIDGE_IMAGE")
 		default:
 			image = d.config.WorkerImage
 		}
