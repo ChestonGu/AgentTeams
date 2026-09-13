@@ -46,10 +46,12 @@ Synapse
 ## 目录结构
 
 ```text
-worker-bridge/bridge-runtime/
-├── Dockerfile
+worker-bridge/bridge/
+├── Dockerfile                 # 构建上下文=仓库根（捆绑 template/ 源模板）
 ├── README.md
 ├── pyproject.toml
+├── generate_agent_md.py       # agent.md 生成工具（部署进镜像 /opt/agenttools/）
+├── agentteams_log.py          # 统一日志模块（契约 §5.5，同上部署）
 ├── config/
 │   └── bridge.example.yaml
 ├── scripts/
@@ -70,8 +72,12 @@ worker-bridge/bridge-runtime/
 │   ├── runtime/adapters.py    # SSE 到 RuntimeEvent
 │   ├── runtime/turn.py        # Gateway 单轮调用编排（agentMd + chat + 聚合）
 │   └── store/                 # memory/file/redis
-└── tests/unit/
+├── tests/unit/                # bridge 进程单测（pytest）
+└── tests/                     # 生成工具 golden 测试（unittest：fixtures/ + test_generate_agent_md.py）
 ```
+
+测试：`cd worker-bridge/bridge && python -m pytest tests/unit -q`（进程）、
+`python -m unittest discover -s tests -p "test_generate_agent_md.py"`（生成工具）。
 
 ## S3/MinIO 配置
 

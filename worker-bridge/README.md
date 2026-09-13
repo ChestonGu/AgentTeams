@@ -32,12 +32,11 @@ runtime.yaml 渲染，**不再解析 canonical AGENTS.md**）后作为 system pr
 | `cli/taskflow/agentteams_log.py` | **统一日志模块（契约 §5.5）**：所有工具 → 一个 JSONL 文件（cmd_start/业务事件/cmd_end，tool/worker/run_id 戳）；逐字节部署到各 scripts 目录 + bridge/ | 日志 ✅ |
 | `cli/sync/` | agentteams-sync CLI（= copaw filesync 的 pull/push/stat/list） | T3 ✅ |
 | `cli/projectflow/` | **projectflow CLI（leader 侧，预置未部署）**：project/tasks/plan-dag/plan-loop/ready/delegate/delegate-commit/check；core 为 copaw task.py 全量 vendor | leader 预置 ✅ |
-| `bridge/` | **`generate_agent_md.py`**：agent.md **生成**工具，供 matrix bridge 每次会话调用（源模板 + runtime.yaml 结构化渲染：Coordination 块 + 环境段 + SOUL/PROFILE 经 `## Persona` 接缝逐字合并），输出即 system prompt；fail-loud（身份/占位符/残留括号校验不过即退出 1，bridge 拒开会话） | 契约 §6 v2.4 ✅ |
+| `bridge/` | **bridge 进程本体 + 其工具**（原顶层 `cimicode-bridge/` 已并入；镜像名 `agentteams/cimicode-bridge` 不变，构建上下文=仓库根）：`src/` FastAPI 进程（matrix 防护、turn 编排、adapter 裁决）+ `generate_agent_md.py`/`agentteams_log.py`（agent.md **生成**工具与统一日志模块，部署进镜像 /opt/agenttools/，生成器源模板 + runtime.yaml 结构化渲染，fail-loud）+ `tests/unit/`（进程 pytest）与 `tests/`（生成器 golden） | 契约 §6 v2.4 ✅ |
 | `template/worker-bridge-agent/` | worker 模板（**AGENTS.md = 源模板**：骨架固化 + §2-§8 静态 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两个占位符；5 skills + scripts 部署副本） | T4-T7 ✅ |
 | `template/worker-bridge-leader-agent/` | leader 模板 starter（AGENTS.md 参考 + task-management leader 版 skill + projectflow 三件套），未部署 | leader 预置 ✅ |
 | `contract/` | `interface-contract.md` v2.4（§0 架构决策 / env / 镜像布局 / shared 唯一同步 / 消息 / 命令（worker §5.1-5.3 + leader §5.4）/ **统一日志 §5.5** / agent.md **生成契约 §6**（源模板 + runtime.yaml + persona）/ 职责矩阵）+ `controller-handover.md` v2.4（零代码改动 + qwenpaw/edge 分支前提） | T8-T9 ✅（v2 重写） |
 | `operator/` | **worker-bridge-operator**：watch runtime=worker-bridge 的 Worker CR，按 `spec.adapterMode` 分派——`cimicode-stateless` 零供给；`cimicode-pod`（含空值）供给单 cimicode Deployment+svc（命名 `<w>-cimicode` / `<w>-cimicode-svc`，角色后缀式；`CIMICODE_IMAGE` 必填、`CIMICODE_PORT` 默认 8080）并 patch Worker env `BRIDGE_RUNTIME_*` | v3 §4.3 ✅ |
-| `bridge-runtime/` | **bridge 进程本体**（原顶层 `cimicode-bridge/`，镜像名 `agentteams/cimicode-bridge` 不变）：src/tests/config/scripts + Dockerfile（构建上下文=仓库根，捆绑 `bridge/` 生成器与 `template/` 源模板） | T8 前置 ✅ |
 | `cimicode-sandbox/` | pod 模式 cimicode 运行时镜像构建上下文 | v3 ✅ |
 
 冒烟/模拟器等测试资产（`verify/`、smoke 记录）按分支规整方案不随本分支搬运，留在源分支 `dev-v1.2.2-opencode-ben-test` 可追溯。
@@ -65,7 +64,7 @@ runtime.yaml 渲染，**不再解析 canonical AGENTS.md**）后作为 system pr
 cd cli/taskflow && python -m unittest discover -s tests   # 40 个（taskflow + mc_sync + 统一日志）
 cd cli/sync && python -m unittest discover -s tests       # 10 个（agentteams-sync）
 cd cli/projectflow && python -m unittest discover -s tests # 20 个（leader core + CLI + 与 worker 闭环）
-cd bridge && python -m unittest discover -s tests         # 43 个（生成工具：golden×2 + coordination.go 文案对齐 + 解析器/Persona/CLI）
+cd bridge && python -m unittest discover -s tests -p "test_generate_agent_md.py" # 43 个（生成工具：golden×2 + coordination.go 文案对齐 + 解析器/Persona/CLI；进程单测另跑 pytest tests/unit）
 
 # 生成工具（bridge 调用形态；runtime.yaml/SOUL/PROFILE 均从 MinIO 拉下后传路径）
 python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
