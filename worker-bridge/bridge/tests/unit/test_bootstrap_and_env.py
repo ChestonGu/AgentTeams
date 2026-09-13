@@ -163,18 +163,21 @@ class TestPublish:
 class TestEnvOverrides:
     def test_env_routes_to_cimicode_pod(self, monkeypatch):
         monkeypatch.setenv("BRIDGE_RUNTIME_ADAPTER", "cimicode-pod")
-        monkeypatch.setenv("BRIDGE_RUNTIME_BASE_URL", "http://cimicode-svc:8080")
+        monkeypatch.setenv("BRIDGE_RUNTIME_BASE_URL", "http://cimicode-svc:4096")
+        monkeypatch.setenv("BRIDGE_RUNTIME_HELPER_URL", "http://cimicode-svc:4097")
         monkeypatch.delenv("AGENTTEAMS_FS_ENDPOINT", raising=False)
         app = BridgeApp()
         app.start()
         assert app.config.runtime.adapter == "cimicode-pod"
-        assert app.config.runtime.base_url == "http://cimicode-svc:8080"
+        assert app.config.runtime.base_url == "http://cimicode-svc:4096"
+        assert app.config.runtime.helper_url == "http://cimicode-svc:4097"
         assert isinstance(app.runtime_client, CimicodePodAdapter)
+        assert app.runtime_client.helper_url == "http://cimicode-svc:4097"
 
     def test_defaults_without_env_undetermined(self, monkeypatch):
         """无 env、无 S3：adapter 未定、client 不建（fail-loud，
         绝不静默回落写死的 mock 地址）。"""
-        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL"):
+        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL", "BRIDGE_RUNTIME_HELPER_URL"):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv("AGENTTEAMS_FS_ENDPOINT", raising=False)
         app = BridgeApp()

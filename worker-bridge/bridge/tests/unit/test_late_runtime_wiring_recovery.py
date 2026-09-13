@@ -117,7 +117,11 @@ def test_recovery_builds_gateway_and_reaches_listening(monkeypatch):
     phase flips to listening, recovery loop returns."""
     app = _bootstrap_app(
         monkeypatch,
-        {"BRIDGE_RUNTIME_ADAPTER": "cimicode-pod", "BRIDGE_RUNTIME_BASE_URL": "http://sandbox:4096"},
+        {
+            "BRIDGE_RUNTIME_ADAPTER": "cimicode-pod",
+            "BRIDGE_RUNTIME_BASE_URL": "http://sandbox:4096",
+            "BRIDGE_RUNTIME_HELPER_URL": "http://sandbox:4097",
+        },
     )
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8080")
@@ -137,6 +141,7 @@ def test_recovery_builds_gateway_and_reaches_listening(monkeypatch):
 
     assert app.config.runtime.adapter == "cimicode-pod"
     assert app.config.runtime.base_url == "http://sandbox:4096"
+    assert app.config.runtime.helper_url == "http://sandbox:4097"
     assert len(gateways) == 1
     assert gateways[0].started is True
     assert app.phase == "listening"
