@@ -241,10 +241,11 @@ build-cimicode-runtime: ## Build cimicode-runtime merged image (opencode + tools
 
 build-worker-bridge-operator: ## Build worker-bridge-operator image
 	@echo "==> Building worker-bridge-operator image: $(LOCAL_WORKER_BRIDGE_OPERATOR)"
+	# context = operator 目录（Dockerfile 的 COPY 路径相对该目录）
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
 		-f worker-bridge/operator/Dockerfile \
 		-t $(LOCAL_WORKER_BRIDGE_OPERATOR) \
-		.
+		worker-bridge/operator
 
 # ---------- Tag ----------
 
