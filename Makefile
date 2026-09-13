@@ -56,6 +56,8 @@ LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_CIMICODE_BRIDGE = agentteams/cimicode-bridge:$(VERSION)
+LOCAL_CIMICODE_RUNTIME = agentteams/cimicode-runtime:$(VERSION)
+LOCAL_WORKER_BRIDGE_OPERATOR = agentteams/worker-bridge-operator:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
@@ -112,7 +114,7 @@ LINES          ?= 50
 # ---------- Phony targets ----------
 
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        build-qwenpaw-worker build-cimicode-bridge \
+        build-qwenpaw-worker build-cimicode-bridge build-cimicode-runtime build-worker-bridge-operator \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker push-cimicode-bridge \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
@@ -219,6 +221,29 @@ build-cimicode-bridge: ## Build cimicode-bridge Worker image
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
 		-f worker-bridge/bridge/Dockerfile \
 		-t $(LOCAL_CIMICODE_BRIDGE) \
+		.
+
+# Standalone worker-bridge 镜像（不进 build: 聚合）：
+#   cimicode-runtime     cimicode pod 合并镜像（opencode + 协作工具 + skills；
+#                        ZHIPU_API_KEY build-arg 必填——key 不进仓库）
+#   worker-bridge-operator  per-worker cimicode pod 供给器
+OPENCODE_VERSION ?= 1.18.27
+ZHIPU_API_KEY    ?=
+
+build-cimicode-runtime: ## Build cimicode-runtime merged image (opencode + tools + skills; requires ZHIPU_API_KEY)
+	@echo "==> Building cimicode-runtime image: $(LOCAL_CIMICODE_RUNTIME)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		--build-arg OPENCODE_VERSION=$(OPENCODE_VERSION) \
+		--build-arg ZHIPU_API_KEY=$(ZHIPU_API_KEY) \
+		-f worker-bridge/cimicode-runtime/Dockerfile \
+		-t $(LOCAL_CIMICODE_RUNTIME) \
+		.
+
+build-worker-bridge-operator: ## Build worker-bridge-operator image
+	@echo "==> Building worker-bridge-operator image: $(LOCAL_WORKER_BRIDGE_OPERATOR)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		-f worker-bridge/operator/Dockerfile \
+		-t $(LOCAL_WORKER_BRIDGE_OPERATOR) \
 		.
 
 # ---------- Tag ----------
