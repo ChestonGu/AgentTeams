@@ -46,14 +46,12 @@ Synapse
 ## 目录结构
 
 ```text
-cimicode-bridge/
+worker-bridge/bridge-runtime/
 ├── Dockerfile
 ├── README.md
 ├── pyproject.toml
 ├── config/
 │   └── bridge.example.yaml
-├── deploy/
-│   └── deployment.yaml
 ├── scripts/
 │   └── bridge-entrypoint.sh
 ├── src/cimicode_bridge/

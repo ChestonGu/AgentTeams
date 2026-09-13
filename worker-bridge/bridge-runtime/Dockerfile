@@ -5,9 +5,9 @@
 FROM python:3.12-slim
 
 WORKDIR /opt/bridge
-COPY cimicode-bridge/pyproject.toml cimicode-bridge/README.md ./
-COPY cimicode-bridge/src ./src
-COPY cimicode-bridge/config ./config
+COPY worker-bridge/bridge-runtime/pyproject.toml worker-bridge/bridge-runtime/README.md ./
+COPY worker-bridge/bridge-runtime/src ./src
+COPY worker-bridge/bridge-runtime/config ./config
 RUN pip install --no-cache-dir .
 
 # v2.4 generator toolchain (contract §6): generator + unified log module +
@@ -22,7 +22,7 @@ ENV BRIDGE_GENERATOR_PATH=/opt/agenttools/generate_agent_md.py
 # sed strips any CR characters: a CRLF shebang (#!/bin/sh\r) fails exec with
 # a misleading "no such file or directory" — files edited on Windows must not
 # break the entrypoint.
-COPY cimicode-bridge/scripts/bridge-entrypoint.sh /usr/local/bin/bridge-entrypoint.sh
+COPY worker-bridge/bridge-runtime/scripts/bridge-entrypoint.sh /usr/local/bin/bridge-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/bridge-entrypoint.sh \
     && chmod +x /usr/local/bin/bridge-entrypoint.sh
 EXPOSE 8081

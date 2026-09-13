@@ -217,7 +217,7 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 build-cimicode-bridge: ## Build cimicode-bridge Worker image
 	@echo "==> Building cimicode-bridge image: $(LOCAL_CIMICODE_BRIDGE)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
-		-f cimicode-bridge/Dockerfile \
+		-f worker-bridge/bridge-runtime/Dockerfile \
 		-t $(LOCAL_CIMICODE_BRIDGE) \
 		.
 
@@ -523,7 +523,7 @@ ifeq ($(IS_PODMAN),1)
 		podman build --platform $(plat) \
 			$(DOCKER_BUILD_ARGS) \
 			--manifest $(CIMICODE_BRIDGE_TAG) \
-			./cimicode-bridge/ && ) true
+			./worker-bridge/bridge-runtime/ && ) true
 	podman manifest push --all $(CIMICODE_BRIDGE_TAG) docker://$(CIMICODE_BRIDGE_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(CIMICODE_BRIDGE_TAG) docker://$(CIMICODE_BRIDGE_IMAGE):latest && \
@@ -536,7 +536,7 @@ else
 		-t $(CIMICODE_BRIDGE_TAG) \
 		$(if $(PUSH_LATEST),-t $(CIMICODE_BRIDGE_IMAGE):latest) \
 		--push \
-		./cimicode-bridge/
+		./worker-bridge/bridge-runtime/
 endif
 
 # ---------- Push native-arch only (dev use) ----------
