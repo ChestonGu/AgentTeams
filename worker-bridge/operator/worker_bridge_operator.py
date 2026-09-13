@@ -416,8 +416,17 @@ class StackOperator:
         )
         live_env, live_refs = self._env_fingerprint(lc)
         want_env, want_refs = self._env_fingerprint(dc)
-        live_volumes = [(v.name, bool(v.empty_dir), bool(v.host_path)) for v in live.spec.template.spec.volumes or []]
-        want_volumes = [(v.name, bool(v.empty_dir), bool(v.host_path)) for v in desired.spec.template.spec.volumes or []]
+        # `is not None` 而非 bool()：desired 侧 empty_dir 是 {}（falsy），API
+        # 回读侧物化为 V1EmptyDirVolumeSource 实例（truthy）——bool() 比较会
+        # 造成每 pass 幻影漂移（反复空转 replace）。
+        live_volumes = [
+            (v.name, v.empty_dir is not None, v.host_path is not None)
+            for v in live.spec.template.spec.volumes or []
+        ]
+        want_volumes = [
+            (v.name, v.empty_dir is not None, v.host_path is not None)
+            for v in desired.spec.template.spec.volumes or []
+        ]
         return (
             lc.image != dc.image
             or live_probe_path != want_probe_path

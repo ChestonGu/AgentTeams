@@ -208,6 +208,18 @@ def test_deployment_drift_reports_missing_secret_ref():
     assert op.deployment_drift(without_ref, with_ref) is True
 
 
+def test_deployment_drift_stable_after_api_materialization():
+    """API 会把 empty_dir={} 物化回 V1EmptyDirVolumeSource 实例——回读的
+    live 不得因此对 desired 报漂移（bool() vs {} 的幻影漂移回归）。"""
+    op = make_operator()
+    desired = op.cimicode_deployment("w1", team="t1", matrix_user="@w1:m", with_fs_secret=True)
+    live = op.cimicode_deployment("w1", team="t1", matrix_user="@w1:m", with_fs_secret=True)
+    for v in live.spec.template.spec.volumes:
+        if v.empty_dir is not None:
+            v.empty_dir = client.V1EmptyDirVolumeSource()
+    assert op.deployment_drift(live, desired) is False
+
+
 # ----------------------------------------------------------------------
 # adapter_mode：空 → pod
 # ----------------------------------------------------------------------
