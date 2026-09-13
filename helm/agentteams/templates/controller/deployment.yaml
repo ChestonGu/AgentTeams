@@ -18,6 +18,10 @@ spec:
         {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
     spec:
       serviceAccountName: {{ include "agentteams.controller.serviceAccountName" . }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -84,6 +88,8 @@ spec:
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
+            - name: AGENTTEAMS_WORKER_BRIDGE_IMAGE
+              value: {{ include "agentteams.worker.workerBridgeImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ
