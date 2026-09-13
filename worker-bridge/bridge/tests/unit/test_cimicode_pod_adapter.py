@@ -30,6 +30,7 @@ class FakeCimicodePod:
         self.delay_polls = delay_polls
         self.message_polls = 0
         self.turn_posted = False
+        self.injected = False                               # 本 turn 是否已注入完成信号
         self.vanished: set[str] = set()                  # 强制 404 的会话 id
 
     # -- 脚本辅助 ------------------------------------------------------
@@ -96,15 +97,17 @@ class FakeCimicodePod:
             # 轮询计数只在 turn 提交后有效（baseline 读取不算窗口期）
             self.message_polls = 0
             self.turn_posted = True
+            self.injected = False
             return 200, {}
         if method == "GET" and path.startswith("/session/") and path.endswith("/message"):
             session_id = path.split("/")[2]
             if self.turn_posted:
                 self.message_polls += 1
             messages = list(self.sessions[session_id])
-            if self.turn_posted and self.message_polls > self.delay_polls and not any(
-                m["info"]["role"] == "assistant" for m in messages
-            ):
+            # 注入条件用 per-turn 标志而非"会话无 assistant"——种子了历史
+            # 回复的会话（回归测试）同样要在窗口期后出现本 turn 完成信号
+            if self.turn_posted and self.message_polls > self.delay_polls and not self.injected:
+                self.injected = True
                 for index, progress in enumerate(self.scripted.get("progress", [])):
                     messages.append(self._assistant(f"msg_p{index}", progress))
                 error = self.scripted.get("error")
@@ -259,6 +262,36 @@ async def _vanished_session_recreated():
     assert any(r[0] == "POST" and r[1] == "/session" for r in fake.requests)
 
 
+async def _progress_does_not_replay_history():
+    """回归：同 session 的历史回复不得混进本 turn 的 progress_texts。
+
+    旧实现只排除 baseline 那一条 id——baseline 之前的历史 assistant 也
+    是已完成消息，会被全量收进 progress（105 实测 progress=0,1,2,3...
+    随对话单调回放）。修复后按列表位置截断。
+    """
+    fake = FakeCimicodePod(
+        scripted={"text": "本轮 final", "progress": ["本轮进度叙述"]},
+        delay_polls=1,
+    )
+    fake.seed_session("ses_seed", [
+        {"info": {"id": "msg_u_old", "role": "user", "time": {"created": 1, "completed": 1}},
+         "parts": [{"type": "text", "text": "旧问题"}]},
+        FakeCimicodePod._assistant("msg_a_hist", "旧回复（历史，不得回放）"),
+        FakeCimicodePod._assistant("msg_a_baseline", "上一轮 final"),
+    ])
+    base_url = await fake.start()
+    try:
+        adapter = _adapter(base_url)
+        events = await _run_chat(adapter, session_id="ses_seed")
+        await adapter.close()
+    finally:
+        await fake.stop()
+
+    completed = next(e for e in events if e.kind == RuntimeEventKind.TURN_COMPLETED)
+    assert completed.text == "本轮 final"
+    assert completed.data["progress_texts"] == ["本轮进度叙述"]
+
+
 async def _health_true_when_session_list_ok():
     fake = FakeCimicodePod()
     fake.sessions["s1"] = []
@@ -293,6 +326,10 @@ def test_missing_helper_url_fails_loud():
 
 def test_vanished_session_recreated():
     asyncio.run(_vanished_session_recreated())
+
+
+def test_progress_does_not_replay_history():
+    asyncio.run(_progress_does_not_replay_history())
 
 
 def test_health_true_when_session_list_ok():

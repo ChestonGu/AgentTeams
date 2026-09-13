@@ -137,20 +137,45 @@ class CimicodePodAdapter:
         return ""
 
     @staticmethod
+    def _slice_after_baseline(
+        messages: list[dict[str, Any]], baseline_id: str
+    ) -> list[dict[str, Any]] | None:
+        """baseline 之后（按列表位置）的消息切片；baseline_id 空返回全表。
+
+        返回 None 表示 baseline_id 非空却不在列表中（session 状态异常）。
+        消息列表按时间序——只按 id 排除单条会让历史回复混进本 turn 的
+        扫描窗口（progress 回放 / 轮询捞到旧回复），必须按位置截断。
+        """
+        if not baseline_id:
+            return messages
+        for idx, message in enumerate(messages):
+            if str((message.get("info") or message).get("id") or "") == baseline_id:
+                return messages[idx + 1:]
+        return None
+
+    @staticmethod
     def _completed_assistant_texts(messages: list[dict[str, Any]], baseline_id: str) -> list[str]:
-        """baseline 之后已完成的 assistant 文本（按时间序）。
+        """baseline 之后（按列表位置）已完成的 assistant 文本（按时间序）。
 
         一个 opencode turn 可能产出多条 assistant 消息（工具调用之间穿插
         进度叙述）；最后一条是 turn 的正式回复，之前的按 progress_texts
         透出给房间。
+
+        必须按位置截断而非只排除 baseline 那一条 id：baseline 之前的同
+        session 历史回复也是已完成 assistant——只排 id 会让每 turn 的
+        progress 回放全部历史并随对话单调增长（progress=0,1,2,3...）。
+        baseline_id 为空（新 session 无 assistant）时收集全部；非空却在
+        列表中找不到时保守返回空——progress 宁可缺失也不回放历史。
         """
+        if baseline_id:
+            messages = CimicodePodAdapter._slice_after_baseline(messages, baseline_id) or []
         texts: list[str] = []
         for message in messages:
             info = message.get("info") or message
             if str(info.get("role")) != "assistant":
                 continue
             message_id = str(info.get("id") or "")
-            if not message_id or message_id == baseline_id:
+            if not message_id:
                 continue
             if (info.get("time") or {}).get("completed") is None:
                 continue
@@ -181,13 +206,17 @@ class CimicodePodAdapter:
         deadline = loop.time() + self.timeout_seconds
         while True:
             await asyncio.sleep(self.poll_interval_seconds)
-            messages = await self._messages(session_id)
-            for message in reversed(messages):
+            fresh = self._slice_after_baseline(await self._messages(session_id), baseline_id)
+            if fresh is None:
+                # baseline 非空却不在列表里（session 状态异常）——本轮跳过，
+                # 继续等 deadline 兜底；绝不扫全表（会把历史回复当新完成）。
+                continue
+            for message in reversed(fresh):
                 info = message.get("info") or message
                 if str(info.get("role")) != "assistant":
                     continue
                 message_id = str(info.get("id") or "")
-                if not message_id or message_id == baseline_id:
+                if not message_id:
                     continue
                 time_info = info.get("time") or {}
                 if time_info.get("completed") is None:
