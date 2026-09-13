@@ -7,9 +7,12 @@ metadata:
   namespace: {{ include "agentteams.namespace" . }}
   labels:
     {{- include "agentteams.component.labels" $comp | nindent 4 }}
+{{- $svcType := .Values.storage.minio.service.type | default "ClusterIP" }}
 spec:
-  type: ClusterIP
+  type: {{ $svcType }}
+  {{- if eq $svcType "ClusterIP" }}
   clusterIP: None
+  {{- end }}
   selector:
     {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
   ports:
@@ -17,8 +20,14 @@ spec:
       port: {{ .Values.storage.minio.service.apiPort }}
       targetPort: api
       protocol: TCP
+      {{- with .Values.storage.minio.service.apiNodePort }}
+      nodePort: {{ . }}
+      {{- end }}
     - name: console
       port: {{ .Values.storage.minio.service.consolePort }}
       targetPort: console
       protocol: TCP
+      {{- with .Values.storage.minio.service.consoleNodePort }}
+      nodePort: {{ . }}
+      {{- end }}
 {{- end }}
