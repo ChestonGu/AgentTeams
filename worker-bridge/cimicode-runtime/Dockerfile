@@ -42,11 +42,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates tini ripgrep python3 curl jq git procps \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL -o /usr/local/bin/mc \
-        https://dl.min.io/client/mc/release/linux-amd64/mc \
-    && chmod +x /usr/local/bin/mc \
     && npm install -g --registry="${NPM_REGISTRY}" "opencode-ai@${OPENCODE_VERSION}" \
     && npm cache clean --force
+
+# mc（MinIO 客户端，taskflow / agentteams-sync 的同步通道）：vendored 二进制
+# 直供，不走构建期下载——dl.min.io 的 latest 式路径已下线（410），且真实
+# 内网构建无外网。版本 RELEASE.2025-08-13T08-35-41Z（linux-amd64）。
+COPY worker-bridge/cimicode-runtime/bin/mc /usr/local/bin/mc
+RUN chmod +x /usr/local/bin/mc
 
 # ── 1. 运行时组件（helper + opencode 配置 + bash 工具 + entrypoint）──────
 COPY worker-bridge/cimicode-runtime/sandbox_helper.py /opt/agentteams/sandbox_helper.py
