@@ -168,12 +168,17 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 	// ConsecutiveFailures), so the informer re-enqueues the Human immediately;
 	// without this guard the exponential backoff schedule would never apply
 	// and a failing Human would hammer the queue out of order. Passes that
-	// arrive before the backoff window elapsed are dropped (no error, no
-	// requeue) — the original RequeueAfter wakeup re-triggers them later.
+	// arrive before the backoff window elapsed are re-scheduled for the
+	// remaining window — NOT dropped with a bare return: a bare return can
+	// lose the last wakeup when two rapid failHuman passes share one
+	// waiting-queue entry (second AddAfter is a no-op), stalling the retry
+	// chain until a manual retry annotation. See the equivalent Team guard
+	// for the full failure timeline.
 	if human.Status.Phase == "Failed" && !human.Status.MaxRetriesReached &&
 		human.Status.ConsecutiveFailures > 0 && human.Status.PhaseTransitionTime != nil {
-		if time.Since(human.Status.PhaseTransitionTime.Time) < failBackoffFor(human.Status.ConsecutiveFailures) {
-			return reconcile.Result{}, nil
+		if elapsed := time.Since(human.Status.PhaseTransitionTime.Time); elapsed < failBackoffFor(human.Status.ConsecutiveFailures) {
+			remaining := failBackoffFor(human.Status.ConsecutiveFailures) - elapsed
+			return reconcile.Result{RequeueAfter: remaining}, nil
 		}
 	}
 

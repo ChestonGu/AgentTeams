@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,114 @@ func TestReconcileTeamNormal_FailsEmptyTeamSpec(t *testing.T) {
 	}
 }
 
+// Regression (observed on 105, 2026-09-14): a Team Failed by the worker
+// credentials race stayed Failed for minutes with no retry pass. Two rapid
+// failTeam passes (the second reads a stale informer object and bypasses the
+// guard) share one waiting-queue entry — the second AddAfter is a no-op — so
+// the single wakeup fires measured against the FIRST failure while the guard
+// compares against the SECOND's transition time, dropped the pass with a bare
+// return, and left the Team with no pending wakeup at all. The guard must
+// re-schedule the remaining window instead of trusting the earlier wakeup.
+func TestReconcileTeam_BackoffGuardReschedulesRemainingWindow(t *testing.T) {
+	now := metav1.Now()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "stalled-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "stalled-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:               "Failed",
+			ConsecutiveFailures: 1,
+			PhaseTransitionTime: &now,
+			Message:             "refresh team storage access for dev: credentials not found for dev",
+		},
+	}
+	rig := newTeamReconcileRig(t, team)
+
+	out, res, err := rig.reconcile("stalled-team")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want in (0, %v] — the wakeup chain must be re-armed", res.RequeueAfter, reconcileRetryDelay)
+	}
+	if out.Status.Phase != "Failed" || out.Status.ConsecutiveFailures != 1 {
+		t.Fatalf("guard must short-circuit before a full pass: phase=%q consecutiveFailures=%d",
+			out.Status.Phase, out.Status.ConsecutiveFailures)
+	}
+	if len(rig.provisioner.Calls.ProvisionTeamRooms) != 0 {
+		t.Fatalf("ProvisionTeamRooms calls=%d, want 0 (guard short-circuit)",
+			len(rig.provisioner.Calls.ProvisionTeamRooms))
+	}
+}
+
+// Once the backoff window HAS elapsed, the guard must let the full pass run
+// (here it resolves a missing member Worker and lands in Degraded).
+func TestReconcileTeam_BackoffGuardElapsedRunsFullPass(t *testing.T) {
+	stale := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "backoff-elapsed-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "backoff-elapsed-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "missing-dev"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:               "Failed",
+			ConsecutiveFailures: 1,
+			PhaseTransitionTime: &stale,
+		},
+	}
+	rig := newTeamReconcileRig(t, team)
+
+	out, _, err := rig.reconcile("backoff-elapsed-team")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if out.Status.Phase != "Degraded" {
+		t.Fatalf("phase=%q, want Degraded — the guard must let the full pass run after the window elapsed", out.Status.Phase)
+	}
+	if !strings.Contains(out.Status.Message, `Worker "missing-dev" not found`) {
+		t.Fatalf("message=%q, want missing-worker degraded message", out.Status.Message)
+	}
+}
+
+// A retry-capped Team must NOT requeue on its own — retries are bounded by
+// design and only re-armed via the agentteams.io/retry annotation.
+func TestReconcileTeam_MaxRetriesReachedStopsWithoutAnnotation(t *testing.T) {
+	now := metav1.Now()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "capped-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "capped-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase:               "Failed",
+			ConsecutiveFailures: maxTeamRetries + 1,
+			MaxRetriesReached:   true,
+			PhaseTransitionTime: &now,
+		},
+	}
+	rig := newTeamReconcileRig(t, team)
+
+	_, res, err := rig.reconcile("capped-team")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter=%v, want 0 — a retry-capped Team must not self-requeue", res.RequeueAfter)
+	}
+}
 func runtimeConfigCallFor(calls []service.MemberRuntimeConfigDeployRequest, runtimeName string) (service.MemberRuntimeConfigDeployRequest, bool) {
 	for _, call := range calls {
 		if call.RuntimeName == runtimeName {

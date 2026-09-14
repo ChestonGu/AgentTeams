@@ -211,12 +211,24 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	// ConsecutiveFailures), so the informer re-enqueues the Team immediately;
 	// without this guard the exponential backoff schedule would never apply
 	// and a Failed Team would hammer the queue out of order. Passes that
-	// arrive before the backoff window elapsed are dropped (no error, no
-	// requeue) — the original RequeueAfter wakeup re-triggers them later.
+	// arrive before the backoff window elapsed are re-scheduled for the
+	// remaining window — NOT dropped with a bare return. A bare return
+	// trusted the RequeueAfter that failTeam already scheduled, but that
+	// wakeup can be lost: two rapid failTeam passes (the second often reads
+	// a stale informer object and bypasses this guard entirely) share one
+	// waiting-queue entry — the second AddAfter is a no-op — so the single
+	// wakeup fires measured against the FIRST failure while this guard
+	// compares against the SECOND's transition time, drops it, and leaves
+	// the Team with no pending wakeup at all (observed on 105: a Team hit
+	// by the credentials race stayed Failed for minutes until a manual
+	// agentteams.io/retry annotation). Re-scheduling here keeps the chain
+	// alive; the delaying queue's per-item entry dedupe bounds it to one
+	// outstanding wakeup.
 	if team.Status.Phase == "Failed" && !team.Status.MaxRetriesReached &&
 		team.Status.ConsecutiveFailures > 0 && team.Status.PhaseTransitionTime != nil {
-		if time.Since(team.Status.PhaseTransitionTime.Time) < failBackoffFor(team.Status.ConsecutiveFailures) {
-			return reconcile.Result{}, nil
+		if elapsed := time.Since(team.Status.PhaseTransitionTime.Time); elapsed < failBackoffFor(team.Status.ConsecutiveFailures) {
+			remaining := failBackoffFor(team.Status.ConsecutiveFailures) - elapsed
+			return reconcile.Result{RequeueAfter: remaining}, nil
 		}
 	}
 
