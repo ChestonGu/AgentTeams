@@ -39,6 +39,18 @@ if [ "${AGENTTEAMS_RUNTIME:-}" = "k8s" ]; then
     FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-k8s}"
     FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-k8s}"
     FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
+    # 静态 mc 别名契约（对齐 copaw-worker-entrypoint.sh）：oss-credentials.sh 的
+    # ensure_mc_credentials 在非 oss 模式是 no-op（注释明言"静态别名由容器
+    # entrypoint 配置"），FileSync 的 k8s 分支也不配别名直接宣称 ready——所以
+    # 别名必须在这里配好，否则每条 mc 命令（mirror/cp）在未配置的 alias 上
+    # 立刻报错，worker fail-fast 退出。
+    if [ -n "${AGENTTEAMS_FS_ENDPOINT:-}" ]; then
+        STORAGE_ALIAS="${AGENTTEAMS_STORAGE_ALIAS:-agentteams}"
+        mc alias set "${STORAGE_ALIAS}" "${FS_ENDPOINT}" "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
+        # MC_HOST_<alias>：mc.bin 原生读取的环境形态，也覆盖不读 mc 配置文件的调用方。
+        export "MC_HOST_${STORAGE_ALIAS}=${FS_ENDPOINT%%://*}://${FS_ACCESS_KEY}:${FS_SECRET_KEY}@${FS_ENDPOINT#*://}"
+        log "  mc static alias configured: ${STORAGE_ALIAS}"
+    fi
 else
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:?AGENTTEAMS_FS_ENDPOINT is required}"
     FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:?AGENTTEAMS_FS_ACCESS_KEY is required}"
