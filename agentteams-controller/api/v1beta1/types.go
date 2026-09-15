@@ -178,7 +178,7 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | worker-bridge (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
@@ -259,6 +259,36 @@ type WorkerSpec struct {
 	// Mounts is reserved for runtimes that provide custom dynamic mounts. It is
 	// not supported by the open-source pod backend.
 	Mounts []WorkerMountSpec `json:"mounts,omitempty"`
+
+	// ── worker-bridge runtime binding ─────────────────────────────────────
+	// These fields only take effect when Runtime == "worker-bridge". The
+	// controller projects them into the managed runtime.yaml top-level
+	// "bridge" section (agents/<name>/runtime/runtime.yaml), which the bridge
+	// pod consumes as its sole binding input; they are excluded from the
+	// spec hashes so binding updates never trigger a pod rebuild.
+
+	// AdapterMode selects the bridge adapter shape: "cimicode-stateless"
+	// (bridge calls an external cimicode platform directly) or
+	// "cimicode-pod" (operator provisions a cimicode runtime pod and points
+	// the bridge at it). Empty defers to the bridge's own resolution order
+	// (BRIDGE_RUNTIME_* env, then the projected bridge section).
+	AdapterMode string `json:"adapterMode,omitempty"`
+
+	// CimicodeGatewayUrl is the external cimicode gateway base URL
+	// (cimicode-stateless binding). Projected as bridge.baseUrl.
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+
+	// SessionId is the external cimicode session binding. Projected as
+	// bridge.sessionId.
+	SessionId string `json:"sessionId,omitempty"`
+
+	// SandboxId is the external cimicode sandbox binding. Projected as
+	// bridge.sandboxId.
+	SandboxId string `json:"sandboxId,omitempty"`
+
+	// TemplateId is the external cimicode template binding. Projected as
+	// bridge.templateId.
+	TemplateId string `json:"templateId,omitempty"`
 }
 
 type WorkerVolumeSpec struct {

@@ -69,20 +69,42 @@ func NewSynapseMatrixOps(cfg Config, httpClient *http.Client) *SynapseMatrixOps 
 // a no-op.
 func (o *SynapseMatrixOps) CreateRoom(ctx context.Context, spec RoomSpec) (*RoomRef, error) {
 	req := roomSpecToRequest(spec)
+	creator := spec.ActorUserID
+	if creator == "" {
+		creator = o.UserID(o.config.AdminUser)
+	}
 	if len(req.PowerLevels) > 0 {
-		creator := spec.ActorUserID
-		if creator == "" {
-			creator = o.UserID(o.config.AdminUser)
-		}
 		if _, ok := req.PowerLevels[creator]; !ok {
 			req.PowerLevels[creator] = 100
 		}
 	}
+	// Synapse rejects createRoom with 403 M_FORBIDDEN "<creator> is already
+	// in the room" when the invite list contains the creating user — and it
+	// does so AFTER the room and alias already exist, so every other invite
+	// in the list is dropped and the caller sees a half-succeeded "failed"
+	// creation (first provisioning pass fails; only the alias-resolve retry
+	// recovers, 30s of backoff later). The creator is joined by virtue of
+	// creating the room; strip it from the invite list.
+	req.Invite = withoutUser(req.Invite, creator)
 	info, err := o.matrixClient.CreateRoom(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return &RoomRef{RoomID: info.RoomID, Created: info.Created}, nil
+}
+
+// withoutUser returns invite without userID's entry (order preserved).
+func withoutUser(invite []string, userID string) []string {
+	if len(invite) == 0 || userID == "" {
+		return invite
+	}
+	out := make([]string, 0, len(invite))
+	for _, u := range invite {
+		if u != userID {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // DissolveRoom implements MatrixOps.DissolveRoom for Synapse via the admin

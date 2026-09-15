@@ -22,6 +22,14 @@ type CreateWorkerRequest struct {
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
 
+	// worker-bridge runtime binding (projected to the runtime.yaml bridge
+	// section). Ignored for other runtimes.
+	AdapterMode        string `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId          string `json:"sessionId,omitempty"`
+	SandboxId          string `json:"sandboxId,omitempty"`
+	TemplateId         string `json:"templateId,omitempty"`
+
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
 	// reconciliation is skipped entirely (for remote/pip workers).
@@ -47,6 +55,15 @@ type UpdateWorkerRequest struct {
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
 
+	// worker-bridge runtime binding. Update semantics: non-empty values
+	// overwrite the CR fields; empty values leave them untouched (bindings
+	// can be re-pointed but not cleared through the update path).
+	AdapterMode        string `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId          string `json:"sessionId,omitempty"`
+	SandboxId          string `json:"sandboxId,omitempty"`
+	TemplateId         string `json:"templateId,omitempty"`
+
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
 	// reconciliation is skipped entirely (for remote/pip workers).
@@ -71,6 +88,11 @@ type WorkerResponse struct {
 	Skills           []string                   `json:"skills,omitempty"`
 	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
 	Package          string                     `json:"package,omitempty"`
+	AdapterMode      string                     `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string                  `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId        string                     `json:"sessionId,omitempty"`
+	SandboxId        string                     `json:"sandboxId,omitempty"`
+	TemplateId       string                     `json:"templateId,omitempty"`
 	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
 	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 	ContainerState   string                     `json:"containerState,omitempty"`
@@ -80,6 +102,13 @@ type WorkerResponse struct {
 	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
 	Team             string                     `json:"team,omitempty"`
 	Role             string                     `json:"role,omitempty"`
+	// RuntimeEnv exposes the runtime-wiring subset of spec.env (keys with the
+	// BRIDGE_RUNTIME_ prefix, e.g. adapter/base_url/helper_url written by the
+	// worker-bridge operator). A bridge pod created before that wiring
+	// landed polls GET /api/v1/workers/{self} and picks these up without a
+	// pod restart. Only the prefix-filtered subset is exposed — never the
+	// full spec.env, which may carry deployment secrets.
+	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
 }
 
 type ExposedPortInfo struct {

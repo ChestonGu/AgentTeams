@@ -365,6 +365,13 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    # worker-bridge (cimicode-bridge) image — deliberately empty by default:
+    # fill per environment (internal registry); worker-bridge Create fails
+    # fast unless spec.image or this env names an image, so an unset value
+    # never silently runs an openclaw worker image as a bridge pod.
+    workerBridge:
+      repository: ""          # e.g. <internal-registry>/agentteams/cimicode-bridge
+      tag: ""                 # defaults to global.imageTag when repository is set
   defaultRuntime: "openclaw"
   resources:
     requests:

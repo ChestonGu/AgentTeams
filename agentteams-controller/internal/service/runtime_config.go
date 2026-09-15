@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"sigs.k8s.io/yaml"
 )
 
@@ -25,6 +26,7 @@ type memberRuntimeConfigDocument struct {
 	Metadata          memberRuntimeConfigMetadata           `json:"metadata"`
 	Team              *memberRuntimeConfigTeam              `json:"team,omitempty"`
 	Member            memberRuntimeConfigMember             `json:"member"`
+	Bridge            *memberRuntimeConfigBridge            `json:"bridge,omitempty"`
 	Matrix            *memberRuntimeConfigMatrix            `json:"matrix,omitempty"`
 	Desired           memberRuntimeConfigDesired            `json:"desired"`
 	Storage           memberRuntimeConfigStorage            `json:"storage"`
@@ -64,6 +66,18 @@ type memberRuntimeConfigMember struct {
 
 type memberRuntimeConfigMatrix struct {
 	AccessToken string `json:"accessToken,omitempty"`
+}
+
+// memberRuntimeConfigBridge is the top-level "bridge" section projected for
+// runtime=worker-bridge workers — the sole binding channel between the
+// Worker CR and the bridge pod (consumed by the bridge's
+// runtime_bridge_section parsing; see bootstrap.WorkerBootstrapConfig).
+type memberRuntimeConfigBridge struct {
+	AdapterMode string `json:"adapterMode,omitempty"`
+	BaseURL     string `json:"baseUrl,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
+	SandboxID   string `json:"sandboxId,omitempty"`
+	TemplateID  string `json:"templateId,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -182,6 +196,33 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 // existing runtime.yaml. It is used for remote-managed local workers whose
 // WorkerReconciler owns sensitive runtime fields such as matrix tokens and
 // gateway keys.
+// RuntimeConfigReadyForBootstrap reports whether the deployed runtime.yaml
+// for runtimeName is fully populated for a bridge bootstrap — today that
+// means member.matrixUserId has landed (the controller writes the first
+// version before the matrix user is registered and rewrites it after).
+// The bridge pod must not be created before this is true: its bootstrap
+// feeds the agent.md generator, which fails loud on a missing member
+// identity and strands the first mention. Missing/unreadable/unparsable
+// objects all report not-ready (never an error — the caller requeues).
+func (d *Deployer) RuntimeConfigReadyForBootstrap(ctx context.Context, runtimeName string) bool {
+	if d.oss == nil {
+		return true // no storage configured: nothing to gate on
+	}
+	runtimeName = strings.TrimSpace(runtimeName)
+	if runtimeName == "" {
+		return false
+	}
+	payload, err := d.oss.GetObject(ctx, memberRuntimeConfigObjectKey(runtimeName))
+	if err != nil {
+		return false
+	}
+	var doc memberRuntimeConfigDocument
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		return false
+	}
+	return strings.TrimSpace(doc.Member.MatrixUserID) != ""
+}
+
 func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error {
 	if d.oss == nil {
 		return fmt.Errorf("OSS client is required to deploy runtime config")
@@ -331,6 +372,25 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		doc.Matrix = &memberRuntimeConfigMatrix{AccessToken: req.MatrixAccessToken}
 	}
 
+	// worker-bridge binding projection: only for the bridge runtime, and only
+	// when the CR carries at least one binding field. AdapterMode is always
+	// normalized to an explicit value (empty → cimicode-pod) so runtime.yaml
+	// never leaves the adapter shape implicit — bridge and operator both get a
+	// single deterministic dispatch key.
+	if runtime == backend.RuntimeWorkerBridge && workerBridgeHasBinding(req.Spec) {
+		adapterMode := strings.TrimSpace(req.Spec.AdapterMode)
+		if adapterMode == "" {
+			adapterMode = "cimicode-pod"
+		}
+		doc.Bridge = &memberRuntimeConfigBridge{
+			AdapterMode: adapterMode,
+			BaseURL:     strings.TrimSpace(req.Spec.CimicodeGatewayUrl),
+			SessionID:   strings.TrimSpace(req.Spec.SessionId),
+			SandboxID:   strings.TrimSpace(req.Spec.SandboxId),
+			TemplateID:  strings.TrimSpace(req.Spec.TemplateId),
+		}
+	}
+
 	applyRuntimeTeamContext(&doc, req)
 
 	return doc, nil
@@ -363,6 +423,18 @@ func runtimeSkillNames(spec v1beta1.WorkerSpec) []string {
 
 func isNativeConfigModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), nativeConfigModel)
+}
+
+// workerBridgeHasBinding reports whether the WorkerSpec carries any
+// worker-bridge binding field. When false, no bridge section is projected at
+// all — the bridge stays undetermined and waits for its own env-based
+// resolution (e.g. an operator-provisioned runtime pod).
+func workerBridgeHasBinding(spec v1beta1.WorkerSpec) bool {
+	return strings.TrimSpace(spec.AdapterMode) != "" ||
+		strings.TrimSpace(spec.CimicodeGatewayUrl) != "" ||
+		strings.TrimSpace(spec.SessionId) != "" ||
+		strings.TrimSpace(spec.SandboxId) != "" ||
+		strings.TrimSpace(spec.TemplateId) != ""
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {

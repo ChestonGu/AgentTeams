@@ -36,6 +36,14 @@ const (
 	RuntimeHermes    = "hermes"
 	RuntimeOpenHuman = "openhuman"
 	RuntimeQwenPaw   = "qwenpaw"
+	// RuntimeWorkerBridge workers are fronted by a controller-managed bridge
+	// pod that masquerades as the worker: same Matrix identity, same
+	// runtime.yaml projection, but the conversation loop lives in an external
+	// runtime the bridge calls over HTTP. The bridge picks its adapter from
+	// the runtime.yaml bridge section (cimicode-stateless: external platform
+	// binding) or the BRIDGE_RUNTIME_* env (cimicode-pod: operator-provisioned
+	// runtime pod).
+	RuntimeWorkerBridge = "worker-bridge"
 )
 
 const (
@@ -60,7 +68,17 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeWorkerBridge
+}
+
+// IsManagedRuntime reports whether the runtime consumes the
+// MemberRuntimeConfig projection (agents/<name>/runtime/runtime.yaml) as its
+// sole desired-state input, instead of the openclaw.json-style per-key
+// injections (coordination context, channel policy, leader assets, heartbeat).
+// QwenPaw and WorkerBridge both ride this path; WorkerBridge additionally
+// runs as a bridge pod rather than a self-contained worker image.
+func IsManagedRuntime(r string) bool {
+	return r == RuntimeQwenPaw || r == RuntimeWorkerBridge
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.

@@ -214,7 +214,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
+	configOwnedByTeam := inTeam && backend.IsManagedRuntime(backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime))
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -815,6 +815,9 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //	Model, DisplayName, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
 //	AccessEntries 鈥?permission-only (resolved by credential issuance)
 //	AgentIdentity, CredentialBindings 鈥?runtime credential config
+//	AdapterMode, CimicodeGatewayUrl, SessionId, SandboxId, TemplateId 鈥?
+//	  worker-bridge bindings: projected to the runtime.yaml bridge section
+//	  and picked up by the running bridge via self-heal, never a pod input
 //	State, IdleTimeout 鈥?lifecycle/policy
 //	ServiceEnabled, Expose 鈥?service-only (consumed by ReconcileMemberService)
 //
@@ -832,6 +835,7 @@ func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy from hash
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
+	zeroWorkerBridgeBindingFields(&spec) // projected to runtime.yaml bridge section, not pod input
 	layoutVersion := workerDepsLayoutHashVersion(spec)
 	if layoutVersion == "" {
 		buf, err := json.Marshal(spec)
@@ -886,6 +890,7 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
 	spec.Resources = nil
+	zeroWorkerBridgeBindingFields(&spec) // projected to runtime.yaml bridge section, not pod input
 	payload := struct {
 		Spec             v1beta1.WorkerSpec                 `json:"spec"`
 		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
@@ -909,6 +914,19 @@ func workerSpecWithEffectiveBackendRuntimeForHash(spec v1beta1.WorkerSpec, backe
 		spec.BackendRuntime = &backendRuntime
 	}
 	return spec
+}
+
+// zeroWorkerBridgeBindingFields clears the worker-bridge binding fields from
+// a spec before hashing: they are projected into the runtime.yaml bridge
+// section (agents/<name>/runtime/runtime.yaml) and picked up by the running
+// bridge pod through its self-heal polling — changing a binding must rebind
+// the bridge, never rebuild the pod.
+func zeroWorkerBridgeBindingFields(spec *v1beta1.WorkerSpec) {
+	spec.AdapterMode = ""
+	spec.CimicodeGatewayUrl = ""
+	spec.SessionId = ""
+	spec.SandboxId = ""
+	spec.TemplateId = ""
 }
 
 func hashQwenPawPodSpec(spec v1beta1.WorkerSpec) string {

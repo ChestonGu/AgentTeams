@@ -189,11 +189,17 @@ func (i *Initializer) waitForMatrix(ctx context.Context) error {
 }
 
 func (i *Initializer) registerAdmin(ctx context.Context) error {
-	_, _, err := i.MatrixOps.ProvisionUser(ctx, matrix.UserSpec{
-		Username: i.Config.AdminUser,
-		Password: i.Config.AdminPassword,
+	// Same retry envelope as the sibling wait-for steps: on a fresh install
+	// the homeserver can accept the user-create call while its login path is
+	// still warming up (observed on k3s: create PUT succeeds, login 403s).
+	// ProvisionUser is idempotent (register-or-login), so retrying is safe.
+	return retry(ctx, 3*time.Second, 5*time.Minute, func() error {
+		_, _, err := i.MatrixOps.ProvisionUser(ctx, matrix.UserSpec{
+			Username: i.Config.AdminUser,
+			Password: i.Config.AdminPassword,
+		})
+		return err
 	})
-	return err
 }
 
 // registerAppService registers the AgentTeams controller as a Matrix

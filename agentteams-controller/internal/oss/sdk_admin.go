@@ -85,7 +85,7 @@ func (c *SDKAdminClient) EnsurePolicy(ctx context.Context, req PolicyRequest) er
 	if _, err := c.client.AttachPolicy(ctx, madmin.PolicyAssociationReq{
 		Policies: []string{policyName},
 		User:     req.WorkerName,
-	}); err != nil {
+	}); err != nil && !isPolicyNoNetEffect(err) {
 		return fmt.Errorf("attach policy %s to user %s: %w", policyName, req.WorkerName, err)
 	}
 	return nil
@@ -136,4 +136,17 @@ func isAdminNotExists(err error) bool {
 		}
 	}
 	return strings.Contains(err.Error(), "does not exist")
+}
+
+// isPolicyNoNetEffect reports whether err is MinIO's idempotent-attach
+// response: re-attaching a policy that is already in effect on the user.
+// MinIO surfaces this as a regular error ("The specified policy change is
+// already in effect. (Specified policy update has no net effect)") instead
+// of a success, so reconciles must treat it as the desired state.
+func isPolicyNoNetEffect(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no net effect") || strings.Contains(msg, "already in effect")
 }

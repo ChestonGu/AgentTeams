@@ -826,3 +826,35 @@ func sortedCopy(in []string) []string {
 // Silence unused import lint when the service package is referenced only
 // via the mock type alias in some future subtest.
 var _ = service.HumanCredentials{}
+
+// Regression (same mechanism as the Team guard, see
+// TestReconcileTeam_BackoffGuardReschedulesRemainingWindow): a Failed Human
+// inside its backoff window must re-schedule the remaining window instead of
+// returning bare — two rapid failHuman passes share one waiting-queue entry,
+// and a bare-return drop can strand the retry chain with no pending wakeup.
+func TestHumanReconciler_BackoffGuardReschedulesRemainingWindow(t *testing.T) {
+	now := metav1.Now()
+	human := newHuman("stalled-alice", v1beta1.HumanSpec{
+		DisplayName:     "Alice",
+		PermissionLevel: 2,
+	})
+	human.Status.Phase = "Failed"
+	human.Status.ConsecutiveFailures = 1
+	human.Status.PhaseTransitionTime = &now
+	human.Status.Message = "ensure human user: boom"
+
+	rig := newHumanRig(t, human)
+
+	res, err := rig.r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "stalled-alice", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want in (0, %v] — the wakeup chain must be re-armed", res.RequeueAfter, reconcileRetryDelay)
+	}
+	if len(rig.prov.Calls.EnsureHumanUser) != 0 {
+		t.Fatalf("EnsureHumanUser calls=%d, want 0 (guard short-circuit)", len(rig.prov.Calls.EnsureHumanUser))
+	}
+}

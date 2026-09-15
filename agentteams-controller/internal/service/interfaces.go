@@ -56,6 +56,10 @@ type WorkerProvisioner interface {
 	// JoinRoomAs accepts a room invite using the invited user's token.
 	// Idempotent: returns nil when the user has already joined.
 	JoinRoomAs(ctx context.Context, roomID, userToken string) error
+	// MissingTeamRoomMembers returns the team-room automation members (leader
+	// + workers, by Matrix ID) not currently joined. Read-only drift probe
+	// for the Team reconcile fast path.
+	MissingTeamRoomMembers(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error)
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
@@ -76,6 +80,9 @@ type WorkerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	WriteInlineConfigs(name string, spec v1beta1.WorkerSpec) error
 	DeployMemberRuntimeConfig(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
+	// RuntimeConfigReadyForBootstrap gates container creation for managed
+	// runtimes on the fully-populated runtime.yaml (member.matrixUserId).
+	RuntimeConfigReadyForBootstrap(ctx context.Context, runtimeName string) bool
 	MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
 	DeployWorkerConfig(ctx context.Context, req WorkerDeployRequest) error
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error

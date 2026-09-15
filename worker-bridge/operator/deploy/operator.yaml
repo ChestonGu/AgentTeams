@@ -1,0 +1,106 @@
+# worker-bridge-operator: per-worker cimicode runtime pod automation.
+# See worker_bridge_operator.py for the dispatch model: spec.adapterMode
+# cimicode-stateless → zero provisioning (binding via runtime.yaml bridge
+# section); cimicode-pod/empty → single cimicode Deployment + Service (+ FS
+# credentials Secret) plus the Worker CR spec.env wiring (BRIDGE_RUNTIME_*
+# for the bridge self-heal).
+# Namespace names below are placeholders — set per environment at apply time.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker-bridge-operator
+  namespace: REPLACE_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-bridge-operator
+  namespace: REPLACE_NS
+rules:
+  - apiGroups: ["agentteams.io"]
+    resources: ["workers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # team_for: resolve AGENTTEAMS_TEAM via Team CR workerMembers lookup.
+  - apiGroups: ["agentteams.io"]
+    resources: ["teams"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # bridge_pod_env: read the controller-created bridge pod env (MinIO creds).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-bridge-operator
+  namespace: REPLACE_NS
+subjects:
+  - kind: ServiceAccount
+    name: worker-bridge-operator
+    namespace: REPLACE_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-bridge-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-bridge-operator
+  namespace: REPLACE_NS
+  labels:
+    app: worker-bridge-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-bridge-operator
+  template:
+    metadata:
+      labels:
+        app: worker-bridge-operator
+    spec:
+      serviceAccountName: worker-bridge-operator
+      containers:
+        - name: operator
+          image: REPLACE_IMAGE  # e.g. <registry>/worker-bridge-operator:<tag>
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WATCH_NAMESPACE
+              value: REPLACE_NS
+            # Required, no default: internal cimicode runtime image
+            # (worker-bridge/cimicode-runtime merged image).
+            - name: CIMICODE_IMAGE
+              value: REPLACE_CIMICODE_IMAGE
+            # Port pair pinned by the cimicode-runtime image contract.
+            - name: CIMICODE_PORT
+              value: "4096"
+            - name: CIMICODE_HELPER_PORT
+              value: "4097"
+            # Readiness probe (contract surface); empty disables.
+            - name: CIMICODE_PROBE_PATH
+              value: "/session"
+            # Collaboration storage for the pod's taskflow / mc sync env.
+            # Missing endpoint → degraded plain-chat pod (warning logged).
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: "http://REPLACE_MINIO_SVC:9000"
+            - name: AGENTTEAMS_FS_BUCKET
+              value: "agentteams-storage"
+            # Fallback only (Worker CR status.matrixUserID is authoritative).
+            - name: MATRIX_SERVER_NAME
+              value: ""
+            - name: RECONCILE_INTERVAL
+              value: "10"
+            # Node hostname to pin provisioned cimicode Deployments to.
+            # Empty → scheduler decides.
+            - name: PROVISION_NODE_SELECTOR
+              value: ""
