@@ -1,0 +1,648 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-08-03T00:00:00.000Z" agent="drawio-chart" version="24.0.0">
+  <diagram name="worker-reconcile-flow" id="worker-reconcile-flow">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="1260" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="w-title" value="WorkerReconciler 调和主流程（独立 Worker）" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="180" y="10" width="600" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="w0" value="Reconcile(Worker) 事件触发" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="60" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="w1" value="获取 Worker CR" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="124" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w2" value="DeletionTimestamp?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="210" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="w3" value="含 finalizer?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="330" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="w4" value="构建 MemberDeps / effectiveSpec / MemberContext" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="440" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w5" value="teamRoleForWorker 查 Team 归属（standalone/leader/worker）" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="516" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w6" value="isEdgeWorker?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="602" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="w7" value="ValidateMemberDeployment" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="712" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w8" value="ReconcileMemberInfra 供给 Matrix/网关/MinIO/房间" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="788" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w9" value="EnsureModelProviderAuth + EnsureMemberServiceAccount" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="864" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w10" value="ReconcileMemberConfig 写 OSS 配置（openclaw.json）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="940" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w11" value="ReconcileMemberContainer 容器收敛" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1016" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w12" value="ReconcileMemberService + ReconcileMemberExpose" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1092" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w13" value="reconcileManagerAccess 授权/撤销 Manager 群聊权限" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1168" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w14" value="写回 Worker.Status + RequeueAfter" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1244" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="wdel1" value="reconcileDelete 清理基础设施/房间/OSS" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="210" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="wdel2" value="移除 finalizer" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="296" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="wadd" value="添加 finalizer" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="330" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="wedge1" value="边缘轻量分支：Infra → ModelAuth → Config" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="602" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="w-end" value="完成" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="382" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="we1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w0" target="w1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w1" target="w2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we3" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#DC2626;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w2" target="wdel1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we4" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w2" target="w3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we5" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w3" target="w4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we6" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w3" target="wadd" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="wadd" target="w4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="wdel1" target="wdel2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="wdel2" target="w-end" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w4" target="w5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w5" target="w6" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we12" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#0891B2;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w6" target="wedge1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we13" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="w6" target="w7" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w7" target="w8" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w8" target="w9" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w9" target="w10" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w10" target="w11" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w11" target="w12" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w12" target="w13" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="we20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="w13" target="w14" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="team-reconcile-flow" id="team-reconcile-flow">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="1120" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="t-title" value="TeamReconciler 调和主流程（Team 引用式编排）" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="150" y="10" width="700" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="t0" value="Reconcile(Team) 事件触发" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="60" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="t1" value="获取 Team CR" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="124" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t2" value="DeletionTimestamp?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="200" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="t3" value="含 finalizer?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="310" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="t4" value="reconcileTeamNormal（Phase=Pending）" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="410" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t5" value="Step1 validateWorkerMembers 校验角色/重复" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="486" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t6" value="Step2 resolveTeamMembers 加载引用的 Worker CR" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="562" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t7" value="Step3 resolveTeamAdminActor + 身份回填 MatrixID" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="638" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t8" value="Step4 团队基础设施：房间/存储/注解/刷新凭据" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="714" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t9" value="Step5 协作上下文+心跳+runtime configs" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="790" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t10" value="Step6 通道授权：teamChannelPolicy → InjectChannelPolicy" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="866" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t11" value="Step7 状态聚合：cleanupStale + aggregate(Active)" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="942" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t12" value="写回 Team.Status + RequeueAfter(5min)" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1018" width="240" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="tdel1" value="handleDeleteTeam 回退所有成员（不销毁 Worker）" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="200" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="tdel2" value="移除 finalizer + 删团队房间别名" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="286" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t-end" value="完成" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="372" width="260" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="tadd" value="添加 finalizer" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="310" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="tfail" value="failTeam：Phase=Failed" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="486" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="tdeg" value="Phase=Degraded + Requeue(30s)" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="562" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="te1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t0" target="t1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t1" target="t2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te3" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#DC2626;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t2" target="tdel1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te4" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t2" target="t3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te5" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t3" target="t4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te6" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t3" target="tadd" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="tadd" target="t4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="tdel1" target="tdel2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="tdel2" target="t-end" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t4" target="t5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te11" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#DC2626;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t5" target="tfail" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t5" target="t6" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te13" value="有缺失" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#E99151;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="t6" target="tdeg" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t6" target="t7" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t7" target="t8" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t8" target="t9" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t9" target="t10" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t10" target="t11" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="te19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="t11" target="t12" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="member-phases-flow" id="member-phases-flow">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1150" pageHeight="900" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="m-title" value="共享成员阶段（member_reconcile.go）与 openclaw.json 写入点" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="750" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-in" value="输入结构（CR 无关）" style="rounded=1;dashed=1;strokeWidth=2;fillColor=none;strokeColor=#005D7B;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;verticalAlign=top;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="100" width="240" height="330" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-in1" value="MemberContext&#xa;Name/RuntimeName/Role&#xa;Spec/TeamName&#xa;SpecChanged/Owner" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="150" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-in2" value="MemberDeps&#xa;Provisioner/Deployer&#xa;Backend/EnvBuilder&#xa;DefaultRuntime" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="250" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-in3" value="MemberState&#xa;MatrixUserID/RoomID&#xa;ContainerState/ProvResult" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="350" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph1" value="① ReconcileMemberInfra&#xa;Matrix / 网关 / MinIO / 个人房间" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="100" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph2" value="② EnsureModelProviderAuth&#xa;授权网关 consumer 到模型提供方" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="190" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph3" value="③ EnsureMemberServiceAccount" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="280" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph4" value="④ ReconcileMemberConfig&#xa;写 OSS 配置（openclaw.json / runtime.yaml / AGENTS.md / skills）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="370" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph5" value="⑤ ReconcileMemberContainer&#xa;容器收敛（Running/Sleeping/Stopped）" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="460" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph6" value="⑥ ReconcileMemberService / ReconcileMemberExpose" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="550" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-ph7" value="⑦ ReconcileMemberDelete（仅删除路径）&#xa;离开房间 / 清 OSS / 删凭据 / 删容器" style="rounded=1;whiteSpace=wrap;fillColor=#DC2626;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="640" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-note" value="说明" style="rounded=1;dashed=1;strokeWidth=2;fillColor=none;strokeColor=#005D7B;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;verticalAlign=top;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="790" y="100" width="330" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-n1" value="★ openclaw.json 写入点&#xa;DeployWorkerConfig → GenerateOpenClawConfig&#xa;→ PutObject(agents/&lt;worker&gt;/openclaw.json)" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="810" y="150" width="290" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-n2" value="QwenPaw/CoPaw/Edge 走&#xa;DeployMemberRuntimeConfig&#xa;写 runtime/runtime.yaml（不是 openclaw.json）" style="rounded=1;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="810" y="250" width="290" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m-n3" value="WorkerReconciler 用全部阶段；&#xa;TeamReconciler 团队路径复用 Infra/凭据刷新，&#xa;不重建容器、不重写基础 openclaw.json" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="810" y="350" width="290" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="me1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-in1" target="m-ph1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-in2" target="m-ph1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-in3" target="m-ph1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph1" target="m-ph2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph2" target="m-ph3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph3" target="m-ph4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph4" target="m-ph5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph5" target="m-ph6" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="m-ph6" target="m-ph7" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me10" value="openclaw.json 唯一生成点" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#7C3AED;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="m-ph4" target="m-n1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="channel-policy-flow" id="channel-policy-flow">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="980" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="p-title" value="Matrix 通道策略（允许列表）计算与注入流程" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="300" y="10" width="600" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="p0" value="输入：Team CR + 成员 Worker CR&#xa;+ ManagerConfig + SystemAdminUser" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="70" width="300" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1" value="runtime = qwenpaw?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="110" y="170" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="pskip" value="跳过：QwenPaw 走 runtime.yaml&#xa;（deployTeamRuntimeConfigs），不注入 openclaw.json 策略" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="440" y="170" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2" value="成员角色 role = ?" style="rhombus;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="110" y="300" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3w" value="Worker 允许列表&#xa;group/dm = [leader, systemAdmin, coordinators…, peers?]&#xa;（PeerMentions=false 时不含 peers）" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="420" width="320" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3l" value="Leader 允许列表&#xa;group/dm = [manager, systemAdmin, coordinators…, 全部成员]" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="450" y="420" width="320" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="p4" value="mergeChannelPolicy&#xa;（团队级 ChannelPolicy + Worker 个体 ChannelPolicy）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="180" y="560" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p5" value="applyChannelAllowPolicy&#xa;（GroupAllow/DenyExtra、DmAllow/DenyExtra）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="180" y="650" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p6" value="uniqueTeamStrings 去重去空" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="240" y="740" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p7" value="Deployer.InjectChannelPolicy&#xa;原地写回 MinIO agents/&lt;worker&gt;/openclaw.json&#xa;（channels.matrix.groupAllowFrom + dm.allowFrom）" style="rounded=1;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="180" y="830" width="360" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="p8" value="Manager 侧同步：&#xa;UpdateManagerGroupAllowFrom(leader=true; worker=false)&#xa;+ ForceLeaveRoom(普通 Worker 个人房间移除 Manager)" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="830" width="360" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="p9" value="保护机制：preserveChannelMatrixAllowFrom&#xa;Worker 侧重生成 openclaw.json 时，从旧文件拷回团队列表，&#xa;不回退成独立 [manager, admin]" style="rounded=1;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="870" width="120" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p0" target="p1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe2" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="p1" target="pskip" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe3" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="p1" target="p2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe4" value="worker" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="p2" target="p3w" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe5" value="leader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="p2" target="p3l" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p3w" target="p4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p3l" target="p4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p4" target="p5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p5" target="p6" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p6" target="p7" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="p7" target="p8" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe12" value="保护" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="p7" target="p9" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="openclaw-allowlist-write-path" id="openclaw-allowlist-write-path">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="720" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="o-title" value="openclaw.json 允许列表的写入路径与保护" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="250" y="10" width="600" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="o-left" value="写入路径 A：WorkerReconciler（生成基础配置）" style="rounded=1;dashed=1;strokeWidth=2;fillColor=none;strokeColor=#005D7B;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;verticalAlign=top;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="100" width="420" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="oa1" value="ReconcileMemberConfig&#xa;→ Deployer.DeployWorkerConfig" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="oa2" value="GenerateOpenClawConfig&#xa;默认允许列表 [@manager, @admin]（独立语义）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="240" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="oa3" value="mergeUserPluginConfig&#xa;→ preserveChannelMatrixAllowFrom（保留已注入的团队列表）" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="330" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="o-right" value="写入路径 B：TeamReconciler（团队叠加）" style="rounded=1;dashed=1;strokeWidth=2;fillColor=none;strokeColor=#005D7B;fontColor=#2D3748;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;verticalAlign=top;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="420" width="420" height="230" as="geometry"/>
+        </mxCell>
+        <mxCell id="ob1" value="teamChannelPolicy 按角色计算（leader/worker）&#xa;mergeChannelPolicy + applyChannelAllowPolicy" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="470" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ob2" value="Deployer.InjectChannelPolicy&#xa;原地 patch groupAllowFrom / dm.allowFrom" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="560" width="360" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="o-obj" value="MinIO: agents/&lt;worker&gt;/openclaw.json&#xa;channels.matrix.groupAllowFrom&#xa;channels.matrix.dm.allowFrom" style="shape=cylinder3;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="620" y="240" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="o-note" value="保护闭环：两条路径共用同一对象&#xa;A 侧重生成时由 preserve 保留 B 注入的列表&#xa;B 由周期 reconcile + Worker status watch 触发重注" style="rounded=1;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="470" width="320" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="oa1" target="oa2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="oa2" target="oa3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe3" value="PutObject（路径 A 写入）" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#7C3AED;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="oa3" target="o-obj" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ob1" target="ob2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe5" value="原地改后写回（路径 B 注入）" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#0891B2;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="ob2" target="o-obj" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="oe6" value="保护" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;fontColor=#64748B;" edge="1" source="o-obj" target="o-note" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p6-ov" name="controller-overview">
+    <mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1150" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="ov-title" value="AgentTeams Controller 调和层全览（internal/controller）" style="text;html=0;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=20;fontStyle=1;fontColor=#2D3748;" vertex="1" parent="1">
+          <mxGeometry x="300" y="10" width="1000" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-src1" value="CR 事件：Worker / Team / Manager / Human" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="70" width="360" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-src2" value="Watch：Pod / Sandbox / SandboxClaim" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="70" width="340" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-src3" value="Worker status 变化 → 对应 Team 重调和" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="800" y="70" width="340" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-src4" value="定时 ticker：AutoSleep（默认 1m）" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="70" width="390" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-w-rec" value="WorkerReconciler&#xa;worker_controller.go" style="rounded=1;whiteSpace=wrap;fillColor=#0891B2;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="170" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-t-rec" value="TeamReconciler&#xa;team_controller.go" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="170" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-m-rec" value="ManagerReconciler&#xa;manager_controller.go" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="170" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-h-rec" value="HumanReconciler&#xa;human_controller.go" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="170" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-a-rec" value="AutoSleepController&#xa;auto_sleep_controller.go" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="170" width="240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-w-ph" value="reconcileNormal 主链：&#xa;Infra → ModelAuth → SA → Config →&#xa;Container → Service → Expose →&#xa;ManagerAccess&#xa;Edge 轻量分支；被 Team 引用时删除被阻塞" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="280" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-t-ph" value="reconcileTeam 7 步：&#xa;① validate ② resolve ③ adminActor&#xa;④ 基础设施 ⑤ 协作上下文+心跳&#xa;⑥ 通道策略★ ⑦ 状态聚合" style="rounded=1;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="280" width="280" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-m-ph" value="reconcileManagerNormal：&#xa;Infra → 授权 → SA → Config →&#xa;Container → Welcome&#xa;spec-hash 判定容器重建" style="rounded=1;whiteSpace=wrap;fillColor=#E99151;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="280" width="280" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-h-ph" value="reconcileHumanNormal：&#xa;resolveScope（身份固化）→&#xa;Infra（稳态零 Login）→&#xa;Rooms（invite/join/kick）" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="280" width="280" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-a-ph" value="定时扫描：&#xa;Running + idleTimeout 超时&#xa;→ spec.state=Sleeping&#xa;→ 触发 Worker 重调和" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="280" width="240" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-shared" value="共享成员层：member_reconcile.go（Worker / Team 共用）" style="rounded=1;dashed=1;strokeWidth=2;strokeColor=#005D7B;fillColor=none;fontColor=#005D7B;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;fontStyle=1;verticalAlign=top;html=1;spacingLeft=8;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="300" y="500" width="620" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-shared-list" value="ReconcileMemberInfra（Matrix/网关/MinIO/房间）&#xa;EnsureModelProviderAuth → EnsureMemberServiceAccount&#xa;ReconcileMemberConfig（openclaw.json | runtime.yaml）&#xa;ReconcileMemberContainer（Running/Sleeping/Stopped + 后端切换）&#xa;ReconcileMemberService → Expose → Delete" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="320" y="545" width="580" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-svc" value="member_reconcile_service.go&#xa;ReconcileMemberService：K8s ClusterIP Service" style="rounded=1;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="940" y="500" width="300" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-pat" value="通用模式（所有调和器共用）" style="rounded=1;dashed=1;strokeWidth=2;strokeColor=#005D7B;fillColor=none;fontColor=#005D7B;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=14;fontStyle=1;verticalAlign=top;html=1;spacingLeft=8;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="500" width="380" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-pat-list" value="finalizer：agentteams.io/cleanup 双态&#xa;scope + defer 统一 Status().Patch&#xa;（ObservedGeneration 防抖）&#xa;Metrics.Observe(kind, start, err)&#xa;分阶段幂等 + Requeue（5m / 30s / 5s）&#xa;mergeLabels 四层优先级 / mergeUserEnv&#xa;多实例隔离：agentteams.io/controller 标签" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="545" width="340" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-out1" value="MinIO：agents/&lt;worker&gt;/openclaw.json&#xa;channels.matrix.* 允许列表" style="shape=cylinder3;whiteSpace=wrap;fillColor=#7C3AED;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="760" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-out2" value="MinIO：agents/&lt;worker&gt;/runtime/runtime.yaml&#xa;（QwenPaw / CoPaw / Edge）" style="shape=cylinder3;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="760" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-out3" value="K8s：Pod / Sandbox /&#xa;Service / ServiceAccount" style="rounded=1;whiteSpace=wrap;fillColor=#4CA497;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="720" y="760" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-out4" value="CR Status：Phase / MatrixUserID /&#xa;RoomID / SpecHash / ObservedGeneration" style="rounded=1;whiteSpace=wrap;fillColor=#005D7B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="760" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-note1" value="Team 引用式编排：&#xa;删除 Team 只回退（detachTeamMember）不销毁 Worker；&#xa;Worker 仍被 Team 引用时，删除被阻塞" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="900" width="500" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-note2" value="Human 无容器/无网关 consumer：&#xa;只有 Matrix 身份 + 房间成员关系；&#xa;稳态零 Login（防孤儿设备膨胀）" style="rounded=1;whiteSpace=wrap;fillColor=#94A3B8;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="580" y="900" width="500" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-note3" value="openclaw.json 允许列表：&#xa;Team 注入 + preserveChannelMatrixAllowFrom 保护&#xa;→ 详见 channel-policy-flow / allowlist-write-path 页" style="rounded=1;whiteSpace=wrap;fillColor=#64748B;strokeColor=none;fontColor=#FFFFFF;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="900" width="440" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src1" target="ov-w-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src1" target="ov-t-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src1" target="ov-m-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src1" target="ov-h-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src2" target="ov-w-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src2" target="ov-m-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src3" target="ov-t-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-src4" target="ov-a-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-w-rec" target="ov-w-ph" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-t-rec" target="ov-t-ph" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-m-rec" target="ov-m-ph" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-h-rec" target="ov-h-ph" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-a-rec" target="ov-a-ph" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e14" value="全阶段复用" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-w-ph" target="ov-shared" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e15" value="复用 Infra/Config，不重建容器" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-t-ph" target="ov-shared" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e16" value="GenerateOpenClawConfig 写入" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#7C3AED;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-shared" target="ov-out1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e17" value="DeployMemberRuntimeConfig" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-shared" target="ov-out2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;" edge="1" source="ov-shared" target="ov-out3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e19" value="InjectChannelPolicy 叠加" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#7C3AED;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-t-ph" target="ov-out1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e20" value="Status().Patch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-w-ph" target="ov-out4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e21" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;" edge="1" source="ov-t-ph" target="ov-out4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;" edge="1" source="ov-m-ph" target="ov-out4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e23" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#64748B;" edge="1" source="ov-h-ph" target="ov-out4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e24" value="写 spec.state 触发重调和" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-a-ph" target="ov-w-rec" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ov-e25" value="调用" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;strokeWidth=2;strokeColor=#94A3B8;labelBackgroundColor=#F8FAFC;fontFamily=system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif;fontSize=13;fontColor=#64748B;" edge="1" source="ov-shared" target="ov-svc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

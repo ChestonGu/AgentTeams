@@ -93,7 +93,7 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 // passwords are an expected condition, not a reconcile failure).
 //
 // The lazy acquisition is critical: every Login call creates a new
-// device session on Tuwunel (the homeserver does not reuse sessions
+// device session on the homeserver (it does not reuse sessions
 // when the caller omits device_id), so issuing a Login on every
 // 5-minute requeue would accumulate ~288 orphan devices per human per
 // day. By gating the Login behind "we actually have a new room to

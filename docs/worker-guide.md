@@ -58,6 +58,37 @@ docker run -d --name agentteams-worker-alice \
 
 The Manager will provide all the specific values in its reply.
 
+## Installing Skills through the Manager
+
+For an existing Worker, use the Manager conversation as the supported installation entry point. Provide the Skill in either of these ways:
+
+1. Put the complete third-party skill under `$AGENTTEAMS_WORKSPACE_DIR/worker-skills/<skill-name>/` on the Manager host. The default is `~/agentteams-manager/worker-skills/<skill-name>/`; or
+2. Send the Manager a ZIP attachment containing one complete Skill root with `SKILL.md` and any optional `scripts/` or `references/`.
+
+Then ask the Manager to install that Skill for a named Worker and verify the assignment. For a ZIP attachment, explicitly ask the Manager to safely extract and validate it before distribution.
+
+For example:
+
+> Install the `alert-fusion` skill from `~/worker-skills/alert-fusion/` for Worker `amy-ai`. Verify that the files were uploaded and the Worker assignment was updated.
+
+Or, after sending the ZIP attachment:
+
+> Install the Skill from the ZIP attachment I just sent for Worker `amy-ai`. Safely extract and validate it, distribute the complete Skill, and verify the Worker assignment.
+
+The Manager uploads and verifies the files before updating `Worker.spec.skills`. This ordering prevents a Worker from receiving an assignment that points to missing content. QwenPaw Workers then synchronize the assigned skill into their native workspace and refresh and enable it automatically.
+
+You can check the assignment by asking the Manager:
+
+> List the skills currently assigned to Worker `amy-ai` and confirm whether `alert-fusion` is included.
+
+For operator-side inspection or troubleshooting, use the equivalent CLI query:
+
+```bash
+agt get workers amy-ai -o json | jq '.skills'
+```
+
+Copying files into Worker storage without updating the assignment is not a complete installation. The skill name must also appear in `Worker.spec.skills` so managed runtimes know which skills to load.
+
 ## Troubleshooting
 
 ### Worker won't start

@@ -25,6 +25,19 @@ type humanScope struct {
 	// their password in Element); rooms phase then degrades to admin-only
 	// invite without /join.
 	userToken string
+
+	// specDirty marks that a controller-generated value (a randomly
+	// generated spec.initialPassword) must be persisted back into spec. The
+	// Reconcile defer then issues a spec patch after the status patch and
+	// converges; the generation bump re-reconciles once without
+	// re-provisioning.
+	specDirty bool
+
+	// specInitialPassword is the generated value to write into
+	// spec.initialPassword. Held separately from h.Spec so the defer can
+	// restore it onto the object after the status patch response (which
+	// reflects the stored spec without the write-back) overwrites it.
+	specInitialPassword string
 }
 
 // computeHumanPhase derives the observable Phase from reconcile outcome.

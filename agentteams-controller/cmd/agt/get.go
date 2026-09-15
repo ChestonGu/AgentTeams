@@ -70,11 +70,12 @@ func getWorkersCmd() *cobra.Command {
 				fmt.Println("No workers found.")
 				return nil
 			}
-			headers := []string{"NAME", "PHASE", "MODEL", "TEAM", "RUNTIME"}
+			headers := []string{"NAME", "DISPLAY-NAME", "PHASE", "MODEL", "TEAM", "RUNTIME"}
 			var rows [][]string
 			for _, w := range resp.Workers {
 				rows = append(rows, []string{
 					w.Name,
+					or(w.DisplayName, "-"),
 					or(w.Phase, "Pending"),
 					w.Model,
 					or(w.Team, "-"),
@@ -135,15 +136,16 @@ func getTeamsCmd() *cobra.Command {
 				fmt.Println("No teams found.")
 				return nil
 			}
-			headers := []string{"NAME", "PHASE", "LEADER", "WORKERS", "READY"}
+			headers := []string{"NAME", "DISPLAY-NAME", "PHASE", "LEADER", "WORKERS", "READY"}
 			var rows [][]string
 			for _, t := range resp.Teams {
 				ready := fmt.Sprintf("%d/%d", t.ReadyWorkers, t.TotalWorkers)
 				rows = append(rows, []string{
 					t.Name,
+					or(t.DisplayName, "-"),
 					or(t.Phase, "Pending"),
 					t.LeaderName,
-					strings.Join(t.WorkerNames, ","),
+					formatWorkerList(t.WorkerNames, t.WorkerMembers, t.WorkerMemberDetails),
 					ready,
 				})
 			}
@@ -288,6 +290,7 @@ func getManagersCmd() *cobra.Command {
 
 type workerResp struct {
 	Name             string                   `json:"name"`
+	DisplayName      string                   `json:"displayName,omitempty"`
 	WorkerName       string                   `json:"workerName,omitempty"`
 	Phase            string                   `json:"phase"`
 	ContainerManaged bool                     `json:"containerManaged"`
@@ -313,6 +316,7 @@ type workerListResp struct {
 
 type teamResp struct {
 	Name              string              `json:"name"`
+	DisplayName       string              `json:"displayName,omitempty"`
 	TeamName          string              `json:"teamName,omitempty"`
 	Phase             string              `json:"phase"`
 	Description       string              `json:"description,omitempty"`
@@ -329,6 +333,12 @@ type teamResp struct {
 	Message           string              `json:"message,omitempty"`
 	WorkerNames       []string            `json:"workerNames,omitempty"`
 	WorkerMembers     []map[string]string `json:"workerMembers"`
+	WorkerMemberDetails []struct {
+		Name        string `json:"name"`
+		Role        string `json:"role,omitempty"`
+		DisplayName string `json:"displayName,omitempty"`
+		MatrixUserID string `json:"matrixUserID,omitempty"`
+	} `json:"workerMemberDetails,omitempty"`
 }
 
 type teamAdminResp struct {
@@ -395,6 +405,7 @@ type managerListResp struct {
 func workerDetail(w workerResp) []KeyValue {
 	return []KeyValue{
 		{"Name", w.Name},
+		{"DisplayName", w.DisplayName},
 		{"Phase", or(w.Phase, "Pending")},
 		{"Model", w.Model},
 		{"Runtime", or(w.Runtime, "openclaw")},
@@ -411,6 +422,7 @@ func workerDetail(w workerResp) []KeyValue {
 func teamDetail(t teamResp) []KeyValue {
 	return []KeyValue{
 		{"Name", t.Name},
+		{"DisplayName", t.DisplayName},
 		{"TeamName", t.TeamName},
 		{"Phase", or(t.Phase, "Pending")},
 		{"Description", t.Description},
@@ -418,12 +430,33 @@ func teamDetail(t teamResp) []KeyValue {
 		{"LeaderHeartbeat", teamHeartbeatText(t.LeaderHeartbeat)},
 		{"WorkerIdleTimeout", t.WorkerIdleTimeout},
 		{"LeaderReady", strconv.FormatBool(t.LeaderReady)},
-		{"Workers", strings.Join(t.WorkerNames, ", ")},
+		{"Workers", formatWorkerList(t.WorkerNames, t.WorkerMembers, t.WorkerMemberDetails)},
 		{"ReadyWorkers", fmt.Sprintf("%d/%d", t.ReadyWorkers, t.TotalWorkers)},
 		{"TeamRoomID", t.TeamRoomID},
 		{"LeaderDMRoomID", t.LeaderDMRoomID},
 		{"Message", t.Message},
 	}
+}
+
+func formatWorkerList(names []string, refs []map[string]string, details []struct{
+	Name string `json:"name"`
+	Role string `json:"role,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+}) string {
+	// Prefer details when available.
+	if len(details) > 0 {
+		var parts []string
+		for _, d := range details {
+			if d.DisplayName != "" && d.DisplayName != d.Name {
+				parts = append(parts, fmt.Sprintf("%s(@%s)", d.DisplayName, d.Name))
+			} else {
+				parts = append(parts, d.Name)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return strings.Join(names, ", ")
 }
 
 func teamHeartbeatText(hb *teamHeartbeatResp) string {

@@ -57,6 +57,12 @@ type Config struct {
 	GatewayProvider string // "higress" | "ai-gateway"
 	StorageProvider string // "minio"   | "oss"
 
+	// StorageDriver selects the object-storage client implementation:
+	// "sdk" (default, minio-go SDK with connection pooling + bounded retries)
+	// or "mc" (legacy per-call mc CLI subprocess). Sourced from
+	// AGENTTEAMS_STORAGE_DRIVER.
+	StorageDriver string
+
 	// Higress (self-hosted gateway)
 	HigressBaseURL       string
 	HigressCookieFile    string
@@ -146,6 +152,7 @@ type Config struct {
 	MatrixAdminUser         string
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
+	MatrixProvider          string // "tuwunel" (default) or "synapse" — selects the matrix.Client implementation
 
 	// Matrix AppService mode
 	MatrixAppServiceEnabled            bool
@@ -169,8 +176,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
-	ModelVision    *bool // nil = use model default; overrides model-level vision capability
-	ModelReasoning *bool // nil = use model default; overrides model-level reasoning capability
+	ModelVision        *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -180,6 +187,34 @@ type Config struct {
 
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
+
+	// Team reconciler tuning knobs. These bound the blast radius of a slow or
+	// failing Team so it cannot starve the rest of the workqueue (a single
+	// hung external call with MaxConcurrentReconciles=1 previously blocked
+	// every Team, including newly created ones, for the lifetime of the hang).
+	TeamMaxConcurrentReconciles int // AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES; 1 = serial
+	// TeamReconcileTimeoutSeconds bounds a single reconcile pass when > 0
+	// (default 0 = disabled, preserving legacy behavior). A hung external
+	// dependency (OSS upload, Matrix HTTP, credential refresh) would otherwise
+	// hold the worker slot until it returns.
+	TeamReconcileTimeoutSeconds int // AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
+	// TeamReconcileIntervalSeconds is the periodic requeue for a fully
+	// converged Active Team whose spec has not changed since the last
+	// successful pass. 0 = default 300 (5min). Positive jitter (0-10% of the
+	// interval) is added on every wakeup so concurrent Teams do not requeue
+	// in lockstep.
+	TeamReconcileIntervalSeconds int // AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS; 0 = default 300
+	// TeamActiveNoRequeue stops the periodic requeue for fully converged
+	// Active Teams whose spec is unchanged; they reconcile only on events
+	// (pod phase changes, spec edits) instead of on the periodic timer.
+	TeamActiveNoRequeue bool // AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE; true = no periodic requeue
+
+	// Worker reconciler tuning. The Worker controller runs the full
+	// per-member provisioning chain (Matrix account/room, OSS config push,
+	// container create) for every Worker CR, so with
+	// MaxConcurrentReconciles=1 a single hung Worker starves every other
+	// Worker — and every Team, whose Active gate waits on Worker readiness.
+	WorkerMaxConcurrentReconciles int // AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES; 1 = serial
 
 	// Locale used to render the first-boot Manager onboarding prompt
 	// (welcome message). Sourced from the install-time AGENTTEAMS_LANGUAGE
@@ -210,6 +245,9 @@ type WorkerEnvDefaults struct {
 	FSEndpoint           string
 	FSBucket             string
 	StoragePrefix        string
+	FSAccessKey          string // shared static S3 access key (external-OSS static-credential mode); empty in embedded/per-worker mode
+	FSSecretKey          string // shared static S3 secret key (external-OSS static-credential mode); empty in embedded/per-worker mode
+	StorageProvider      string
 	ControllerURL        string
 	AIGatewayURL         string
 	MatrixURL            string
@@ -299,6 +337,7 @@ func LoadConfig() *Config {
 
 		GatewayProvider: envOrDefault("AGENTTEAMS_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
+		StorageDriver:   envOrDefault("AGENTTEAMS_STORAGE_DRIVER", "sdk"),
 
 		CredentialProviderURL: os.Getenv("AGENTTEAMS_CREDENTIAL_PROVIDER_URL"),
 
@@ -370,6 +409,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("AGENTTEAMS_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("AGENTTEAMS_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "1" || os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "true",
+		MatrixProvider:          strings.ToLower(envOrDefault("AGENTTEAMS_MATRIX_PROVIDER", "tuwunel")),
 
 		MatrixAppServiceEnabled:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "false",
 		MatrixAppServiceID:                 envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_ID", "agentteams-controller"),
@@ -394,6 +434,12 @@ func LoadConfig() *Config {
 		AIStreamIdleTimeoutSeconds: envOrDefaultInt("AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
 		ElementWebURL:              os.Getenv("AGENTTEAMS_ELEMENT_WEB_URL"),
 
+		TeamMaxConcurrentReconciles:   envOrDefaultInt("AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES", 1),
+		TeamReconcileTimeoutSeconds:   envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS", 0),
+		TeamReconcileIntervalSeconds:  envOrDefaultInt("AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS", 300),
+		TeamActiveNoRequeue:           envBool("AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE"),
+		WorkerMaxConcurrentReconciles: envOrDefaultInt("AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES", 1),
+
 		UserLanguage: envOrDefault("AGENTTEAMS_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),
 
@@ -410,6 +456,9 @@ func LoadConfig() *Config {
 			FSEndpoint:           os.Getenv("AGENTTEAMS_FS_ENDPOINT"),
 			FSBucket:             envOrDefault("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
 			StoragePrefix:        envOrDefault("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage"),
+			FSAccessKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_ACCESS_KEY"), os.Getenv("AGENTTEAMS_MINIO_USER")),
+			FSSecretKey:          firstNonEmpty(os.Getenv("AGENTTEAMS_FS_SECRET_KEY"), os.Getenv("AGENTTEAMS_MINIO_PASSWORD")),
+			StorageProvider:      envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),
 			ControllerURL:        os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
@@ -462,6 +511,16 @@ func LoadConfig() *Config {
 		if cfg.MatrixAppServiceHSToken == "" {
 			panic("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
+	}
+
+	// Validate Matrix provider selection.
+	switch cfg.MatrixProvider {
+	case "tuwunel", "":
+		cfg.MatrixProvider = "tuwunel"
+	case "synapse":
+		// ok
+	default:
+		panic(fmt.Sprintf("invalid AGENTTEAMS_MATRIX_PROVIDER %q: valid values are \"tuwunel\" (default) or \"synapse\"", cfg.MatrixProvider))
 	}
 
 	return cfg
@@ -518,6 +577,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		WorkerBridgeImage:    envOrDefault("AGENTTEAMS_WORKER_BRIDGE_IMAGE", ""),
 		DefaultNetwork:       envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -561,10 +621,14 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		WorkerCPU:            c.K8sWorkerCPU,
-		WorkerMemory:         c.K8sWorkerMemory,
-		ControllerName:       c.ControllerName,
-		ResourcePrefix:       c.ResourcePrefix,
+		// No default: spec.image or the env must name the bridge image, else
+		// Create fails fast (prevents silently running an openclaw image as a
+		// bridge pod). Helm fills this at install / upgrade time.
+		WorkerBridgeImage: envOrDefault("AGENTTEAMS_WORKER_BRIDGE_IMAGE", ""),
+		WorkerCPU:         c.K8sWorkerCPU,
+		WorkerMemory:      c.K8sWorkerMemory,
+		ControllerName:    c.ControllerName,
+		ResourcePrefix:    c.ResourcePrefix,
 	}
 }
 
@@ -740,6 +804,7 @@ func (c *Config) MatrixConfig() matrix.Config {
 		AdminUser:                    c.MatrixAdminUser,
 		AdminPassword:                c.MatrixAdminPassword,
 		E2EEEnabled:                  c.MatrixE2EE,
+		Provider:                     c.MatrixProvider,
 		AppServiceEnabled:            c.MatrixAppServiceEnabled,
 		AppServiceID:                 c.MatrixAppServiceID,
 		AppServiceToken:              c.MatrixAppServiceASToken,
@@ -748,6 +813,13 @@ func (c *Config) MatrixConfig() matrix.Config {
 		AppServiceUserNamespaceRegex: c.MatrixAppServiceUserNamespaceRegex,
 		AppServicePushURL:            c.MatrixAppServicePushURL,
 	}
+}
+
+// UsesSynapse reports whether the Matrix homeserver is Synapse (vs the
+// default Tuwunel). Drives provider-specific code paths in the app factory
+// and HTTP handlers (e.g., RotateToken returning 501 on Synapse).
+func (c *Config) UsesSynapse() bool {
+	return c.MatrixProvider == "synapse"
 }
 
 func appServicePushURL(controllerURL string) string {

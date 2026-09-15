@@ -125,7 +125,17 @@ type MemberContext struct {
 	// it is NOT used as an idempotency key (the room alias is — see
 	// service.Provisioner.ProvisionWorker). Safe to leave empty; the alias
 	// resolution in ProvisionWorker will populate RoomID on first run.
-	ExistingRoomID      string
+	ExistingRoomID string
+
+	// DisplayName is the desired Matrix profile display name
+	// (spec.displayName). Empty means "no explicit display name" and skips
+	// profile syncing.
+	DisplayName string
+	// DisplayNameSyncedGeneration is the owning CR generation whose
+	// DisplayName was last synced to Matrix. When it equals Generation the
+	// Infra phase skips SetDisplayName on this reconcile.
+	DisplayNameSyncedGeneration int64
+
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
 	// PodLabels are merged into backend.CreateRequest.Labels.
@@ -179,6 +189,11 @@ type MemberState struct {
 	// or on the first successful deployment. Written back to
 	// Worker.Status.BackendRuntime by the owning reconciler.
 	BackendRuntime string
+
+	// DisplayNameSynced reports that this reconcile applied the member's
+	// display name to Matrix. Owning reconcilers use it to stamp the synced
+	// generation into their status.
+	DisplayNameSynced bool
 
 	// Message holds backend-reported status message (e.g. failing condition
 	// detail). Written to Worker.Status.Message when reconcile succeeds but
@@ -283,6 +298,17 @@ func ValidateMemberDeployment(m MemberContext) error {
 	}
 }
 
+// isAlreadyInRoomError reports whether err represents a Matrix 403
+// "already in the room" response. Synapse returns M_FORBIDDEN with an
+// error string containing "already" when the user is already a member.
+func isAlreadyInRoomError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "403") && strings.Contains(msg, "already")
+}
+
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
 // and DM room are provisioned (or credentials refreshed). Writes MatrixUserID,
 // RoomID, and ProvResult into state.
@@ -291,6 +317,16 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
+		}
+
+		// Gateway state can be lost independently of the stored credentials
+		// (e.g. Higress restart with fresh console state). RefreshWorkerCredentials
+		// never touches the gateway, so re-ensure the consumer exactly like the
+		// Manager refresh path does — otherwise the worker's model calls 401
+		// forever with no self-heal path. Errors propagate so controller-runtime
+		// requeues with backoff.
+		if err := d.Provisioner.EnsureWorkerGatewayAuth(ctx, m.RuntimeName, refreshResult.GatewayKey); err != nil {
+			return reconcile.Result{}, fmt.Errorf("restore worker gateway auth: %w", err)
 		}
 
 		state.MatrixUserID = m.ExistingMatrixUserID
@@ -303,6 +339,7 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 			MinIOPassword:  refreshResult.MinIOPassword,
 			MatrixPassword: refreshResult.MatrixPassword,
 		}
+		syncMemberDisplayName(ctx, d.Provisioner, m, m.ExistingMatrixUserID, refreshResult.MatrixToken, state)
 		return reconcile.Result{}, nil
 	}
 
@@ -312,8 +349,37 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		Name:           m.RuntimeName,
 		CredentialName: m.Name,
 		Role:           m.Role.String(),
+		DisplayName:    m.DisplayName,
 	})
 	if err != nil {
+		// Idempotent: Synapse may return 403 M_FORBIDDEN when the admin
+		// user (room creator) is already joined. Treat it as a no-op and
+		// fall through to credential refresh.
+		if isAlreadyInRoomError(err) {
+			log.FromContext(ctx).Info("member already provisioned (403 already-in-room), refreshing credentials",
+				"name", m.Name, "runtimeName", m.RuntimeName)
+			refreshResult, refreshErr := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+			if refreshErr != nil {
+				return reconcile.Result{}, fmt.Errorf("refresh credentials after already-in-room: %w", refreshErr)
+			}
+			// ProvisionWorker aborted before Step 5 on the already-in-room
+			// error, so the gateway consumer may not exist yet — same restore
+			// as the existing-worker branch above.
+			if err := d.Provisioner.EnsureWorkerGatewayAuth(ctx, m.RuntimeName, refreshResult.GatewayKey); err != nil {
+				return reconcile.Result{}, fmt.Errorf("restore worker gateway auth: %w", err)
+			}
+			state.MatrixUserID = d.Provisioner.MatrixUserID(m.RuntimeName)
+			state.RoomID = m.ExistingRoomID
+			state.ProvResult = &service.WorkerProvisionResult{
+				MatrixUserID:   d.Provisioner.MatrixUserID(m.RuntimeName),
+				MatrixToken:    refreshResult.MatrixToken,
+				RoomID:         m.ExistingRoomID,
+				GatewayKey:     refreshResult.GatewayKey,
+				MinIOPassword:  refreshResult.MinIOPassword,
+				MatrixPassword: refreshResult.MatrixPassword,
+			}
+			return reconcile.Result{}, nil
+		}
 		if errors.Is(err, matrix.ErrAppServiceNotReady) {
 			log.FromContext(ctx).Info("Matrix AppService not active yet; requeueing member provisioning",
 				"name", m.Name, "runtimeName", m.RuntimeName)
@@ -325,7 +391,25 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 	state.MatrixUserID = provResult.MatrixUserID
 	state.RoomID = provResult.RoomID
 	state.ProvResult = provResult
+	syncMemberDisplayName(ctx, d.Provisioner, m, provResult.MatrixUserID, provResult.MatrixToken, state)
 	return reconcile.Result{}, nil
+}
+
+// syncMemberDisplayName applies the member's spec.displayName to its Matrix
+// profile when a display name is configured and the owning CR generation
+// changed since the last successful sync. Non-fatal: a profile-sync failure
+// must not block infrastructure provisioning.
+func syncMemberDisplayName(ctx context.Context, prov service.WorkerProvisioner, m MemberContext, userID, accessToken string, state *MemberState) {
+	if m.DisplayName == "" || accessToken == "" || m.Generation == m.DisplayNameSyncedGeneration {
+		return
+	}
+	logger := log.FromContext(ctx)
+	if err := prov.SetDisplayName(ctx, userID, accessToken, m.DisplayName); err != nil {
+		logger.Error(err, "failed to sync member displayName (non-fatal)", "name", m.Name, "userID", userID)
+		return
+	}
+	logger.Info("member displayName synced", "name", m.Name, "userID", userID, "displayName", m.DisplayName)
+	state.DisplayNameSynced = true
 }
 
 // EnsureModelProviderAuth authorizes the member's gateway consumer on the
@@ -367,7 +451,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		aiGatewayURL = m.ModelProviderInfo.IntranetURL
 	}
 
-	if effectiveRuntime == backend.RuntimeQwenPaw || m.DeployMode == v1beta1.DeployModeEdge {
+	if backend.IsManagedRuntime(effectiveRuntime) || m.DeployMode == v1beta1.DeployModeEdge {
 		runtime := effectiveRuntime
 		var matrixAccessToken, gatewayKey string
 		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
@@ -375,6 +459,13 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			runtime = runtimeRemoteManagedLocal
 			matrixAccessToken = state.ProvResult.MatrixToken
 			gatewayKey = state.ProvResult.GatewayKey
+		}
+		// Put assigned skill files in member storage before publishing the
+		// desired-state snapshot that tells managed runtimes to load them.
+		if len(m.Spec.Skills) > 0 || len(m.Spec.RemoteSkills) > 0 {
+			if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+				return fmt.Errorf("push on-demand skills: %w", err)
+			}
 		}
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
@@ -766,6 +857,24 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		DeployMode:  m.DeployMode,
 		WorkersDeps: workerDeps,
 	}
+	// Bootstrap readiness gate (managed runtimes only): the bridge pod's
+	// bootstrap feeds the agent.md generator from agents/<w>/runtime/
+	// runtime.yaml, and the generator fails loud when member.matrixUserId
+	// is missing — which strands the first delegated mention. The first
+	// runtime.yaml write happens before the matrix user registers; defer
+	// pod creation until the fully-populated rewrite has landed.
+	if backend.IsManagedRuntime(backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)) && d.Deployer != nil {
+		runtimeOwner := m.Name
+		if m.RuntimeName != "" {
+			runtimeOwner = m.RuntimeName
+		}
+		if !d.Deployer.RuntimeConfigReadyForBootstrap(ctx, runtimeOwner) {
+			log.FromContext(ctx).Info(
+				"runtime.yaml not fully populated yet (member.matrixUserId pending); deferring container creation",
+				"worker", m.Name, "runtimeOwner", runtimeOwner)
+			return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
 	if wb.Name() == "docker" {
 		token, requeueAfter, err := projectInitialDockerWorkerToken(ctx, d, m)
 		if err != nil {
@@ -783,7 +892,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 		configOwner := m.Name
 		configKey := "agents/" + configOwner + "/openclaw.json"
-		if backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeQwenPaw {
+		if backend.IsManagedRuntime(backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)) {
 			if m.RuntimeName != "" {
 				configOwner = m.RuntimeName
 			}

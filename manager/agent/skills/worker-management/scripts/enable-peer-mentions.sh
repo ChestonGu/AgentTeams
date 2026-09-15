@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+# Defensive log() fallback 閳?see push-worker-skills.sh for rationale.
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[agentteams $(date '+%H:%M:%S')] $*"; }
+fi
+
+# ============================================================
+# Parse arguments
+# ============================================================
 WORKERS_CSV=""
 while [ $# -gt 0 ]; do
     case "$1" in

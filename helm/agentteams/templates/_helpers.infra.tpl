@@ -10,6 +10,8 @@ materialized condition flag.
 {{- define "agentteams.matrix.internalURL" -}}
 {{- if and (eq .Values.matrix.provider "tuwunel") (eq .Values.matrix.mode "managed") -}}
 {{- include "agentteams.tuwunel.internalURL" . -}}
+{{- else if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") -}}
+{{- include "agentteams.synapse.internalURL" . -}}
 {{- else -}}
 {{- .Values.matrix.internalURL | default "" -}}
 {{- end -}}
@@ -18,6 +20,8 @@ materialized condition flag.
 {{- define "agentteams.matrix.serverName" -}}
 {{- if and (eq .Values.matrix.provider "tuwunel") (eq .Values.matrix.mode "managed") -}}
 {{- include "agentteams.tuwunel.serverName" . -}}
+{{- else if and (eq .Values.matrix.provider "synapse") (eq .Values.matrix.mode "managed") -}}
+{{- include "agentteams.synapse.serverName" . -}}
 {{- else -}}
 {{- .Values.matrix.serverName | default "" -}}
 {{- end -}}
@@ -90,6 +94,10 @@ materialized condition flag.
 
 {{- define "agentteams.storage.adminSecretKeyKey" -}}
 {{- if and (eq .Values.storage.provider "minio") (eq .Values.storage.mode "managed") -}}MINIO_ROOT_PASSWORD{{- end -}}
+{{- end }}
+
+{{- define "agentteams.storage.ossCredsSecretName" -}}
+{{- printf "%s-oss-creds" (include "agentteams.fullname" .) -}}
 {{- end }}
 
 {{- define "agentteams.manager.spec" -}}

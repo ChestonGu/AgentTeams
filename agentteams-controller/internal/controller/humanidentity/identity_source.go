@@ -59,6 +59,18 @@ type Credentials struct {
 	Created bool
 }
 
+// EnsurePrecreatedOptions carries request-scoped provisioning options that
+// must not become part of Human spec or status.
+type EnsurePrecreatedOptions struct {
+	DeviceID string
+}
+
+// DeviceAwareIdentitySource is an optional extension for imperative callers.
+// The reconciler intentionally uses the base IdentitySource contract.
+type DeviceAwareIdentitySource interface {
+	EnsurePrecreatedWithOptions(context.Context, *v1beta1.HumanSpec, string, EnsurePrecreatedOptions) (Credentials, error)
+}
+
 const (
 	KeyLegacyPassword = "legacy_password"
 	KeyExternalSSO    = "external_sso"
@@ -80,7 +92,7 @@ type ResolvedIdentity struct {
 //
 // Implementations MUST be stateless w.r.t. the Human CR — every method
 // receives the inputs it needs as parameters. Per-cluster configuration
-// (homeserver domain, Tuwunel client, etc.) lives in Deps and is bound
+// (homeserver domain, matrix client, etc.) lives in Deps and is bound
 // at registry-resolve time.
 type IdentitySource interface {
 	// Key returns the registry key this implementation registered
@@ -92,8 +104,8 @@ type IdentitySource interface {
 	// DeriveMatrixUserID computes the deterministic Matrix user ID
 	// the homeserver will assign to this Human. Pure function: must
 	// produce the same output for the same input across reconciles
-	// AND across processes (cross-language alignment with Tuwunel
-	// matters for the SSO flow).
+	// AND across processes (cross-language alignment with the
+	// homeserver matters for the SSO flow).
 	DeriveMatrixUserID(spec *v1beta1.HumanSpec, metadataName string) (string, error)
 
 	// EnsurePrecreated creates (or recognises an existing) Matrix

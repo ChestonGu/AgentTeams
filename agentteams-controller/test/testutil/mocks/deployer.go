@@ -15,6 +15,7 @@ type MockDeployer struct {
 	DeployPackageFn                 func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
 	WriteInlineConfigsFn            func(workerName string, spec v1beta1.WorkerSpec) error
 	DeployMemberRuntimeConfigFn     func(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error
+	RuntimeConfigReadyForBootstrapFn func(ctx context.Context, runtimeName string) bool
 	MergeMemberRuntimeTeamContextFn func(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error
 	DeployWorkerConfigFn            func(ctx context.Context, req service.WorkerDeployRequest) error
 	PushOnDemandSkillsFn            func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
@@ -57,6 +58,7 @@ func (m *MockDeployer) Reset() {
 	m.DeployPackageFn = nil
 	m.WriteInlineConfigsFn = nil
 	m.DeployMemberRuntimeConfigFn = nil
+	m.RuntimeConfigReadyForBootstrapFn = nil
 	m.MergeMemberRuntimeTeamContextFn = nil
 	m.DeployWorkerConfigFn = nil
 	m.PushOnDemandSkillsFn = nil
@@ -127,6 +129,16 @@ func (m *MockDeployer) DeployMemberRuntimeConfig(ctx context.Context, req servic
 		return fn(ctx, req)
 	}
 	return nil
+}
+
+func (m *MockDeployer) RuntimeConfigReadyForBootstrap(ctx context.Context, runtimeName string) bool {
+	m.mu.Lock()
+	fn := m.RuntimeConfigReadyForBootstrapFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, runtimeName)
+	}
+	return true
 }
 
 func (m *MockDeployer) MergeMemberRuntimeTeamContext(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error {

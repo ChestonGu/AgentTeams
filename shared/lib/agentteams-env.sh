@@ -20,6 +20,13 @@
 # Worker images don't ship base.sh; the silent fallback is intentional.
 source /opt/agentteams/scripts/lib/base.sh 2>/dev/null || true
 
+# Fallback: images that source agentteams-env.sh always get a log() here, so
+# scripts calling it fail on the real error instead of
+# "log: command not found" (exit 127).
+if ! declare -F log >/dev/null 2>&1; then
+    log() { echo "[agentteams $(date '+%H:%M:%S')] $*"; }
+fi
+
 # ── Worker deps env projection ────────────────────────────────────────────────
 # SandboxSet pool workers start from identityless warm instances. The claim-time
 # dynamic mount projects Worker-specific env into this directory. In the sandbox

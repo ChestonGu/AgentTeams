@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +32,22 @@ import (
 // without enumerating every Team.
 const (
 	TeamWorkerMembersField = "spec.workerMembers.name"
+)
+
+// Team reconciler tuning knobs. These bound the blast radius of a slow or
+// failing Team so it cannot starve the rest of the workqueue (previously a
+// single hung external call with MaxConcurrentReconciles=1 blocked every
+// Team, including newly created ones, for the lifetime of the hang).
+const (
+	// maxTeamRetries caps consecutive failTeam passes before the Team stops
+	// auto-requeuing (status.maxRetriesReached=true). Reset with
+	// kubectl annotate team <name> agentteams.io/retry="".
+	maxTeamRetries = 5
+	// maxFailBackoff caps the exponential backoff delay used by failTeam.
+	maxFailBackoff = 10 * time.Minute
+	// teamRetryAnnotation re-arms automatic retries after maxTeamRetries.
+	// Same annotation key as the Human reconciler's retryAnnotation.
+	teamRetryAnnotation = "agentteams.io/retry"
 )
 
 // TeamReconciler reconciles Team resources that reference existing Worker CRs
@@ -57,6 +75,32 @@ type TeamReconciler struct {
 	// included in every worker's allowlist so the operator admin retains
 	// visibility regardless of team membership.
 	SystemAdminUser string
+
+	// ReconcileTimeout bounds a single reconcile pass when > 0 (default 0 =
+	// disabled, preserving legacy behavior). A hung external dependency
+	// (OSS upload, Matrix HTTP, credential refresh) would otherwise hold the
+	// worker slot until it returns. Sourced from
+	// AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS.
+	ReconcileTimeout time.Duration
+
+	// ReconcileInterval is the periodic requeue for a fully converged Active
+	// Team whose spec has not changed since the last successful pass. 0
+	// (default) falls back to 5 minutes. Positive jitter (0-10% of the
+	// interval) is added on every wakeup so concurrent Teams do not requeue
+	// in lockstep. Sourced from AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS.
+	ReconcileInterval time.Duration
+
+	// MaxConcurrentReconciles is the Team controller's worker parallelism.
+	// 0 or 1 keeps the controller-runtime default of 1 (legacy behavior);
+	// raise it via AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES so a slow/hung
+	// Team stops starving every other Team.
+	MaxConcurrentReconciles int
+
+	// ActiveNoRequeue stops the periodic requeue for fully converged Active
+	// Teams whose spec is unchanged; they reconcile only on events (pod
+	// phase changes, spec edits) instead of on the periodic timer. Sourced
+	// from AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE.
+	ActiveNoRequeue bool
 }
 
 type teamAdminActor struct {
@@ -69,11 +113,73 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	start := time.Now()
 	defer func() { metrics.Observe("team", start, reterr) }()
 
+	// Optional per-pass deadline (default disabled; see ReconcileTimeout).
+	// When enabled, a hung external dependency (OSS upload, Matrix HTTP,
+	// credential refresh) fails fast instead of holding the worker slot
+	// forever. With MaxConcurrentReconciles=1 a hung pass used to block every
+	// other Team, including newly created ones.
+	if r.ReconcileTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.ReconcileTimeout)
+		defer cancel()
+	}
+
 	logger := log.FromContext(ctx)
+
+	// Team-scoped logger: propagated through ctx so every downstream
+	// log.FromContext(ctx) call (deployer, oss, backend, gateway) is tagged
+	// with the Team identity without per-call parameters. A single
+	// `grep "team=<name>"` then covers the whole reconcile span, including
+	// the slow mc calls logged by the oss layer.
+	ctx = log.IntoContext(ctx, logger.WithValues(
+		"team", req.NamespacedName.Name,
+		"namespace", req.NamespacedName.Namespace,
+	))
+
+	// Panic guard: without this a panic in any phase escapes to
+	// controller-runtime's generic "Observed a panic" handler, losing the
+	// team context. Recover here, log with the team-scoped logger, and return
+	// the panic as an error so the workqueue rate-limiter requeues the Team
+	// and metrics.Observe (registered above) records the failure.
+	defer func() {
+		if p := recover(); p != nil {
+			logger.Error(nil, "reconcile panic", "panic", p)
+			reterr = fmt.Errorf("reconcile panic: %v", p)
+		}
+	}()
 
 	var team v1beta1.Team
 	if err := r.Get(ctx, req.NamespacedName, &team); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// teamUID is only known after Get; layer it onto the ctx logger so every
+	// downstream log.FromContext call carries the unique Team identity —
+	// name alone is ambiguous across a delete/recreate of the same-named CR.
+	ctx = log.IntoContext(ctx, log.FromContext(ctx).WithValues(
+		"teamUID", string(team.UID),
+	))
+
+	// Team exhausted its automatic retry budget: stop requeuing until an
+	// operator re-arms retries with the agentteams.io/retry annotation.
+	// Placed before finalizer handling so a retry-capped Team can still be
+	// deleted.
+	if team.Status.MaxRetriesReached {
+		if team.Annotations[teamRetryAnnotation] == "" {
+			return reconcile.Result{}, nil
+		}
+		delete(team.Annotations, teamRetryAnnotation)
+		team.Status.MaxRetriesReached = false
+		team.Status.ConsecutiveFailures = 0
+		if err := r.Update(ctx, &team); err != nil {
+			return reconcile.Result{}, err
+		}
+		// Status lives behind the status subresource; a plain Update does not
+		// persist it. Write the reset counters separately so the Team
+		// re-enters the normal reconcile path on the next pass.
+		if err := r.Status().Update(ctx, &team); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	if !team.DeletionTimestamp.IsZero() {
@@ -98,6 +204,31 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 		controllerutil.AddFinalizer(&team, finalizerName)
 		if err := r.Update(ctx, &team); err != nil {
 			return reconcile.Result{}, err
+		}
+	}
+
+	// Failed-Team backoff guard. failTeam patches status (which increments
+	// ConsecutiveFailures), so the informer re-enqueues the Team immediately;
+	// without this guard the exponential backoff schedule would never apply
+	// and a Failed Team would hammer the queue out of order. Passes that
+	// arrive before the backoff window elapsed are re-scheduled for the
+	// remaining window — NOT dropped with a bare return. A bare return
+	// trusted the RequeueAfter that failTeam already scheduled, but that
+	// wakeup can be lost: two rapid failTeam passes (the second often reads
+	// a stale informer object and bypasses this guard entirely) share one
+	// waiting-queue entry — the second AddAfter is a no-op — so the single
+	// wakeup fires measured against the FIRST failure while this guard
+	// compares against the SECOND's transition time, drops it, and leaves
+	// the Team with no pending wakeup at all (observed on 105: a Team hit
+	// by the credentials race stayed Failed for minutes until a manual
+	// agentteams.io/retry annotation). Re-scheduling here keeps the chain
+	// alive; the delaying queue's per-item entry dedupe bounds it to one
+	// outstanding wakeup.
+	if team.Status.Phase == "Failed" && !team.Status.MaxRetriesReached &&
+		team.Status.ConsecutiveFailures > 0 && team.Status.PhaseTransitionTime != nil {
+		if elapsed := time.Since(team.Status.PhaseTransitionTime.Time); elapsed < failBackoffFor(team.Status.ConsecutiveFailures) {
+			remaining := failBackoffFor(team.Status.ConsecutiveFailures) - elapsed
+			return reconcile.Result{RequeueAfter: remaining}, nil
 		}
 	}
 
@@ -319,7 +450,6 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 
 	return r.reconcileTeam(ctx, t, patchBase)
 }
-
 func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) error {
 	return r.handleDeleteTeam(ctx, t)
 }
@@ -342,6 +472,54 @@ func (r *TeamReconciler) teamMemberRuntime(member teamWorkerMember) string {
 // heartbeat injection, and status aggregation) for referenced Worker CRs.
 func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+	passStart := time.Now()
+
+	// --- Active + spec unchanged → fast path ---
+	// After a controller restart or informer re-sync every Team is enqueued
+	// again. Without this short-circuit an unchanged Active Team would run
+	// the full provisioning chain (rooms, storage, per-member credential
+	// refresh, config pushes) on every restart. Skipped when any member
+	// reports not-ready so the full pass can self-heal it. No status patch is
+	// issued here — a patch would bump the resourceVersion and re-enqueue the
+	// Team through the informer, defeating the purpose of the fast path.
+	if t.Status.Phase == "Active" && t.Generation == t.Status.ObservedGeneration {
+		if t.Status.LeaderReady && t.Status.ReadyWorkers == t.Status.TotalWorkers {
+			// Container readiness cannot see room membership drift (a lost
+			// invite leaves the team room silently understaffed forever, and
+			// nothing re-enters the provisioning path). Probe the room before
+			// taking the fast path; on drift fall through to the full pass,
+			// which re-invites and re-joins missing members. A probe transport
+			// failure keeps the fast path — a Synapse blip must not stampede
+			// every healthy team through full provisioning; the next reconcile
+			// retries the probe.
+			missing, probe := r.teamRoomDrift(ctx, t)
+			switch probe {
+			case roomDriftProbeOK:
+				if len(missing) == 0 {
+					logger.Info("team healthy, skipping full reconcile",
+						"team", t.Name, "uid", t.UID,
+						"phase", t.Status.Phase,
+						"attempt", t.Status.ReconcileAttempt,
+						"leaderReady", t.Status.LeaderReady,
+						"readyWorkers", t.Status.ReadyWorkers,
+						"totalWorkers", t.Status.TotalWorkers,
+						"roomMembersVerified", true,
+						"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
+					return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+				}
+				logger.Info("team room membership drift detected; running full reconcile",
+					"team", t.Name, "room", t.Status.TeamRoomID, "missing", missing)
+			case roomDriftProbeFailed:
+				logger.Info("team room membership check failed; keeping fast path",
+					"team", t.Name, "room", t.Status.TeamRoomID)
+				return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+			case roomDriftProbeNotApplicable:
+				// No room recorded yet, or member resolution failed — the
+				// full pass owns both; fall through.
+			}
+		}
+		// A member is not ready — fall through to the full pass to recover it.
+	}
 
 	// 1. Validate workerMembers
 	leaderRef, workerRefs, err := validateWorkerMembers(t.Spec.WorkerMembers)
@@ -359,6 +537,8 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 	}
+	logger.Info("team reconcile: step 1 members",
+		"team", t.Name, "uid", t.UID, "elapsed", time.Since(passStart).Truncate(time.Millisecond).String())
 
 	// 3. Resolve admin actor
 	adminActor, err := r.resolveTeamAdminActor(ctx, t)
@@ -374,21 +554,29 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	workerRuntimeNames := teamWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
-		TeamName:             teamRuntimeName,
-		LeaderName:           leaderRuntimeName,
-		LeaderCredentialName: leaderRef.Name,
-		WorkerNames:          workerRuntimeNames,
-		AdminSpec:            derivedTeam.Spec.Admin,
-		HumanMembers:         derivedTeam.Spec.HumanMembers,
-		TeamAdminActorToken:  adminActor.Token,
-		TeamAdminActorName:   adminActor.Username,
+		TeamName:                    teamRuntimeName,
+		DisplayName:                 t.Spec.DisplayName,
+		LeaderName:                  leaderRuntimeName,
+		LeaderCredentialName:        leaderRef.Name,
+		WorkerNames:                 workerRuntimeNames,
+		AdminSpec:                   derivedTeam.Spec.Admin,
+		HumanMembers:                derivedTeam.Spec.HumanMembers,
+		TeamAdminActorToken:         adminActor.Token,
+		TeamAdminActorName:          adminActor.Username,
+		Generation:                  t.Generation,
+		DisplayNameSyncedGeneration: t.Status.DisplayNameSyncedGeneration,
 	})
 	if err != nil {
 		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	if rooms.DisplayNameSynced {
+		t.Status.DisplayNameSyncedGeneration = t.Generation
+	}
 	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
+	logger.Info("team reconcile: step 2 rooms",
+		"team", t.Name, "uid", t.UID, "elapsed", time.Since(passStart).Truncate(time.Millisecond).String())
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
@@ -403,17 +591,26 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				fmt.Sprintf("record team membership for %s: %v", member.runtimeName, err),
 			)
 		}
-		if _, err := r.Provisioner.RefreshWorkerCredentials(
+		credentials, err := r.Provisioner.RefreshWorkerCredentials(
 			ctx,
 			member.ref.Name,
 			member.runtimeName,
 			teamRuntimeName,
-		); err != nil {
+		)
+		if err != nil {
 			return r.failTeam(
 				ctx,
 				t,
 				patchBase,
 				fmt.Sprintf("refresh team storage access for %s: %v", member.runtimeName, err),
+			)
+		}
+		if err := r.Provisioner.JoinRoomAs(ctx, rooms.TeamRoomID, credentials.MatrixToken); err != nil {
+			return r.failTeam(
+				ctx,
+				t,
+				patchBase,
+				fmt.Sprintf("join %s to team room: %v", member.runtimeName, err),
 			)
 		}
 	}
@@ -422,7 +619,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	teamWorkerEntries := teamWorkerEntries(members, leaderRef.Name)
 	leaderRuntime := r.teamMemberRuntime(leaderMember)
 
-	if leaderRuntime != backend.RuntimeQwenPaw {
+	if !backend.IsManagedRuntime(leaderRuntime) {
 		// Overlay Team Leader built-ins onto the team-reference leader Worker before
 		// injecting the team coordination context. The Worker still owns its
 		// lifecycle and credentials; this only restores role-specific prompt and
@@ -468,7 +665,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		if r.teamMemberRuntime(rm) == backend.RuntimeQwenPaw {
+		if backend.IsManagedRuntime(r.teamMemberRuntime(rm)) {
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
@@ -484,6 +681,8 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
+	logger.Info("team reconcile: step 3 coordination + configs",
+		"team", t.Name, "uid", t.UID, "elapsed", time.Since(passStart).Truncate(time.Millisecond).String())
 
 	// 6. Channel authorization
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
@@ -515,7 +714,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			role = RoleTeamLeader
 		}
-		if r.teamMemberRuntime(rm) != backend.RuntimeQwenPaw {
+		if !backend.IsManagedRuntime(r.teamMemberRuntime(rm)) {
 			policy := r.teamChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
 			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
 				WorkerName:     rm.runtimeName,
@@ -533,6 +732,12 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	}
 	leaderReady, readyWorkers := aggregateTeamStatus(t, members, leaderRef.Name, len(workerRefs))
 
+	// Successful full pass: record the observed generation (so a restart /
+	// informer re-sync can short-circuit unchanged Active teams) and reset
+	// the failure counter failTeam's exponential backoff uses.
+	t.Status.ObservedGeneration = t.Generation
+	t.Status.ConsecutiveFailures = 0
+
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		logger.Error(err, "failed to patch team status (non-fatal)")
 	}
@@ -542,8 +747,25 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		"phase", t.Status.Phase,
 		"leaderReady", leaderReady,
 		"readyWorkers", readyWorkers,
-		"totalWorkers", t.Status.TotalWorkers)
-	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+		"totalWorkers", t.Status.TotalWorkers,
+		"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
+	return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+}
+
+// activeRequeue returns the periodic requeue for a fully converged Active
+// Team whose spec has not changed: 0 (no periodic requeue) when
+// ActiveNoRequeue is set, otherwise the configured interval (default 5m, see
+// ReconcileInterval) plus positive jitter of 0-10% so concurrent Teams do not
+// wake up in lockstep and hammer Matrix/OSS at the same instant.
+func (r *TeamReconciler) activeRequeue() time.Duration {
+	if r.ActiveNoRequeue {
+		return 0
+	}
+	base := r.ReconcileInterval
+	if base <= 0 {
+		base = 5 * time.Minute
+	}
+	return base + time.Duration(rand.Int63n(int64(base)/10+1))
 }
 
 func (r *TeamReconciler) setWorkerTeamAnnotation(ctx context.Context, worker *v1beta1.Worker, teamName string) error {
@@ -564,6 +786,52 @@ func (r *TeamReconciler) setWorkerTeamAnnotation(ctx context.Context, worker *v1
 		worker.Annotations[v1beta1.AnnotationWorkerTeamName] = teamName
 	}
 	return r.Patch(ctx, worker, client.MergeFrom(base))
+}
+
+// roomDriftProbe is the outcome of the fast-path room-membership probe.
+//   - roomDriftProbeOK: the probe ran; missing is authoritative.
+//   - roomDriftProbeFailed: the homeserver read errored — keep the fast
+//     path (a Synapse blip must not stampede healthy teams through full
+//     provisioning); the next reconcile retries the probe.
+//   - roomDriftProbeNotApplicable: no room recorded yet or member
+//     resolution failed — the full pass owns both; fall through to it.
+type roomDriftProbe int
+
+const (
+	roomDriftProbeOK roomDriftProbe = iota
+	roomDriftProbeFailed
+	roomDriftProbeNotApplicable
+)
+
+// teamRoomDrift is the fast-path room-membership probe. See roomDriftProbe
+// for the outcome semantics.
+func (r *TeamReconciler) teamRoomDrift(ctx context.Context, t *v1beta1.Team) ([]string, roomDriftProbe) {
+	logger := log.FromContext(ctx)
+	if t.Status.TeamRoomID == "" {
+		return nil, roomDriftProbeNotApplicable
+	}
+	leaderRef, _, err := validateWorkerMembers(t.Spec.WorkerMembers)
+	if err != nil {
+		return nil, roomDriftProbeNotApplicable
+	}
+	members, degradedMsgs := r.resolveTeamMembers(ctx, t)
+	if len(degradedMsgs) > 0 {
+		// A referenced Worker CR is missing — the full pass owns that
+		// failure mode; fall through to it.
+		return nil, roomDriftProbeNotApplicable
+	}
+	missing, err := r.Provisioner.MissingTeamRoomMembers(
+		ctx,
+		t.Status.TeamRoomID,
+		teamLeaderMember(members, leaderRef.Name).runtimeName,
+		teamWorkerRuntimeNames(members, leaderRef.Name),
+	)
+	if err != nil {
+		logger.Info("team room membership check failed; keeping fast path",
+			"team", t.Name, "room", t.Status.TeamRoomID, "error", err.Error())
+		return nil, roomDriftProbeFailed
+	}
+	return missing, roomDriftProbeOK
 }
 
 func (r *TeamReconciler) resolveTeamMembers(ctx context.Context, t *v1beta1.Team) ([]teamWorkerMember, []string) {
@@ -612,9 +880,15 @@ func teamWorkerEntries(members []teamWorkerMember, leaderName string) []service.
 		if member.ref.Name == leaderName {
 			continue
 		}
+		display := member.worker.Spec.DisplayName
+		if display == "" {
+			display = member.ref.Name
+		}
 		entries = append(entries, service.TeamWorkerEntry{
-			Name:   member.runtimeName,
-			RoomID: member.worker.Status.RoomID,
+			Name:         member.runtimeName,
+			RoomID:       member.worker.Status.RoomID,
+			DisplayName:  display,
+			MatrixUserID: member.worker.Status.MatrixUserID,
 		})
 	}
 	return entries
@@ -641,7 +915,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if runtime != backend.RuntimeQwenPaw && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !backend.IsManagedRuntime(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -793,7 +1067,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if _, err := r.Provisioner.RefreshWorkerCredentials(ctx, w.Name, runtimeName, ""); err != nil {
 		return fmt.Errorf("revoke team storage access: %w", err)
 	}
-	if runtime != backend.RuntimeQwenPaw {
+	if !backend.IsManagedRuntime(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:         runtimeName,
 			TeamName:           "",
@@ -833,7 +1107,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
 	}
-	if runtime == backend.RuntimeQwenPaw {
+	if backend.IsManagedRuntime(runtime) {
 		return nil
 	}
 	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -1019,7 +1293,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 		if err := r.Get(ctx, key, &leaderW); err == nil {
 			leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
 			runtime := backend.ResolveRuntime(leaderW.Spec.Runtime, r.DefaultRuntime)
-			if runtime != backend.RuntimeQwenPaw {
+			if !backend.IsManagedRuntime(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
 					Enabled:    false,
@@ -1150,13 +1424,61 @@ func validateWorkerMembers(refs []v1beta1.TeamWorkerRef) (leader *v1beta1.TeamWo
 	return leader, workers, nil
 }
 
-func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch, msg string) (reconcile.Result, error) {
-	t.Status.Phase = "Failed"
-	t.Status.Message = msg
-	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
-		log.FromContext(ctx).Error(err, "failed to patch team status after failure (non-fatal)")
+// failBackoffFor returns the exponential backoff delay for the given
+// consecutive-failure count: 30s, 1m, 2m, 4m, ... capped at maxFailBackoff.
+func failBackoffFor(failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
 	}
-	return reconcile.Result{RequeueAfter: reconcileRetryDelay}, fmt.Errorf("%s", msg)
+	delay := reconcileRetryDelay * time.Duration(1<<(failures-1))
+	if delay > maxFailBackoff {
+		delay = maxFailBackoff
+	}
+	return delay
+}
+
+// failTeam records a Failed phase with an explicit exponential backoff.
+// It returns a Result-only (nil error) so the workqueue rate limiter does
+// not additionally requeue the Team with its own unpredictable backoff
+// (5ms → 10s → ... → 1000s) on top of the intended RequeueAfter — the
+// D-02 double-requeue bug. After maxTeamRetries consecutive failures the
+// Team stops requeuing entirely (status.maxRetriesReached=true) and waits
+// for an operator to re-arm retries via the agentteams.io/retry annotation.
+func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch, msg string) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+	prevPhase := t.Status.Phase
+	t.Status.Phase = "Failed"
+	now := metav1.Now()
+	t.Status.PhaseTransitionTime = &now
+	t.Status.Message = msg
+	t.Status.ConsecutiveFailures++
+
+	if t.Status.ConsecutiveFailures > maxTeamRetries {
+		t.Status.MaxRetriesReached = true
+		logger.Info("phase transition: Failed (max retries reached)",
+			"team", t.Name, "uid", t.UID,
+			"from", prevPhase,
+			"consecutiveFailures", t.Status.ConsecutiveFailures,
+			"message", msg)
+		if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+			logger.Error(err, "failed to patch team status after failure (non-fatal)")
+		}
+		// No error, no requeue: Reconcile's MaxRetriesReached guard keeps the
+		// Team out of the queue until an operator re-arms it.
+		return reconcile.Result{}, nil
+	}
+
+	delay := failBackoffFor(t.Status.ConsecutiveFailures)
+	logger.Info("phase transition: Failed",
+		"team", t.Name, "uid", t.UID,
+		"from", prevPhase,
+		"consecutiveFailures", t.Status.ConsecutiveFailures,
+		"backoff", delay,
+		"message", msg)
+	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+		logger.Error(err, "failed to patch team status after failure (non-fatal)")
+	}
+	return reconcile.Result{RequeueAfter: delay}, nil
 }
 
 // --- helpers ---
@@ -1252,12 +1574,28 @@ func (r *TeamReconciler) runtimeConfigTeamMembers(t *v1beta1.Team, desiredMember
 			RuntimeName: member.RuntimeName,
 			Role:        member.Role.String(),
 		}
+		// Prefer the member's Spec.DisplayName, fallback to the member name.
+		disp := member.Spec.DisplayName
+		if disp == "" {
+			disp = member.Name
+		}
+		entry.DisplayName = disp
+		// Populate Matrix IDs / room from Team status when available, then
+		// fall back to any cached Existing* values on the MemberContext and
+		// finally to the provisioner-derived mapping.
 		if ms := t.Status.MemberByName(member.Name); ms != nil {
 			entry.MatrixUserID = ms.MatrixUserID
 			entry.PersonalRoomID = ms.RoomID
 		}
-		if entry.MatrixUserID == "" && r.Provisioner != nil && entry.RuntimeName != "" {
-			entry.MatrixUserID = r.Provisioner.MatrixUserID(entry.RuntimeName)
+		if entry.MatrixUserID == "" {
+			if member.ExistingMatrixUserID != "" {
+				entry.MatrixUserID = member.ExistingMatrixUserID
+			} else if r.Provisioner != nil && entry.RuntimeName != "" {
+				entry.MatrixUserID = r.Provisioner.MatrixUserID(entry.RuntimeName)
+			}
+		}
+		if entry.PersonalRoomID == "" && member.ExistingRoomID != "" {
+			entry.PersonalRoomID = member.ExistingRoomID
 		}
 		roster = append(roster, entry)
 	}
@@ -1329,7 +1667,17 @@ func uniqueTeamStrings(values []string) []string {
 }
 
 func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
-	bldr := ctrl.NewControllerManagedBy(mgr).For(&v1beta1.Team{})
+	// Default parallelism is 1 (controller-runtime default, legacy behavior).
+	// Operators may raise it via AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES so
+	// a slow/hung Team stops starving every other Team, including newly
+	// created ones that would otherwise sit in Phase ""/Pending indefinitely.
+	maxConcurrent := r.MaxConcurrentReconciles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	bldr := ctrl.NewControllerManagedBy(mgr).
+		For(&v1beta1.Team{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent})
 
 	// Watch Worker CRs whose status changes. When a
 	// referenced Worker's status changes, the owning Team is enqueued via the

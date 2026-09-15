@@ -18,7 +18,7 @@ import (
 // auto-join is typically a few seconds; longer than this makes the
 // admin's Element Web window sit empty for an uncomfortable time on
 // fresh installs. The cost of the 5s loop is one ListRoomMembers HTTP
-// call against the local Tuwunel — negligible — and the loop terminates
+// call against the local homeserver — negligible — and the loop terminates
 // the moment the agent's auto-join lands.
 const welcomeRequeueInterval = 5 * time.Second
 
@@ -31,7 +31,7 @@ const welcomeRequeueInterval = 5 * time.Second
 // docker single-container deploys; in k8s / embedded mode the controller
 // owns this responsibility because:
 //
-//   - it has admin Matrix credentials cached in TuwunelClient already;
+//   - it has admin Matrix credentials cached in the MatrixOps layer already;
 //   - it knows when the DM Room was just created (via Status.WelcomeSent);
 //   - it does not need to give every Manager container the admin password
 //     just to send one prompt at boot.

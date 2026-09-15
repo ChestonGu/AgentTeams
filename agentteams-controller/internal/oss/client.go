@@ -18,6 +18,13 @@ type StorageClient interface {
 	// Stat checks if an object exists. Returns os.ErrNotExist if not found.
 	Stat(ctx context.Context, key string) error
 
+	// GetETag returns the object's ETag (content MD5 for single-part
+	// uploads). Returns ("", nil) when the endpoint does not expose an
+	// ETag, and os.ErrNotExist when the object is missing. Used by the
+	// package resolver for content-addressable download caching without
+	// pulling the whole object.
+	GetETag(ctx context.Context, key string) (string, error)
+
 	// DeleteObject removes the object at key.
 	DeleteObject(ctx context.Context, key string) error
 

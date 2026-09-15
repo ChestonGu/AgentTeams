@@ -20,11 +20,12 @@ type MockHumanProvisioner struct {
 	LoginAsHumanFn    func(ctx context.Context, name, password string) (string, error)
 
 	// Decomposed primitives.
-	RegisterAppServiceUserFn func(ctx context.Context, name string) (*service.HumanCredentials, error)
-	RegisterLegacyUserFn     func(ctx context.Context, name string) (*service.HumanCredentials, error)
-	SetUserPasswordFn        func(ctx context.Context, userID, password string) error
-	LoginAppServiceUserFn    func(ctx context.Context, name string) (string, error)
-	LoginWithPasswordFn      func(ctx context.Context, name, password string) (string, error)
+	RegisterAppServiceUserFn      func(ctx context.Context, name string) (*service.HumanCredentials, error)
+	RegisterLegacyUserFn          func(ctx context.Context, name string) (*service.HumanCredentials, error)
+	SetUserPasswordFn             func(ctx context.Context, userID, password string) error
+	LoginAppServiceUserFn         func(ctx context.Context, name string) (string, error)
+	LoginWithPasswordFn           func(ctx context.Context, name, password string) (string, error)
+	LoginWithPasswordAndOptionsFn func(ctx context.Context, name, password, deviceID string) (string, error)
 
 	MatrixUserIDFn        func(name string) string
 	InviteToRoomFn        func(ctx context.Context, roomID, userID string) error
@@ -40,19 +41,20 @@ type MockHumanProvisioner struct {
 	AppServiceEnabled bool
 
 	Calls struct {
-		EnsureHumanUser        []string
-		LoginAsHuman           []LoginAsHumanCall
-		RegisterAppServiceUser []string
-		RegisterLegacyUser     []string
-		SetUserPassword        []SetUserPasswordCall
-		LoginAppServiceUser    []string
-		LoginWithPassword      []LoginAsHumanCall
-		SetDisplayName         []SetDisplayNameCall
-		InviteToRoom           []RoomMembershipCall
-		JoinRoomAs             []JoinRoomAsCall
-		KickFromRoom           []KickFromRoomCall
-		ForceLeaveRoom         []ForceLeaveRoomCall
-		DeactivateHumanUser    []string
+		EnsureHumanUser             []string
+		LoginAsHuman                []LoginAsHumanCall
+		RegisterAppServiceUser      []string
+		RegisterLegacyUser          []string
+		SetUserPassword             []SetUserPasswordCall
+		LoginAppServiceUser         []string
+		LoginWithPassword           []LoginAsHumanCall
+		LoginWithPasswordAndOptions []LoginWithPasswordAndOptionsCall
+		SetDisplayName              []SetDisplayNameCall
+		InviteToRoom                []RoomMembershipCall
+		JoinRoomAs                  []JoinRoomAsCall
+		KickFromRoom                []KickFromRoomCall
+		ForceLeaveRoom              []ForceLeaveRoomCall
+		DeactivateHumanUser         []string
 	}
 }
 
@@ -60,6 +62,12 @@ type MockHumanProvisioner struct {
 type LoginAsHumanCall struct {
 	Name     string
 	Password string
+}
+
+type LoginWithPasswordAndOptionsCall struct {
+	Name     string
+	Password string
+	DeviceID string
 }
 
 // SetUserPasswordCall records (userID, password) passed to SetUserPassword.
@@ -145,19 +153,20 @@ func (m *MockHumanProvisioner) ClearCalls() {
 
 func (m *MockHumanProvisioner) clearCallsLocked() {
 	m.Calls = struct {
-		EnsureHumanUser        []string
-		LoginAsHuman           []LoginAsHumanCall
-		RegisterAppServiceUser []string
-		RegisterLegacyUser     []string
-		SetUserPassword        []SetUserPasswordCall
-		LoginAppServiceUser    []string
-		LoginWithPassword      []LoginAsHumanCall
-		SetDisplayName         []SetDisplayNameCall
-		InviteToRoom           []RoomMembershipCall
-		JoinRoomAs             []JoinRoomAsCall
-		KickFromRoom           []KickFromRoomCall
-		ForceLeaveRoom         []ForceLeaveRoomCall
-		DeactivateHumanUser    []string
+		EnsureHumanUser             []string
+		LoginAsHuman                []LoginAsHumanCall
+		RegisterAppServiceUser      []string
+		RegisterLegacyUser          []string
+		SetUserPassword             []SetUserPasswordCall
+		LoginAppServiceUser         []string
+		LoginWithPassword           []LoginAsHumanCall
+		LoginWithPasswordAndOptions []LoginWithPasswordAndOptionsCall
+		SetDisplayName              []SetDisplayNameCall
+		InviteToRoom                []RoomMembershipCall
+		JoinRoomAs                  []JoinRoomAsCall
+		KickFromRoom                []KickFromRoomCall
+		ForceLeaveRoom              []ForceLeaveRoomCall
+		DeactivateHumanUser         []string
 	}{}
 }
 
@@ -251,6 +260,17 @@ func (m *MockHumanProvisioner) LoginWithPassword(ctx context.Context, name, pass
 		return fn(ctx, name, password)
 	}
 	return "mock-pw-token-" + name, nil
+}
+
+func (m *MockHumanProvisioner) LoginWithPasswordAndOptions(ctx context.Context, name, password, deviceID string) (string, error) {
+	m.mu.Lock()
+	m.Calls.LoginWithPasswordAndOptions = append(m.Calls.LoginWithPasswordAndOptions, LoginWithPasswordAndOptionsCall{Name: name, Password: password, DeviceID: deviceID})
+	fn := m.LoginWithPasswordAndOptionsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name, password, deviceID)
+	}
+	return m.LoginWithPassword(ctx, name, password)
 }
 
 func (m *MockHumanProvisioner) MatrixUserID(name string) string {

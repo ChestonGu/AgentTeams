@@ -34,18 +34,31 @@ preflight:
 
 # ── Matrix ────────────────────────────────────────────────────────────────
 matrix:
-  provider: tuwunel           # tuwunel | synapse
+  provider: synapse          # synapse (default) | tuwunel
   mode: managed               # managed | existing
   internalURL: ""             # existing mode only; managed mode auto-derives
   serverName: ""              # existing mode only; managed mode auto-derives
   # Matrix AppService registration (controller registers as an appservice
   # to provision worker/human Matrix accounts without passwords). Enabled by
-  # default; the controller panics if as_token/hs_token are absent, so the
-  # runtime-env Secret auto-generates and preserves them when these are empty.
+  # default. The runtime-env Secret auto-generates and preserves as_token/hs_token
+  # when these are empty.
+  #
+  # IMPORTANT (provider=synapse, the default): the homeserver loads the
+  # registration from a YAML file (synapse-appservice-secret.yaml) while the
+  # controller reads the same tokens from env. Helm cannot sync auto-generated
+  # tokens across two Secrets on first install, so the values.yaml defaults ship
+  # non-empty "change-me" tokens (matching the synapse macaroon/form secret
+  # convention). OVERRIDE both tokens in production with `helm install ... --set`.
+  # On tuwunel the controller registers at runtime and the values here are
+  # ignored, so auto-generation via the runtime-env Secret is fine.
   appservice:
     enabled: true            # set false to disable AppService mode entirely
-    asToken: ""             # override the Matrix AppService as_token (auto-generated if empty)
-    hsToken: ""             # override the Matrix AppService hs_token (auto-generated if empty)
+    id: "agentteams-controller"            # AppService ID (must match controller AGENTTEAMS_MATRIX_APPSERVICE_ID)
+    senderLocalpart: "agentteams-controller" # localpart of the AS bot user the controller logs in as
+    asToken: "change-me-as-token"          # Matrix AppService as_token — OVERRIDE in production
+    hsToken: "change-me-hs-token"          # Matrix AppService hs_token — OVERRIDE in production
+    userNamespaceRegex: ""  # narrow the user namespace matched by the AS registration (empty = "@.*:<domain>"; REQUIRED when matrix.mode != managed on a shared homeserver). The namespace is intentionally NOT exclusive — exclusivity would block the shared-secret admin bootstrap and admin-API user creation with M_EXCLUSIVE on Synapse.
+    pushURL: ""             # controller HTTP endpoint for homeserver→AS transaction push (empty = passwordless-only, no push)
   tuwunel:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel
@@ -69,7 +82,39 @@ matrix:
       storageClassName: ""    # empty = default StorageClass
       mountPath: /data/conduwuit
     extraEnv: {}
-  synapse: {}
+  synapse:
+    image:
+      repository: ghcr.io/element-hq/synapse   # 拉取走加速
+      tag: "v1.127.0"
+      pullPolicy: IfNotPresent
+    serverName: ""               # Matrix server_name;空 = synapse service FQDN
+    adminUser: "admin"           # bootstrap 建;应与 credentials.adminUser 一致
+    registrationSharedSecret: "" # 驱动 register_new_matrix_user(建 admin);空则生成
+    enableAuthenticatedMedia: false
+      # Synapse >= 1.121 上传默认把媒体标为 authenticated(MSC4016),而
+      # /_matrix/media/v3/download 的 DownloadResource 固定用 allow_authenticated=False,
+      # 未带 access_token 的下载(Element Web 附件 URL 只带 allow_redirect=true)会被
+      # raise NotFoundError → 404,即使 DB 记录与本地文件都完好。
+      # 私有集群无 federation 场景,authenticated media 无意义,默认关闭。
+    service:
+      type: ClusterIP
+      port: 8008
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""       # 空 = 默认 StorageClass
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 1, memory: 1Gi }
+    postgres:
+      image:
+        repository: postgres
+        tag: "16-alpine"
+        pullPolicy: IfNotPresent
+      password: ""               # synapse db 用户密码;空则生成
+      persistence:
+        size: 10Gi
+        storageClassName: ""
 
 # ── Gateway ───────────────────────────────────────────────────────────────
 # provider=higress + mode=managed → Higress deployed as a subchart here
@@ -105,6 +150,11 @@ storage:
     # Explicit endpoint override. Usually unset — the credential-provider
     # sidecar returns the correct endpoint as part of each STS response.
     endpoint: ""
+    # Static credentials (no credential-provider sidecar). Set BOTH when the
+    # external S3 provides a long-lived appkey/secret (e.g. a company's own
+    # S3-compatible service). Leave empty to use the STS sidecar instead.
+    accessKey: ""
+    secretKey: ""
   minio:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio
@@ -220,6 +270,21 @@ controller:
     annotations: {}
   env: {}
   timezone: "Asia/Shanghai"
+  # Team reconciler tuning (see wiki/controller-tuning-sop.md for the full
+  # symptom → diagnosis → tuning flow). Empty values keep the controller's
+  # built-in defaults (1 / 0 / 300 / false).
+  teamTuning:
+    maxConcurrentReconciles: 0    # AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES; 0 = controller default (1)
+    reconcileTimeoutSeconds: 0    # AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS; 0 = disabled
+    reconcileIntervalSeconds: 0   # AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS; 0 = controller default (300)
+    activeNoRequeue: false        # AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
+  # Worker reconciler tuning. The Worker controller runs the per-member
+  # provisioning chain (Matrix account/room, OSS config push, container
+  # create) for every Worker CR — the heaviest reconcile in the system, and
+  # the gate every Team's Active status waits on. Empty values keep the
+  # controller's built-in defaults.
+  workerTuning:
+    maxConcurrentReconciles: 0    # AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES; 0 = controller default (1)
   uninstallHook:
     # When enabled, helm uninstall first runs a Job that deletes all
     # Manager/Worker/Team/Human CRs while the controller is still alive,
@@ -300,6 +365,13 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    # worker-bridge (cimicode-bridge) image — deliberately empty by default:
+    # fill per environment (internal registry); worker-bridge Create fails
+    # fast unless spec.image or this env names an image, so an unset value
+    # never silently runs an openclaw worker image as a bridge pod.
+    workerBridge:
+      repository: ""          # e.g. <internal-registry>/agentteams/cimicode-bridge
+      tag: ""                 # defaults to global.imageTag when repository is set
   defaultRuntime: "openclaw"
   resources:
     requests:

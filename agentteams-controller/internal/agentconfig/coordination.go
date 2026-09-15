@@ -25,6 +25,10 @@ type CoordinationContext struct {
 type TeamWorkerInfo struct {
 	Name   string
 	RoomID string
+	// DisplayName is the friendly name for this worker (can be empty).
+	DisplayName string
+	// MatrixUserID is the member's Matrix MXID, if known.
+	MatrixUserID string
 }
 
 const (
@@ -81,7 +85,12 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 				if w.RoomID != "" {
 					roomInfo = w.RoomID
 				}
-				fmt.Fprintf(&b, "  - @%s:%s — Room: %s\n", w.Name, ctx.MatrixDomain, roomInfo)
+				// Prefer showing friendly display name when available.
+				if w.DisplayName != "" && w.DisplayName != w.Name {
+					fmt.Fprintf(&b, "  - %s (@%s:%s) — Room: %s\n", w.DisplayName, w.Name, ctx.MatrixDomain, roomInfo)
+				} else {
+					fmt.Fprintf(&b, "  - @%s:%s — Room: %s\n", w.Name, ctx.MatrixDomain, roomInfo)
+				}
 			}
 		}
 		b.WriteString("- You decompose tasks from Manager, Team Admin, or coordinator members and assign sub-tasks to your team workers\n")

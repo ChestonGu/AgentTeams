@@ -95,7 +95,7 @@ type CredentialBinding struct {
 // The controller translates this slice directly into mcporter-servers.json and
 // injects an Authorization: Bearer <consumer-key> header using the same
 // gateway consumer key the agent uses for LLM access. The controller does not
-// perform any gateway-side authorization for MCP servers — upstream access
+// perform any gateway-side authorization for MCP servers 鈥?upstream access
 // control is the gateway operator's responsibility (or, for local Higress
 // deployments, handled out-of-band by Manager skills).
 type MCPServer struct {
@@ -178,8 +178,9 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | worker-bridge (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
+	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
@@ -232,7 +233,7 @@ type WorkerSpec struct {
 	// Env holds user-defined environment variables injected into the worker
 	// container. Keys that collide with variables already set by the
 	// controller or backend (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar
-	// internal keys) are silently ignored with a warning log — the system
+	// internal keys) are silently ignored with a warning log 鈥?the system
 	// value always wins.
 	Env map[string]string `json:"env,omitempty"`
 
@@ -258,6 +259,36 @@ type WorkerSpec struct {
 	// Mounts is reserved for runtimes that provide custom dynamic mounts. It is
 	// not supported by the open-source pod backend.
 	Mounts []WorkerMountSpec `json:"mounts,omitempty"`
+
+	// ── worker-bridge runtime binding ─────────────────────────────────────
+	// These fields only take effect when Runtime == "worker-bridge". The
+	// controller projects them into the managed runtime.yaml top-level
+	// "bridge" section (agents/<name>/runtime/runtime.yaml), which the bridge
+	// pod consumes as its sole binding input; they are excluded from the
+	// spec hashes so binding updates never trigger a pod rebuild.
+
+	// AdapterMode selects the bridge adapter shape: "cimicode-stateless"
+	// (bridge calls an external cimicode platform directly) or
+	// "cimicode-pod" (operator provisions a cimicode runtime pod and points
+	// the bridge at it). Empty defers to the bridge's own resolution order
+	// (BRIDGE_RUNTIME_* env, then the projected bridge section).
+	AdapterMode string `json:"adapterMode,omitempty"`
+
+	// CimicodeGatewayUrl is the external cimicode gateway base URL
+	// (cimicode-stateless binding). Projected as bridge.baseUrl.
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+
+	// SessionId is the external cimicode session binding. Projected as
+	// bridge.sessionId.
+	SessionId string `json:"sessionId,omitempty"`
+
+	// SandboxId is the external cimicode sandbox binding. Projected as
+	// bridge.sandboxId.
+	SandboxId string `json:"sandboxId,omitempty"`
+
+	// TemplateId is the external cimicode template binding. Projected as
+	// bridge.templateId.
+	TemplateId string `json:"templateId,omitempty"`
 }
 
 type WorkerVolumeSpec struct {
@@ -384,6 +415,12 @@ type WorkerStatus struct {
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
+	// DisplayNameSyncedGeneration records the Worker generation whose
+	// spec.displayName was last synced to the Matrix profile. Mirrors the
+	// Human status field of the same name; used as the idempotency guard so
+	// the controller only calls SetDisplayName after a displayName change.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
+
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
 	// Values: "pod" (default), or "" before the first successful deployment.
@@ -423,6 +460,7 @@ type Team struct {
 
 type TeamSpec struct {
 	Description  string           `json:"description,omitempty"`
+	DisplayName  string           `json:"displayName,omitempty"` // friendly display name (Team room name, listings); falls back to teamName
 	TeamName     string           `json:"teamName,omitempty"`
 	Admin        *TeamAdminSpec   `json:"admin,omitempty"`
 	HumanMembers []TeamMemberSpec `json:"humanMembers,omitempty"`
@@ -480,12 +518,38 @@ type TeamStatus struct {
 	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
 	TotalWorkers   int    `json:"totalWorkers,omitempty"`
 	Message        string `json:"message,omitempty"`
+	// ObservedGeneration is the most recent generation observed by the
+	// controller. Used to detect spec changes and short-circuit expensive
+	// reconcile passes for unchanged Active teams after a controller restart
+	// or informer re-sync. Mirrors WorkerStatus.ObservedGeneration and
+	// ManagerStatus.ObservedGeneration.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// ConsecutiveFailures tracks consecutive reconcile failures for
+	// exponential backoff. Reset to 0 on any successful pass.
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+	// MaxRetriesReached stops automatic requeuing after maxTeamRetries.
+	// Reset when the user sets the agentteams.io/retry annotation on the Team CR.
+	MaxRetriesReached bool `json:"maxRetriesReached,omitempty"`
+	// ReconcileAttempt is a monotonic counter incremented on each reconcile
+	// pass. Used to correlate log entries across passes and diagnose
+	// workqueue scheduling gaps (e.g., long gaps between attempts indicate
+	// rate-limiter backoff, not slow reconcile internals).
+	ReconcileAttempt int64 `json:"reconcileAttempt,omitempty"`
+	// PhaseTransitionTime records when the current Phase was last entered.
+	// Combined with ReconcileAttempt, this reveals how long the Pending
+	// phase has been active and how many passes it took to converge.
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+	// DisplayNameSyncedGeneration records the Team generation whose
+	// spec.displayName was last applied to the Team room name. Used as the
+	// idempotency guard so ProvisionTeamRooms only renames the room after a
+	// displayName change instead of on every reconcile.
+	DisplayNameSyncedGeneration int64 `json:"displayNameSyncedGeneration,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.
 	//
 	// This slice replaces the previous ObservedMembers / MemberSpecHashes /
-	// WorkerExposedPorts trio — each of which maintained its own stale-
+	// WorkerExposedPorts trio 鈥?each of which maintained its own stale-
 	// cleanup loop and contributed independent patch churn. Consolidating
 	// them here means adding a new per-member field costs one struct field
 	// (vs one status field + one map + one cleanup loop + one consumer).
@@ -495,7 +559,7 @@ type TeamStatus struct {
 // MemberByName returns a pointer to the TeamMemberStatus entry for name,
 // or nil when no such member has been recorded. Callers that need to
 // create-on-absent must use the controller-package memberStatus helper
-// instead — we keep creation out of the API types to avoid accidental
+// instead 鈥?we keep creation out of the API types to avoid accidental
 // mutation from API response codepaths.
 func (s *TeamStatus) MemberByName(name string) *TeamMemberStatus {
 	for i := range s.Members {
@@ -520,10 +584,10 @@ type TeamMemberStatus struct {
 	// Role is "team_leader" or "worker". Mirrors MemberContext.Role and the
 	// synthesized WorkerResponse.Role exposed via /api/v1/workers/<name>.
 	Role string `json:"role,omitempty"`
-	// RoomID is the member's personal communication room with the Manager —
+	// RoomID is the member's personal communication room with the Manager 鈥?
 	// same semantic as Worker.Status.RoomID for standalone workers. Distinct
 	// from Team.Status.TeamRoomID (shared team room) and
-	// Team.Status.LeaderDMRoomID (Leader↔Admin DM). Consumers reading this
+	// Team.Status.LeaderDMRoomID (Leader鈫擜dmin DM). Consumers reading this
 	// include the AgentTeams CLI (`agt get workers <name> -o json | jq .roomID`)
 	// and the Manager Agent when it needs to target a specific member.
 	RoomID string `json:"roomID,omitempty"`
@@ -536,7 +600,7 @@ type TeamMemberStatus struct {
 	// Observed flips to true the instant ReconcileMemberInfra succeeds and
 	// stays true even if later phases fail.
 	Observed bool `json:"observed,omitempty"`
-	// Ready mirrors backend.Status ∈ {Running, Ready}, re-evaluated by
+	// Ready mirrors backend.Status 鈭?{Running, Ready}, re-evaluated by
 	// summarizeBackendReadiness on each reconcile pass. Aggregates into
 	// Team.Status.LeaderReady and Team.Status.ReadyWorkers.
 	Ready bool `json:"ready,omitempty"`
@@ -577,7 +641,10 @@ type Human struct {
 }
 
 type HumanSpec struct {
-	DisplayName       string              `json:"displayName"`
+	// DisplayName is the friendly name for this Human (Matrix profile
+	// displayname and listings). Optional: empty leaves the Matrix profile
+	// displayname unset and listings show the username.
+	DisplayName       string              `json:"displayName,omitempty"`
 	Username          string              `json:"username,omitempty"`
 	Email             string              `json:"email,omitempty"`
 	PermissionLevel   int                 `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
@@ -585,6 +652,14 @@ type HumanSpec struct {
 	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
 	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
 	Note              string              `json:"note,omitempty"`
+	// InitialPassword pins the Matrix password assigned to this Human on
+	// first provisioning. Empty means the controller generates a random
+	// one and persists it back into spec.initialPassword + status.initialPassword
+	// on creation. Only honored for password-bearing identity sources
+	// (legacy_password); external_sso humans authenticate via SSO and never
+	// receive a controller-managed password. Enforced only at provisioning
+	// time 鈥?later edits do not reset a password the user has rotated.
+	InitialPassword string `json:"initialPassword,omitempty"`
 }
 
 type IdentitySourceSpec struct {
@@ -600,6 +675,21 @@ type HumanStatus struct {
 	Rooms                       []string `json:"rooms,omitempty"`
 	EmailSent                   bool     `json:"emailSent,omitempty"`
 	Message                     string   `json:"message,omitempty"`
+	// ObservedGeneration is the most recent generation observed by the
+	// controller. Mirrors WorkerStatus.ObservedGeneration / TeamStatus /
+	// ManagerStatus: it lets restarts and informer re-syncs distinguish
+	// spec changes from plain list-based requeues.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// ConsecutiveFailures tracks consecutive reconcile failures for
+	// exponential backoff. Reset to 0 on any successful pass.
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+	// MaxRetriesReached stops automatic requeuing after maxHumanRetries.
+	// Reset when the user sets the agentteams.io/retry annotation on the Human CR.
+	MaxRetriesReached bool `json:"maxRetriesReached,omitempty"`
+	// PhaseTransitionTime records when the current Phase was last entered.
+	// Used by the backoff guard to skip passes arriving before the
+	// exponential backoff window from the last failure has elapsed.
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 }
 
 // EffectiveUsername returns the Matrix localpart for a Human.
@@ -623,7 +713,7 @@ type HumanList struct {
 // +kubebuilder:subresource:status
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// Manager represents the AgentTeams Manager Agent — the coordinator that receives
+// Manager represents the AgentTeams Manager Agent 鈥?the coordinator that receives
 // natural-language instructions from Admin and orchestrates Workers/Teams via
 // the agt CLI / Controller REST API.
 type Manager struct {
@@ -695,7 +785,7 @@ type ManagerStatus struct {
 
 	// WelcomeSent records whether the controller has already delivered the
 	// first-boot onboarding prompt to the Admin DM room. Used as the
-	// idempotency guard for reconcileManagerWelcome — once true the
+	// idempotency guard for reconcileManagerWelcome 鈥?once true the
 	// controller will not re-send even if the manager container is later
 	// recreated. The Manager Agent's own `~/soul-configured` file remains
 	// the orthogonal marker that the agent has finished the resulting

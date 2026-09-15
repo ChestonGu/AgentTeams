@@ -1,0 +1,29 @@
+apiVersion: agentteams.io/v1beta1
+credentials:
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  serviceAccountTokenPath: /var/run/secrets/agentteams/token
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY
+desired:
+  agentPackage:
+    ref: s-standalone-c0ffee/s-standalone-c0ffee.zip
+  model:
+    model: glm-5.2
+    providerId: agentteams-gateway
+  state: Running
+kind: MemberRuntimeConfig
+member:
+  matrixUserId: '@s-standalone-c0ffee:example.org'
+  name: s-standalone-c0ffee
+  personalRoomId: '!standaloneRoom:example.org'
+  role: standalone
+  runtime: copaw
+  runtimeName: s-standalone-c0ffee
+metadata:
+  generation: 1
+  updatedAt: "2026-09-02T11:26:46Z"
+storage:
+  globalSharedPrefix: shared
+  memberPrefix: agents/s-standalone-c0ffee
+  sharedPrefix: shared

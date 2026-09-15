@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/accessresolver"
@@ -72,12 +73,12 @@ type App struct {
 	credProvider credprovider.Client
 
 	// Infrastructure clients
-	matrix   matrix.Client
-	gateway  gateway.Client
-	oss      oss.StorageClient
-	ossAdmin oss.StorageAdminClient
-	agentGen *agentconfig.Generator
-	registry *backend.Registry
+	matrixOps matrix.MatrixOps // business ops abstraction (provider-specific)
+	gateway   gateway.Client
+	oss       oss.StorageClient
+	ossAdmin  oss.StorageAdminClient
+	agentGen  *agentconfig.Generator
+	registry  *backend.Registry
 
 	// Remote-cluster k8s client cache. Non-nil only when the credential
 	// provider sidecar is configured; consumed by the K8s worker backend
@@ -93,7 +94,7 @@ type App struct {
 }
 
 // New constructs the entire application dependency graph and wires everything
-// together. It does NOT start any long-running goroutines — call Start for that.
+// together. It does NOT start any long-running goroutines 鈥?call Start for that.
 func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	a := &App{cfg: cfg, namespace: cfg.Namespace()}
 
@@ -171,10 +172,10 @@ func (a *App) Start(ctx context.Context) error {
 		logger.Info("elected as leader, running cluster initialization")
 
 		init := &initializer.Initializer{
-			OSS:     a.oss,
-			Matrix:  a.matrix,
-			Gateway: a.gateway,
-			RestCfg: a.restCfg,
+			OSS:       a.oss,
+			MatrixOps: a.matrixOps,
+			Gateway:   a.gateway,
+			RestCfg:   a.restCfg,
 			Config: initializer.Config{
 				ManagerEnabled:             a.cfg.ManagerEnabled,
 				ManagerModel:               a.cfg.ManagerModel,
@@ -192,7 +193,7 @@ func (a *App) Start(ctx context.Context) error {
 				LLMAPIKey:                  a.cfg.LLMAPIKey,
 				OpenAIBaseURL:              a.cfg.OpenAIBaseURL,
 				AIStreamIdleTimeoutSeconds: a.cfg.AIStreamIdleTimeoutSeconds,
-				TuwunelURL:                 a.cfg.MatrixServerURL,
+				MatrixURL:                  a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
 				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
@@ -233,7 +234,7 @@ func (a *App) Start(ctx context.Context) error {
 		// so the bundled `agt` CLI inside this container can authenticate
 		// against the controller's HTTP API out of the box (see Dockerfile
 		// ENV AGENTTEAMS_AUTH_TOKEN_FILE / AGENTTEAMS_CONTROLLER_URL). Embedded mode
-		// only — incluster controllers typically lack the RBAC to mint
+		// only 鈥?incluster controllers typically lack the RBAC to mint
 		// arbitrary SA tokens, and operators there have kubectl + their own
 		// credentials anyway.
 		if a.cfg.KubeMode == "embedded" {
@@ -269,7 +270,7 @@ func (a *App) Stop(ctx context.Context) error {
 }
 
 // =========================================================================
-// Initialization steps — called sequentially by New()
+// Initialization steps 鈥?called sequentially by New()
 // =========================================================================
 
 func (a *App) initScheme(_ context.Context) error {
@@ -285,12 +286,25 @@ func (a *App) initInfraClients(_ context.Context) error {
 	cfg := a.cfg
 	logger := ctrl.Log.WithName("app")
 
-	a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+	// MatrixOps is selected through the single provider factory (provider.go);
+	// unknown providers were already rejected at config load, so a failure here
+	// is a programmer error.
+	ops, err := matrix.NewOps(cfg.MatrixProvider, cfg.MatrixConfig(), nil)
+	if err != nil {
+		return fmt.Errorf("init infra clients: %w", err)
+	}
+	a.matrixOps = ops
+
+	if cfg.UsesSynapse() {
+		logger.Info("matrix provider: synapse")
+	} else {
+		logger.Info("matrix provider: tuwunel")
+	}
 	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
 	a.shell = executor.NewShell(cfg.SkillsDir)
 	a.packages = executor.NewPackageResolver("/tmp/import")
 
-	// Credential provider sidecar — required for ai-gateway / external OSS /
+	// Credential provider sidecar 鈥?required for ai-gateway / external OSS /
 	// worker STS issuance, optional otherwise.
 	if cfg.CredentialProviderURL != "" {
 		a.credProvider = credprovider.NewHTTPClient(cfg.CredentialProviderURL, nil)
@@ -303,7 +317,7 @@ func (a *App) initInfraClients(_ context.Context) error {
 		a.packages.CredClient = a.credProvider
 	}
 
-	// Gateway client — provider-driven.
+	// Gateway client 鈥?provider-driven.
 	if cfg.UsesAIGateway() {
 		if a.credProvider == nil {
 			return fmt.Errorf("ai-gateway provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
@@ -324,37 +338,87 @@ func (a *App) initInfraClients(_ context.Context) error {
 		logger.Info("gateway provider: higress", "url", cfg.HigressBaseURL)
 	}
 
-	// Storage client — provider-driven. The OSS client reuses the MinIO
-	// implementation (both speak the mc CLI); when talking to external
-	// OSS the mc credentials are sourced per-invocation from the
-	// credential-provider sidecar via a CredentialSource, and the admin
-	// API is unavailable (buckets/users/policies are provisioned externally).
-	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
-	if cfg.UsesExternalOSS() {
-		if a.credProvider == nil {
-			return fmt.Errorf("oss provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
+	// Storage client 鈥?driver-selectable via AGENTTEAMS_STORAGE_DRIVER:
+	//   sdk (default): minio-go SDK, S3 protocol with a connection-pooled
+	//                  HTTP client (static AccessKey/SecretKey, or a
+	//                  CredentialSource for dynamic STS when configured).
+	//   mc (legacy):   one `mc` subprocess per call.
+	// Both implement oss.StorageClient with identical Config semantics, so
+	// the driver is a drop-in swap. External OSS (cloud S3) uses static
+	// long-lived credentials from AGENTTEAMS_FS_ACCESS_KEY / AGENTTEAMS_FS_SECRET_KEY;
+	// the admin API is unavailable (buckets/users/policies are provisioned
+	// externally).
+	var storageClient oss.StorageClient
+	switch cfg.StorageDriver {
+	case "sdk":
+		sc, err := oss.NewSDKClient(cfg.OSSConfig())
+		if err != nil {
+			return fmt.Errorf("create sdk storage client: %w", err)
 		}
-		if cfg.OSSConfig().Endpoint == "" {
+		storageClient = sc
+	case "mc":
+		storageClient = oss.NewMinIOClient(cfg.OSSConfig())
+	default:
+		return fmt.Errorf("unknown AGENTTEAMS_STORAGE_DRIVER %q (want \"sdk\" or \"mc\")", cfg.StorageDriver)
+	}
+	if cfg.UsesExternalOSS() {
+		oc := cfg.OSSConfig()
+		if oc.Endpoint == "" {
 			return fmt.Errorf("oss provider requires AGENTTEAMS_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
 		}
-		gatewayID := ""
-		if cfg.UsesAIGateway() {
-			gatewayID = cfg.GWGatewayID
+		switch {
+		case a.credProvider != nil:
+			// Dynamic STS path: per-invocation credentials sourced from
+			// the credential-provider sidecar via a CredentialSource.
+			gatewayID := ""
+			if cfg.UsesAIGateway() {
+				gatewayID = cfg.GWGatewayID
+			}
+			tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
+				SessionName: "agentteams-controller",
+				Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
+			})
+			switch sc := storageClient.(type) {
+			case *oss.SDKClient:
+				storageClient = sc.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			case *oss.MinIOClient:
+				storageClient = sc.WithCredentialSource(&ossControllerCredSource{tm: tm})
+			}
+			a.oss = storageClient
+			logger.Info("storage provider: oss (external, dynamic STS credentials)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
+		case oc.AccessKey != "" && oc.SecretKey != "":
+			// Static credential path: external S3 with a long-lived appkey/secret
+			// (e.g. a company's own S3-compatible service). Both drivers use the
+			// AccessKey/SecretKey from OSSConfig 鈥?no sidecar.
+			a.oss = storageClient
+			logger.Info("storage provider: oss (external, static credentials)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
+		default:
+			return fmt.Errorf("oss provider requires either AGENTTEAMS_CREDENTIAL_PROVIDER_URL (dynamic STS) or static AGENTTEAMS_FS_ACCESS_KEY/AGENTTEAMS_FS_SECRET_KEY")
 		}
-		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
-			SessionName: "agentteams-controller",
-			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
-		})
-		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
-		a.oss = mcClient
-		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
 	} else {
-		a.oss = mcClient
-		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)
+		a.oss = storageClient
+		logger.Info("storage provider: minio (embedded)", "driver", cfg.StorageDriver, "bucket", cfg.OSSBucket)
+		// The admin provider (MinIO user/policy management) follows the same
+		// driver switch as the storage client: sdk uses the madmin-go Admin
+		// API (default), mc forks `mc admin` subprocesses.
 		if cfg.HasMinIOAdmin() {
-			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			switch cfg.StorageDriver {
+			case "sdk":
+				sc, err := oss.NewSDKAdminClient(cfg.OSSConfig())
+				if err != nil {
+					return fmt.Errorf("create sdk admin client: %w", err)
+				}
+				a.ossAdmin = sc
+			case "mc":
+				a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+			}
 		}
 	}
+	// Package downloads go through the same StorageClient (SDK driver) so
+	// they inherit the connect timeout, retry window, and connection pool
+	// instead of forking `mc` subprocesses (whose CLI-level 30s dial timeout
+	// caused "deploy package ... mc: unable to prepare URL" failures).
+	a.packages.Storage = a.oss
 	return nil
 }
 
@@ -482,7 +546,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.provisioner = service.NewProvisioner(service.ProvisionerConfig{
-		Matrix:            a.matrix,
+		MatrixOps:         a.matrixOps,
 		Gateway:           a.gateway,
 		OSSAdmin:          a.ossAdmin,
 		Creds:             credStore,
@@ -565,18 +629,23 @@ func (a *App) initReconcilers(_ context.Context) error {
 		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
 		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
 		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
+		MaxConcurrentReconciles:     a.cfg.WorkerMaxConcurrentReconciles,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
 	if _, err := (&controller.TeamReconciler{
-		Client:          a.mgr.GetClient(),
-		Provisioner:     a.provisioner,
-		Deployer:        a.deployer,
-		ManagerConfig:   a.managerConfig,
-		DefaultRuntime:  a.cfg.DefaultWorkerRuntime,
-		GatewayClient:   a.gateway,
-		SystemAdminUser: a.cfg.MatrixAdminUser,
+		Client:                  a.mgr.GetClient(),
+		Provisioner:             a.provisioner,
+		Deployer:                a.deployer,
+		ManagerConfig:           a.managerConfig,
+		DefaultRuntime:          a.cfg.DefaultWorkerRuntime,
+		GatewayClient:           a.gateway,
+		SystemAdminUser:         a.cfg.MatrixAdminUser,
+		ReconcileTimeout:        time.Duration(a.cfg.TeamReconcileTimeoutSeconds) * time.Second,
+		ReconcileInterval:       time.Duration(a.cfg.TeamReconcileIntervalSeconds) * time.Second,
+		MaxConcurrentReconciles: a.cfg.TeamMaxConcurrentReconciles,
+		ActiveNoRequeue:         a.cfg.TeamActiveNoRequeue,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -746,7 +815,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	// Note: production Pod CRUD in K8sBackend still goes through the direct
 	// kubernetes.Interface client (see internal/backend/kubernetes.go), not
 	// the manager cache, so narrowing the cache only scopes the event
-	// stream feeding the Pod .Watches source — it does not affect Get/
+	// stream feeding the Pod .Watches source 鈥?it does not affect Get/
 	// Create/Delete by exact name.
 	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: a.cfg.ControllerName})
 	opts.Cache.ByObject = map[crclient.Object]cache.ByObject{
@@ -787,9 +856,9 @@ const adminCLITokenPath = "/var/run/agentteams/cli-token"
 // bootstrapAdminCLIToken ensures the admin ServiceAccount exists, mints a
 // fresh long-lived token for it, and writes it to adminCLITokenPath so the
 // in-container `agt` CLI can authenticate without the operator having to
-// pass `-e AGENTTEAMS_AUTH_TOKEN=…` on every `docker exec`.
+// pass `-e AGENTTEAMS_AUTH_TOKEN=鈥 on every `docker exec`.
 //
-// Failures here are surfaced to the caller but treated as non-fatal — the
+// Failures here are surfaced to the caller but treated as non-fatal 鈥?the
 // controller is still fully functional, only the in-container CLI sugar is
 // degraded (operator can still hit the HTTP API directly with their own
 // SA token, or re-run after a controller restart).
@@ -805,7 +874,7 @@ func bootstrapAdminCLIToken(ctx context.Context, prov *service.Provisioner) erro
 		return fmt.Errorf("mint admin SA token: %w", err)
 	}
 	if token == "" {
-		// k8sClient was nil — embedded mode without an apiserver should
+		// k8sClient was nil 鈥?embedded mode without an apiserver should
 		// never happen in practice, but this keeps the function safe to
 		// call from unit-test wiring.
 		return nil

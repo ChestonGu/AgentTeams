@@ -133,6 +133,26 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end }}
 
+{{- define "agentteams.synapse.fullname" -}}
+{{- printf "%s-synapse" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "agentteams.synapse.clusterFQDN" -}}
+{{- printf "%s.%s.svc.cluster.local" (include "agentteams.synapse.fullname" .) (include "agentteams.namespace" .) -}}
+{{- end }}
+
+{{- define "agentteams.synapse.internalURL" -}}
+{{- printf "http://%s:%d" (include "agentteams.synapse.clusterFQDN" .) (.Values.matrix.synapse.service.port | int) -}}
+{{- end }}
+
+{{- define "agentteams.synapse.serverName" -}}
+{{- if .Values.matrix.serverName -}}{{- .Values.matrix.serverName -}}{{- else -}}{{- include "agentteams.synapse.clusterFQDN" . -}}{{- end -}}
+{{- end }}
+
+{{- define "agentteams.synapse.postgres.fullname" -}}
+{{- printf "%s-synapse-pg" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "agentteams.minio.internalURL" -}}
 {{- printf "http://%s.%s.svc.cluster.local:%d" (include "agentteams.minio.fullname" .) (include "agentteams.namespace" .) (.Values.storage.minio.service.apiPort | int) }}
 {{- end }}
@@ -146,12 +166,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "agentteams.higress.gatewayURL" -}}
-{{- $port := 80 }}
-{{- if and .Values.higress (index .Values.higress "higress-core") }}
-{{- $gw := index (index .Values.higress "higress-core") "gateway" | default dict }}
-{{- $port = $gw.httpPort | default 80 }}
-{{- end }}
-{{- printf "http://higress-gateway.%s.svc.cluster.local:%d" (include "agentteams.namespace" .) ($port | int) }}
+{{/* In-cluster gateway URL must use the gateway *Service* port, not the
+     pod-side httpPort: with global.local the chart binds hostPort=httpPort,
+     and moving httpPort to dodge a host conflict (e.g. 18080 beside a
+     production gateway on 80) must not leak into the URL workers call —
+     the Service still listens on port 80. Override via gateway.internalPort
+     if the Service port itself ever changes. */ -}}
+{{- $port := (.Values.gateway.internalPort | default 80) | int }}
+{{- printf "http://higress-gateway.%s.svc.cluster.local:%d" (include "agentteams.namespace" .) $port }}
 {{- end }}
 
 {{/* ── ServiceAccount helpers ──────────────────────────────────────────── */}}
@@ -178,6 +200,16 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openclaw.repository $tag }}
 {{- end }}
 
+{{/* worker-bridge (cimicode-bridge) image; renders "" when no repository is
+     configured — the controller then fails fast on worker-bridge creates
+     unless spec.image names an image (prevents silent openclaw fallback). */}}
+{{- define "agentteams.worker.workerBridgeImage" -}}
+{{- if .Values.worker.defaultImage.workerBridge.repository }}
+{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.workerBridge.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.workerBridge.repository $tag }}
+{{- end }}
+{{- end }}
+
 {{- define "agentteams.worker.copawImage" -}}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.copaw.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.copaw.repository $tag }}
@@ -192,3 +224,9 @@ app.kubernetes.io/component: {{ .component }}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
 {{- end }}
+
+{{- /* appservice.pushURL: the controller HTTP endpoint registered with the homeserver for AS transaction push. Empty = passwordless-only mode (no url field in the registration). Single source of truth for the synapse-appservice Secret and the controller env. */ -}}
+{{- define "agentteams.appservice.pushURL" -}}
+{{- .Values.matrix.appservice.pushURL | default "" -}}
+{{- end -}}
+

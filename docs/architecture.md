@@ -118,11 +118,12 @@ flowchart TB
 
 ## Communication mechanisms
 
-### Matrix (Tuwunel)
+### Matrix (Tuwunel / Synapse)
 
 - **Human ↔ Manager ↔ Worker** (and **Team Leader** / team room) use the **Matrix** client-server API.
 - Rooms provide **human-in-the-loop** visibility: assignments, progress, and interventions share the same timeline.
-- Tuwunel is a **conduwuit**-family homeserver; configuration uses the **`CONDUWUIT_`** environment prefix.
+- Two homeserver providers are supported behind the same business-level **`MatrixOps`** abstraction (selected by `AGENTTEAMS_MATRIX_PROVIDER`, default `tuwunel`): **Tuwunel** (a conduwuit-family homeserver; configuration uses the **`CONDUWUIT_`** environment prefix) and **Synapse 1.127+** (Helm default; see [synapse.md](synapse.md)).
+- The business layer (Provisioner, Initializer, HTTP handlers) depends **only** on `MatrixOps` — it never references raw protocol clients (`matrix.Client`, `TuwunelClient`, `SynapseClient`) or provider-specific commands (`!admin …`). All provider differences (admin-bot chat vs Synapse REST admin API, `force-leave-room` vs `force-join`/`make_room_admin` recovery, declarative vs runtime AppService registration) are encapsulated inside the per-provider `MatrixOps` implementations in `internal/matrix`.
 
 ### MinIO (or compatible S3 / OSS)
 
@@ -167,7 +168,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 ### CRDs (`agentteams.io/v1beta1`)
 
 1. **Worker** — model, runtime, image, skills, MCP servers, optional **expose** ports, **channelPolicy**, **state** (`Running` / `Sleeping` / `Stopped`), **accessEntries** (cloud credential scoping when provider sidecar is used).
-2. **Manager** — model, runtime, image, soul/agents overrides, skills, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
+2. **Manager** — model, runtime, image, soul/agents overrides, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
 3. **Team** — **Leader** + **Workers** specs, optional **admin**, **peerMentions**, team **channelPolicy**; status aggregates member readiness and rooms (**team room**, **leader DM**, per-member **RoomID** with Manager).
 4. **Human** — display name, email, **permissionLevel**, accessible teams/workers; status includes Matrix user, initial password (once), rooms.
 
@@ -207,7 +208,7 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 ### Worker skills
 
 - **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
-- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): the Manager can push selected packages to workers when `spec.skills` references them.
+- **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): after an administrator asks the Manager to install a named skill for a Worker, the Manager verifies and uploads the skill before adding it to `spec.skills`.
 
 ### Team Leader skills
 

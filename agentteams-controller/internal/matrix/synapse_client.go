@@ -1,0 +1,156 @@
+package matrix
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+)
+
+// SynapseClient implements Client for Synapse homeservers.
+//
+// It embeds the provider-neutral *matrixClient to reuse the shared
+// /_matrix/client/v3/* CS API surface. Synapse-specific admin operations go
+// through the REST helpers below (synAdminCall, synResetPassword,
+// synDeactivateUser, synSetDisplayName, MakeRoomAdmin, DeleteRoom) and the
+// Synapse-native EnsureUser (PUT /_synapse/admin/v2/users/{id}), NOT through
+// any Tuwunel concept.
+//
+// AdminCommand is explicitly defined to return an error as a regression guard:
+// even though *matrixClient no longer carries AdminCommand (it lives on
+// *TuwunelClient), this guard ensures any future accidental re-addition to
+// matrixClient surfaces immediately on Synapse rather than silently delivering
+// a "!admin" message into a Synapse room.
+type SynapseClient struct {
+	*matrixClient
+}
+
+// Compile-time assertion that SynapseClient satisfies the Client interface.
+var _ Client = (*SynapseClient)(nil)
+
+// NewSynapseClient creates a Matrix client for a Synapse homeserver.
+func NewSynapseClient(cfg Config, httpClient *http.Client) *SynapseClient {
+	return &SynapseClient{matrixClient: newMatrixClient(cfg, httpClient)}
+}
+
+// AdminCommand is a Tuwunel-only concept (sends a "!admin ..." chat message to
+// the Tuwunel admin bot room). Synapse has no admin bot — it exposes a REST
+// admin API consumed directly by the SynapseMatrixOps layer. This method
+// exists as a regression guard: it returns an explicit error so that if
+// AdminCommand is ever accidentally re-added to *matrixClient, the Synapse
+// path surfaces the problem immediately instead of silently sending a
+// "!admin" message into a Synapse room. Callers that need a Synapse admin
+// operation should use the SynapseMatrixOps methods (DissolveRoom,
+// DeactivateUser, ResetUserPassword, …), which call synAdminCall /
+// MakeRoomAdmin / etc. directly.
+func (s *SynapseClient) AdminCommand(ctx context.Context, command string) error {
+	return fmt.Errorf("synapse: AdminCommand %q not supported — Synapse has no admin bot; use SynapseMatrixOps methods (REST admin API) instead", command)
+}
+
+// synAdminCall issues a Synapse admin REST request with the cached admin
+// token and treats 2xx as success. The admin account (AGENTTEAMS_ADMIN_USER)
+// must be a Synapse server admin, or these endpoints return 403.
+func (s *SynapseClient) synAdminCall(ctx context.Context, method, path string, body interface{}) error {
+	token, err := s.ensureAdminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("synapse admin %s %s: %w", method, path, err)
+	}
+	statusCode, respBody, err := s.doJSON(ctx, method, path, token, body, nil)
+	if err != nil {
+		return fmt.Errorf("synapse admin %s %s: %w", method, path, err)
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return fmt.Errorf("synapse admin %s %s: HTTP %d: %s", method, path, statusCode, truncate(respBody, 500))
+	}
+	return nil
+}
+
+func (s *SynapseClient) synResetPassword(ctx context.Context, userID, password string) error {
+	path := "/_synapse/admin/v1/reset_password/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPost, path, map[string]string{"new_password": password})
+}
+
+// synDeactivateUser deactivates a user account via the Synapse admin API.
+// erase=false keeps the user's data (room memberships, messages) intact —
+// matching Tuwunel's deactivate semantics, which also do not erase.
+func (s *SynapseClient) synDeactivateUser(ctx context.Context, userID string) error {
+	path := "/_synapse/admin/v1/deactivate/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPost, path, map[string]bool{"erase": false})
+}
+
+// synSetDisplayName updates a user's displayname via the Synapse admin REST
+// users endpoint (PUT /_synapse/admin/v2/users/{id} accepts a displayname
+// field without touching the password). Used as the admin-identity fallback
+// when no user access token is available.
+func (s *SynapseClient) synSetDisplayName(ctx context.Context, userID, displayName string) error {
+	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
+	return s.synAdminCall(ctx, http.MethodPut, path, map[string]string{"displayname": displayName})
+}
+
+// EnsureUser creates (or re-creates) the Matrix user via the Synapse admin
+// API, then logs in to obtain an access token. This is Synapse-specific:
+// Tuwunel's client /register with m.login.registration_token is single-step,
+// but Synapse's registration_token UI auth requires a session (two-step) and
+// rejects the single-step submission with M_INVALID_PARAM "Invalid login
+// submission". The admin API (PUT /_synapse/admin/v2/users/{id}) creates the
+// user directly with a password — no registration_token / session needed.
+// Idempotent: PUT sets the password whether the user is new or already exists.
+//
+// The PUT deliberately does NOT carry a displayname field. The profile display
+// name is owned by the business layer (ProvisionWorker sets spec.displayName
+// right after registration; ProvisionManager pins the Manager identity; the
+// member displayName sync keeps it converged), and this method is re-invoked
+// on every idempotent password-mode re-provision — hardcoding
+// "displayname": req.Username here previously clobbered any controller-set
+// friendly display name on the next re-provision, resurrecting the raw
+// localpart in rooms until the next generation-gated sync fired.
+func (s *SynapseClient) EnsureUser(ctx context.Context, req EnsureUserRequest) (*UserCredentials, error) {
+	return s.EnsureUserWithOptions(ctx, req, LoginOptions{})
+}
+
+func (s *SynapseClient) EnsureUserWithOptions(ctx context.Context, req EnsureUserRequest, opts LoginOptions) (*UserCredentials, error) {
+	password := req.Password
+	if password == "" {
+		var err error
+		password, err = GeneratePassword(16)
+		if err != nil {
+			return nil, fmt.Errorf("generate password: %w", err)
+		}
+	}
+	userID := s.UserID(req.Username)
+
+	// Create or update the user via the Synapse admin API.
+	// logout_devices=false keeps existing device sessions alive when this PUT
+	// re-applies to an already-provisioned user (idempotent reconcile). Synapse
+	// 1.127 defaults logout_devices to true on UserRestServletV2, which would
+	// silently kill running worker/human sessions on every re-provision.
+	// deactivated=false reactivates a leftover account: Synapse cannot hard-delete
+	// users (deactivate keeps the row), so an account deactivated by a prior
+	// delete flow (or an admin) still occupies the ID. Without an explicit
+	// "deactivated": false the PUT leaves the deactivation state unchanged
+	// ("If unspecified, deactivation state will be left unchanged"), and a
+	// same-named re-created Worker/Human either gets M_USER_IN_USE on older
+	// Synapse or stays deactivated and fails login on newer versions. This makes
+	// recreate-after-delete converge like the Tuwunel orphan-recovery path.
+	path := "/_synapse/admin/v2/users/" + url.PathEscape(userID)
+	body := map[string]interface{}{
+		"password":       password,
+		"logout_devices": false,
+		"deactivated":    false,
+	}
+	if err := s.synAdminCall(ctx, http.MethodPut, path, body); err != nil {
+		return nil, fmt.Errorf("synapse create user %s: %w", req.Username, err)
+	}
+
+	// Login to obtain an access token for the (now guaranteed) account.
+	token, err := s.LoginWithOptions(ctx, req.Username, password, opts)
+	if err != nil {
+		return nil, fmt.Errorf("synapse login %s after create: %w", req.Username, err)
+	}
+	return &UserCredentials{
+		UserID:      userID,
+		AccessToken: token,
+		Password:    password,
+		Created:     true,
+	}, nil
+}

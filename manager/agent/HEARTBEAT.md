@@ -163,6 +163,10 @@ If the output is `available`, proceed with the following steps:
    bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action sync-status
    ```
 
+<!-- Auto-sleep disabled (v1.2.2-openclaw-patch): Workers stay Running until
+     manually stopped. lifecycle-worker.sh --action check-idle is also a no-op
+     (double insurance). Original step preserved below for future re-enable:
+
 2. Detect idle Workers and auto-stop those that have exceeded the timeout:
    ```bash
    bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
@@ -171,6 +175,7 @@ If the output is `available`, proceed with the following steps:
    ```
    Worker <name> container has been automatically paused due to idle timeout. It will be automatically resumed when a task is assigned.
    ```
+-->
 
 ---
 

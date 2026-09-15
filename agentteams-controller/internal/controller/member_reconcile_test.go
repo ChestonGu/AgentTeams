@@ -96,6 +96,133 @@ func TestValidateMemberDeploymentRejectsRemote(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberInfraSyncsDisplayNameWhenConfigured(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                        "leader-cr",
+		RuntimeName:                 "leader",
+		DisplayName:                 "Team Leader",
+		Generation:                  3,
+		ExistingMatrixUserID:        "@leader:localhost",
+		ExistingRoomID:              "!leader:localhost",
+		DisplayNameSyncedGeneration: 2,
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 1 {
+		t.Fatalf("SetDisplayName calls=%d, want 1", len(prov.Calls.SetDisplayName))
+	}
+	if got := prov.Calls.SetDisplayName[0]; got.UserID != "@leader:localhost" || got.DisplayName != "Team Leader" {
+		t.Fatalf("SetDisplayName call=%+v, want userID @leader:localhost displayName Team Leader", got)
+	}
+	if !state.DisplayNameSynced {
+		t.Fatal("state.DisplayNameSynced=false, want true")
+	}
+}
+
+func TestReconcileMemberInfraRestoresWorkerGatewayAuth(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                 "leader-cr",
+		RuntimeName:          "leader",
+		ExistingMatrixUserID: "@leader:localhost",
+		ExistingRoomID:       "!leader:localhost",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	calls := prov.Calls.EnsureWorkerGatewayAuth
+	if len(calls) != 1 {
+		t.Fatalf("EnsureWorkerGatewayAuth calls=%d, want 1", len(calls))
+	}
+	if got := calls[0]; got.Name != "leader" || got.GatewayKey != "mock-gw-key-leader" {
+		t.Fatalf("EnsureWorkerGatewayAuth call=%+v, want name leader key mock-gw-key-leader", got)
+	}
+}
+
+func TestReconcileMemberInfraRestoresWorkerGatewayAuthOnAlreadyInRoom(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	prov.ProvisionWorkerFn = func(context.Context, service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error) {
+		return nil, errors.New("HTTP 403 ... already in the room")
+	}
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:        "leader-cr",
+		RuntimeName: "leader",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	calls := prov.Calls.EnsureWorkerGatewayAuth
+	if len(calls) != 1 {
+		t.Fatalf("EnsureWorkerGatewayAuth calls=%d, want 1", len(calls))
+	}
+	if got := calls[0]; got.Name != "leader" || got.GatewayKey != "mock-gw-key-leader" {
+		t.Fatalf("EnsureWorkerGatewayAuth call=%+v, want name leader key mock-gw-key-leader", got)
+	}
+}
+
+func TestReconcileMemberInfraSkipsDisplayNameSyncWhenGenerationSynced(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                        "leader-cr",
+		RuntimeName:                 "leader",
+		DisplayName:                 "Team Leader",
+		Generation:                  3,
+		ExistingMatrixUserID:        "@leader:localhost",
+		ExistingRoomID:              "!leader:localhost",
+		DisplayNameSyncedGeneration: 3,
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 0 {
+		t.Fatalf("SetDisplayName calls=%d, want 0", len(prov.Calls.SetDisplayName))
+	}
+	if state.DisplayNameSynced {
+		t.Fatal("state.DisplayNameSynced=true, want false")
+	}
+}
+
+func TestReconcileMemberInfraSkipsDisplayNameSyncWithoutDisplayName(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                 "leader-cr",
+		RuntimeName:          "leader",
+		Generation:           3,
+		ExistingMatrixUserID: "@leader:localhost",
+		ExistingRoomID:       "!leader:localhost",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.SetDisplayName) != 0 {
+		t.Fatalf("SetDisplayName calls=%d, want 0", len(prov.Calls.SetDisplayName))
+	}
+}
+
 func TestReconcileMemberInfraPreservesTeamStorageAccess(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}
@@ -544,7 +671,7 @@ func TestCreateMemberContainerConflictRequeues(t *testing.T) {
 	}
 }
 
-func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
+func TestReconcileMemberConfigQwenPawDistributesSkillsAndWritesRuntimeConfig(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{
 		MatrixUserID: "@worker-a:matrix.local",
@@ -591,8 +718,54 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 	if req.TeamName != "" || req.TeamRoomID != "" || len(req.TeamMembers) != 0 {
 		t.Fatalf("Worker reconciliation must not inject Team-owned context: %#v", req)
 	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 1 {
+		t.Fatalf("qwenpaw must distribute skills and skip the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
+func TestReconcileMemberConfigWorkerBridgeWritesRuntimeConfig(t *testing.T) {
+	// runtime=worker-bridge rides the same managed-runtime projection as
+	// qwenpaw: the bridge pod boots from runtime/runtime.yaml, never from the
+	// legacy openclaw.json file path.
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@worker-oc:matrix.local",
+		RoomID:       "!worker-dm:matrix.local",
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:        "worker-cr-oc",
+		RuntimeName: "worker-oc",
+		Role:        RoleStandalone,
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "worker-bridge",
+			Model:   "native-config",
+			Soul:    "Be terse.",
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Name != "worker-cr-oc" || req.RuntimeName != "worker-oc" || req.Runtime != "worker-bridge" {
+		t.Fatalf("unexpected runtime config request: %#v", req)
+	}
+	if req.MatrixAccessToken != "" {
+		t.Fatalf("worker-bridge takes the matrix token via env, not the runtime config: %#v", req)
+	}
 	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
-		t.Fatalf("qwenpaw must skip file-based deploy path, got package=%d inline=%d config=%d skills=%d",
+		t.Fatalf("worker-bridge must skip the legacy file-based config path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }

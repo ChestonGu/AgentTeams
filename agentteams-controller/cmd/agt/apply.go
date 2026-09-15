@@ -193,7 +193,7 @@ func applyWorkerSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&zipFile, "zip", "", "Local ZIP package (manifest.json)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|worker-bridge)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -215,7 +215,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 		return fmt.Errorf("read ZIP %s: %w", zipPath, err)
 	}
 
-	model, manifestRuntime := extractWorkerFieldsFromZip(zipData)
+	model, manifestRuntime, manifestAdapterMode := extractWorkerFieldsFromZip(zipData)
 	if model == "" {
 		model = defaultWorkerModel()
 	}
@@ -248,6 +248,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 			"package": pkgResp.PackageUri,
 		}
 		setIfNotEmpty(updateBody, "runtime", runtime)
+		setIfNotEmpty(updateBody, "adapterMode", manifestAdapterMode)
 		if err := client.DoJSON("PUT", "/api/v1/workers/"+name, updateBody, &resp); err != nil {
 			return fmt.Errorf("update worker/%s: %w", name, err)
 		}
@@ -259,6 +260,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 			"package": pkgResp.PackageUri,
 		}
 		setIfNotEmpty(createBody, "runtime", runtime)
+		setIfNotEmpty(createBody, "adapterMode", manifestAdapterMode)
 		if err := client.DoJSON("POST", "/api/v1/workers", createBody, &resp); err != nil {
 			return fmt.Errorf("create worker/%s: %w", name, err)
 		}
@@ -342,18 +344,19 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 // ---------------------------------------------------------------------------
 
 // extractWorkerFieldsFromZip reads manifest.json from the ZIP and extracts the
-// model and runtime fields. Both top-level and `worker.<field>` placements are
-// honored; the worker block takes precedence to match the documented schema in
-// docs/import-worker.md.
+// model, runtime, and adapterMode fields. Both top-level and `worker.<field>`
+// placements are honored; the worker block takes precedence to match the
+// documented schema in docs/import-worker.md.
 //
-// Either return value may be empty when the manifest does not declare it (or
+// Any return value may be empty when the manifest does not declare it (or
 // when the ZIP has no manifest at all). Callers are expected to fall back to
 // their own defaults (model → defaultWorkerModel(), which prefers
-// $AGENTTEAMS_DEFAULT_MODEL; runtime → server-side default).
-func extractWorkerFieldsFromZip(zipData []byte) (model, runtime string) {
+// $AGENTTEAMS_DEFAULT_MODEL; runtime → server-side default; adapterMode →
+// controller-side empty normalization, see the Worker CR adapterMode field).
+func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode string) {
 	r, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 
 	for _, f := range r.File {
@@ -362,13 +365,13 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime string) {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return "", ""
+			return "", "", ""
 		}
 		defer rc.Close()
 
 		var manifest map[string]interface{}
 		if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
-			return "", ""
+			return "", "", ""
 		}
 
 		if m, ok := manifest["model"].(string); ok && m != "" {
@@ -377,6 +380,9 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime string) {
 		if rt, ok := manifest["runtime"].(string); ok && rt != "" {
 			runtime = rt
 		}
+		if am, ok := manifest["adapterMode"].(string); ok && am != "" {
+			adapterMode = am
+		}
 		if w, ok := manifest["worker"].(map[string]interface{}); ok {
 			if m, ok := w["model"].(string); ok && m != "" {
 				model = m
@@ -384,8 +390,11 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime string) {
 			if rt, ok := w["runtime"].(string); ok && rt != "" {
 				runtime = rt
 			}
+			if am, ok := w["adapterMode"].(string); ok && am != "" {
+				adapterMode = am
+			}
 		}
-		return model, runtime
+		return model, runtime, adapterMode
 	}
-	return "", ""
+	return "", "", ""
 }

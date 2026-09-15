@@ -658,6 +658,76 @@ func TestInviteToRoom_Idempotent(t *testing.T) {
 	}
 }
 
+func TestInviteToRoom_IdempotentTuwunelJoinedOrBanned(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/invite":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "M_FORBIDDEN: Auth check failed: cannot invite user that is joined or banned",
+			})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{
+						"state_key": "@alice:d",
+						"content":   map[string]string{"membership": "join"},
+					},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.InviteToRoom(context.Background(), "!room:d", "@alice:d"); err != nil {
+		t.Errorf("expected nil for joined member, got %v", err)
+	}
+}
+
+func TestInviteToRoom_TuwunelJoinedOrBannedKeepsBanError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/invite":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "M_FORBIDDEN: Auth check failed: cannot invite user that is joined or banned",
+			})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{
+						"state_key": "@alice:d",
+						"content":   map[string]string{"membership": "ban"},
+					},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.InviteToRoom(context.Background(), "!room:d", "@alice:d"); err == nil {
+		t.Fatal("expected banned member error, got nil")
+	}
+}
+
 func TestInviteToRoom_RealError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -679,6 +749,102 @@ func TestInviteToRoom_RealError(t *testing.T) {
 		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
 	}, server.Client())
 	if err := c.InviteToRoom(context.Background(), "!room:d", "@alice:d"); err == nil {
+		t.Error("expected error for unrelated 403, got nil")
+	}
+}
+
+func TestJoinRoom_Idempotent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/join":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "@admin:d is already in the room",
+			})
+		case "/_matrix/client/v3/account/whoami":
+			json.NewEncoder(w).Encode(map[string]string{"user_id": "@alice:d"})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{"state_key": "@alice:d", "content": map[string]string{"membership": "join"}},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.JoinRoom(context.Background(), "!room:d", "user-token"); err != nil {
+		t.Errorf("expected nil for already-in-room (verified joined), got %v", err)
+	}
+}
+
+func TestJoinRoom_AlreadyClaimNotJoinedIsError(t *testing.T) {
+	// The homeserver claims "already in the room" but the member list says
+	// otherwise — the historical blanket-swallow read this as joined and the
+	// drift went unnoticed forever. It must surface as an error now.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/join":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "@alice:d is already in the room",
+			})
+		case "/_matrix/client/v3/account/whoami":
+			json.NewEncoder(w).Encode(map[string]string{"user_id": "@alice:d"})
+		case "/_matrix/client/v3/rooms/!room:d/members":
+			json.NewEncoder(w).Encode(map[string]any{
+				"chunk": []map[string]any{
+					{"state_key": "@bob:d", "content": map[string]string{"membership": "join"}},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.JoinRoom(context.Background(), "!room:d", "user-token"); err == nil {
+		t.Error("expected error when membership contradicts the already-in-room claim, got nil")
+	}
+}
+
+func TestJoinRoom_RealError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/join":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "you are banned from this room",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+	if err := c.JoinRoom(context.Background(), "!room:d", "user-token"); err == nil {
 		t.Error("expected error for unrelated 403, got nil")
 	}
 }

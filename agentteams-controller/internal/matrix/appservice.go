@@ -106,7 +106,7 @@ func (c *TuwunelClient) UnregisterAppService(ctx context.Context, id string) err
 // AppServiceSmokeTest verifies that the AppService registration is active by
 // attempting an AS login as the sender_localpart user. Retries up to 5 times
 // with 2-second intervals to account for async admin command processing.
-func (c *TuwunelClient) AppServiceSmokeTest(ctx context.Context) error {
+func (c *matrixClient) AppServiceSmokeTest(ctx context.Context) error {
 	sender := c.config.AppServiceSenderLocalpart
 	if sender == "" {
 		return fmt.Errorf("appservice smoke test: sender_localpart not configured")

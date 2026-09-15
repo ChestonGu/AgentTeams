@@ -156,6 +156,9 @@ func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, 
 //     as sidecars. If template has a container named "worker", its fields
 //     serve as a base that overlay.Container's Name/Image/Env/WorkingDir/
 //     ImagePullPolicy overwrite (empty overlay fields fall through to template).
+//     Env is the exception: template env entries are kept and overlay entries
+//     overwrite on name collision (operator extras from the ConfigMap ride
+//     along; controller-computed vars always win).
 //     overlay.TokenVolumeMount is always appended to the agent container's
 //     volumeMounts. Resources: overlay.ResourcesOverride wins, else template
 //     container.Resources if non-empty, else overlay.DefaultResources.
@@ -241,9 +244,12 @@ func overlayAgentContainer(base corev1.Container, overlay PodOverlay) corev1.Con
 	} else if out.ImagePullPolicy == "" {
 		out.ImagePullPolicy = corev1.PullIfNotPresent
 	}
-	if len(overlay.Container.Env) > 0 {
-		out.Env = overlay.Container.Env
-	}
+	// Env is a hybrid merge (labels-style): template env entries ship first,
+	// overlay entries overwrite on name collision — the controller-computed
+	// AGENTTEAMS_* set always wins, while operator-provided extras from the
+	// pod-template ConfigMap (e.g. COPAW_TOOL_GUARD_ENABLED=false) ride along
+	// into every agent pod without per-CR patching.
+	out.Env = mergeEnvVars(out.Env, overlay.Container.Env)
 	if overlay.Container.WorkingDir != "" {
 		out.WorkingDir = overlay.Container.WorkingDir
 	}
@@ -264,6 +270,33 @@ func overlayAgentContainer(base corev1.Container, overlay PodOverlay) corev1.Con
 
 func isResourcesEmpty(r corev1.ResourceRequirements) bool {
 	return len(r.Limits) == 0 && len(r.Requests) == 0 && len(r.Claims) == 0
+}
+
+// mergeEnvVars returns base + overrides with overrides winning on env-var
+// name collision (same semantics as mergeStringMaps). A new slice is
+// returned; inputs are not mutated.
+func mergeEnvVars(base, overrides []corev1.EnvVar) []corev1.EnvVar {
+	if len(base) == 0 {
+		return overrides
+	}
+	if len(overrides) == 0 {
+		return base
+	}
+	index := make(map[string]int, len(base)+len(overrides))
+	out := make([]corev1.EnvVar, 0, len(base)+len(overrides))
+	for _, ev := range base {
+		index[ev.Name] = len(out)
+		out = append(out, ev)
+	}
+	for _, ev := range overrides {
+		if i, ok := index[ev.Name]; ok {
+			out[i] = ev
+			continue
+		}
+		index[ev.Name] = len(out)
+		out = append(out, ev)
+	}
+	return out
 }
 
 // mergeStringMaps returns base + overrides with overrides winning on

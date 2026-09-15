@@ -6,6 +6,7 @@ import v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1
 
 type CreateWorkerRequest struct {
 	Name          string                             `json:"name"`
+	DisplayName   string                             `json:"displayName,omitempty"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
@@ -20,6 +21,14 @@ type CreateWorkerRequest struct {
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+
+	// worker-bridge runtime binding (projected to the runtime.yaml bridge
+	// section). Ignored for other runtimes.
+	AdapterMode        string `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId          string `json:"sessionId,omitempty"`
+	SandboxId          string `json:"sandboxId,omitempty"`
+	TemplateId         string `json:"templateId,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -30,6 +39,7 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
+	DisplayName   string                             `json:"displayName,omitempty"`
 	WorkerName    string                             `json:"workerName,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
@@ -44,6 +54,15 @@ type UpdateWorkerRequest struct {
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+
+	// worker-bridge runtime binding. Update semantics: non-empty values
+	// overwrite the CR fields; empty values leave them untouched (bindings
+	// can be re-pointed but not cleared through the update path).
+	AdapterMode        string `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId          string `json:"sessionId,omitempty"`
+	SandboxId          string `json:"sandboxId,omitempty"`
+	TemplateId         string `json:"templateId,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -55,6 +74,7 @@ type UpdateWorkerRequest struct {
 
 type WorkerResponse struct {
 	Name             string                     `json:"name"`
+	DisplayName      string                     `json:"displayName,omitempty"`
 	WorkerName       string                     `json:"workerName,omitempty"`
 	Phase            string                     `json:"phase"`
 	ContainerManaged bool                       `json:"containerManaged"`
@@ -68,6 +88,11 @@ type WorkerResponse struct {
 	Skills           []string                   `json:"skills,omitempty"`
 	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
 	Package          string                     `json:"package,omitempty"`
+	AdapterMode      string                     `json:"adapterMode,omitempty"`
+	CimicodeGatewayUrl string                  `json:"cimicodeGatewayUrl,omitempty"`
+	SessionId        string                     `json:"sessionId,omitempty"`
+	SandboxId        string                     `json:"sandboxId,omitempty"`
+	TemplateId       string                     `json:"templateId,omitempty"`
 	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
 	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 	ContainerState   string                     `json:"containerState,omitempty"`
@@ -77,6 +102,13 @@ type WorkerResponse struct {
 	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
 	Team             string                     `json:"team,omitempty"`
 	Role             string                     `json:"role,omitempty"`
+	// RuntimeEnv exposes the runtime-wiring subset of spec.env (keys with the
+	// BRIDGE_RUNTIME_ prefix, e.g. adapter/base_url/helper_url written by the
+	// worker-bridge operator). A bridge pod created before that wiring
+	// landed polls GET /api/v1/workers/{self} and picks these up without a
+	// pod restart. Only the prefix-filtered subset is exposed — never the
+	// full spec.env, which may carry deployment secrets.
+	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
 }
 
 type ExposedPortInfo struct {
@@ -93,6 +125,7 @@ type WorkerListResponse struct {
 
 type CreateTeamRequest struct {
 	Name           string                     `json:"name"`
+	DisplayName    string                     `json:"displayName,omitempty"`
 	TeamName       string                     `json:"teamName,omitempty"`
 	Description    string                     `json:"description,omitempty"`
 	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -104,6 +137,7 @@ type CreateTeamRequest struct {
 }
 
 type UpdateTeamRequest struct {
+	DisplayName    string                     `json:"displayName,omitempty"`
 	TeamName       string                     `json:"teamName,omitempty"`
 	Description    string                     `json:"description,omitempty"`
 	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -115,23 +149,29 @@ type UpdateTeamRequest struct {
 }
 
 type TeamResponse struct {
-	Name               string                       `json:"name"`
-	TeamName           string                       `json:"teamName,omitempty"`
-	Phase              string                       `json:"phase"`
-	Description        string                       `json:"description,omitempty"`
-	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
-	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
-	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
-	LeaderName         string                       `json:"leaderName"`
-	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
-	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
-	LeaderDMRoomID     string                       `json:"leaderDMRoomID,omitempty"`
-	LeaderReady        bool                         `json:"leaderReady"`
-	ReadyWorkers       int                          `json:"readyWorkers"`
-	TotalWorkers       int                          `json:"totalWorkers"`
-	Message            string                       `json:"message,omitempty"`
-	WorkerNames        []string                     `json:"workerNames,omitempty"`
-	WorkerExposedPorts map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	Name          string                   `json:"name"`
+	DisplayName   string                   `json:"displayName,omitempty"`
+	TeamName      string                   `json:"teamName,omitempty"`
+	Phase         string                   `json:"phase"`
+	Description   string                   `json:"description,omitempty"`
+	Admin         *v1beta1.TeamAdminSpec   `json:"admin,omitempty"`
+	HumanMembers  []v1beta1.TeamMemberSpec `json:"humanMembers,omitempty"`
+	WorkerMembers []v1beta1.TeamWorkerRef  `json:"workerMembers"`
+	// WorkerMemberDetails exposes per-member resolved metadata such as
+	// displayName and Matrix user id so API callers can show friendly names
+	// without fetching each referenced Worker separately.
+	WorkerMemberDetails []TeamWorkerDetail           `json:"workerMemberDetails,omitempty"`
+	LeaderName          string                       `json:"leaderName"`
+	HeartbeatEvery      string                       `json:"heartbeatEvery,omitempty"`
+	TeamRoomID          string                       `json:"teamRoomID,omitempty"`
+	LeaderDMRoomID      string                       `json:"leaderDMRoomID,omitempty"`
+	LeaderReady         bool                         `json:"leaderReady"`
+	ReadyWorkers        int                          `json:"readyWorkers"`
+	TotalWorkers        int                          `json:"totalWorkers"`
+	Message             string                       `json:"message,omitempty"`
+	WorkerNames         []string                     `json:"workerNames,omitempty"`
+	WorkerExposedPorts  map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
+	MemberStatuses      []TeamMemberStatusResponse   `json:"memberStatuses,omitempty"`
 }
 
 type TeamListResponse struct {
@@ -139,13 +179,40 @@ type TeamListResponse struct {
 	Total int            `json:"total"`
 }
 
+// TeamWorkerDetail provides resolved information for one Team worker member.
+type TeamWorkerDetail struct {
+	Name         string `json:"name"`
+	Role         string `json:"role,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+}
+
+type TeamMemberStatusResponse struct {
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	Role         string `json:"role,omitempty"`
+	MatrixUserID string `json:"matrixUserID,omitempty"`
+	RoomID       string `json:"roomID,omitempty"`
+}
+
 // --- Human API types ---
 
 type CreateHumanRequest struct {
-	Name              string   `json:"name"`
-	DisplayName       string   `json:"displayName"`
+	Name              string                      `json:"name"`
+	DisplayName       string                      `json:"displayName"`
+	Email             string                      `json:"email,omitempty"`
+	PermissionLevel   int                         `json:"permissionLevel"`
+	AccessibleTeams   []string                    `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string                    `json:"accessibleWorkers,omitempty"`
+	Note              string                      `json:"note,omitempty"`
+	InitialPassword   string                      `json:"initialPassword,omitempty"`
+	IdentitySource    *v1beta1.IdentitySourceSpec `json:"identitySource,omitempty"`
+}
+
+type UpdateHumanRequest struct {
+	DisplayName       string   `json:"displayName,omitempty"`
 	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"`
+	PermissionLevel   *int     `json:"permissionLevel,omitempty"`
 	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
@@ -161,7 +228,6 @@ type HumanResponse struct {
 	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
 	Note              string   `json:"note,omitempty"`
 	MatrixUserID      string   `json:"matrixUserID,omitempty"`
-	InitialPassword   string   `json:"initialPassword,omitempty"`
 	Rooms             []string `json:"rooms,omitempty"`
 	Message           string   `json:"message,omitempty"`
 }

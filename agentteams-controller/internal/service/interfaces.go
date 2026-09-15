@@ -37,10 +37,12 @@ type WorkerProvisioner interface {
 	// or resetting the password via admin if they are stale) and makes
 	// the worker leave every room it is currently joined to.
 	LeaveAllWorkerRooms(ctx context.Context, workerName string) error
-	// DeleteWorkerRoom fires an admin "!admin rooms delete-room" command
-	// for the given room. Best-effort; the actual deletion runs
-	// asynchronously inside tuwunel.
+	// DeleteWorkerRoom dissolves the given room on the Matrix homeserver via
+	// MatrixOps.DissolveRoom. Best-effort and fire-and-forget.
 	DeleteWorkerRoom(ctx context.Context, roomID string) error
+	// SetDisplayName updates a worker-like user's Matrix profile
+	// displayname using a user-scoped access token.
+	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
 	MatrixUserID(name string) string
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 	LoginAppServiceUser(ctx context.Context, username string) (string, error)
@@ -51,12 +53,24 @@ type WorkerProvisioner interface {
 	// InviteToRoom invites userID to roomID using the admin token.
 	// Idempotent: returns nil when the user is already joined/invited.
 	InviteToRoom(ctx context.Context, roomID, userID string) error
+	// JoinRoomAs accepts a room invite using the invited user's token.
+	// Idempotent: returns nil when the user has already joined.
+	JoinRoomAs(ctx context.Context, roomID, userToken string) error
+	// MissingTeamRoomMembers returns the team-room automation members (leader
+	// + workers, by Matrix ID) not currently joined. Read-only drift probe
+	// for the Team reconcile fast path.
+	MissingTeamRoomMembers(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error)
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
 	// ForceLeaveRoom removes a user whose room power level prevents a normal
 	// admin kick.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+	// LeaveManagerRoom makes the Manager leave roomID using the Manager's own
+	// token. Fallback for ForceLeaveRoom when an admin kick 403s because the
+	// Manager holds the same room power level as the admin (both 100 in worker
+	// rooms): the Manager leaving itself does not depend on kick power levels.
+	LeaveManagerRoom(ctx context.Context, roomID string) error
 	MatrixAppServiceEnabled() bool
 }
 
@@ -66,6 +80,9 @@ type WorkerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	WriteInlineConfigs(name string, spec v1beta1.WorkerSpec) error
 	DeployMemberRuntimeConfig(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
+	// RuntimeConfigReadyForBootstrap gates container creation for managed
+	// runtimes on the fully-populated runtime.yaml (member.matrixUserId).
+	RuntimeConfigReadyForBootstrap(ctx context.Context, runtimeName string) bool
 	MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
 	DeployWorkerConfig(ctx context.Context, req WorkerDeployRequest) error
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
@@ -104,8 +121,8 @@ type ManagerProvisioner interface {
 	// LeaveAllManagerRooms logs in as the manager and makes it leave every
 	// room it is currently joined to. See LeaveAllWorkerRooms.
 	LeaveAllManagerRooms(ctx context.Context, managerName string) error
-	// DeleteManagerRoom fires an admin "!admin rooms delete-room" command
-	// for the given room. See DeleteWorkerRoom.
+	// DeleteManagerRoom dissolves the given room on the Matrix homeserver via
+	// MatrixOps.DissolveRoom. See DeleteWorkerRoom.
 	DeleteManagerRoom(ctx context.Context, roomID string) error
 	DeleteManagerRoomAlias(ctx context.Context, managerName string) error
 	// IsManagerJoinedDM returns true when the Manager's Matrix user has
@@ -166,7 +183,7 @@ type HumanProvisioner interface {
 	// logs in an existing one. Called only during first-time provisioning
 	// (Status.MatrixUserID == ""); steady-state reconciles must use
 	// LoginAsHuman with the stored password instead to avoid triggering
-	// the orphan-recovery password reset inside matrix.EnsureUser, which
+	// the password-reset fallback inside MatrixOps.ProvisionUser, which
 	// would clobber any user-initiated password change made in Element.
 	//
 	// Retained for backward compatibility with the team-admin login
@@ -196,9 +213,9 @@ type HumanProvisioner interface {
 	// registration, Created=false on M_USER_IN_USE fallback.
 	RegisterAppServiceUser(ctx context.Context, username string) (*HumanCredentials, error)
 
-	// RegisterLegacyUser registers via the registration_token flow.
-	// On M_USER_IN_USE the underlying client falls through to
-	// orphan recovery (admin reset + login).
+	// RegisterLegacyUser provisions a password-mode Matrix account via
+	// MatrixOps.ProvisionUser. On existing accounts it falls through to
+	// password reset + login (provider-specific admin operation).
 	RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error)
 
 	// SetUserPassword writes a password for the given user via the
@@ -210,6 +227,8 @@ type HumanProvisioner interface {
 
 	// LoginWithPassword obtains a token via the password login flow.
 	LoginWithPassword(ctx context.Context, username, password string) (string, error)
+	// LoginWithPasswordAndOptions obtains a token with an optional device ID.
+	LoginWithPasswordAndOptions(ctx context.Context, username, password, deviceID string) (string, error)
 
 	// SetDisplayName updates the Matrix profile displayname for the user.
 	// Requires a user-scoped access token.
@@ -231,9 +250,11 @@ type HumanProvisioner interface {
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
 
-	// ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out
-	// of roomID via "!admin users force-leave-room". Fire-and-forget at
-	// the bot layer, but the admin message delivery itself is confirmed.
+	// ForceLeaveRoom removes userID from roomID even when a normal admin
+	// kick is not possible. Delegates to the MatrixOps implementation, which
+	// tries the admin kick first and falls back to the provider-specific
+	// escalation (Tuwunel admin bot force-leave, Synapse make_room_admin +
+	// kick retry) via MatrixOps.RemoveMember.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
 
 	// DeactivateHumanUser disables a Human Matrix account after membership

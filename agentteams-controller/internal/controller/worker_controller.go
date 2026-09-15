@@ -42,9 +42,10 @@ const (
 	appServiceNotReadyRequeue = 5 * time.Second
 )
 
-// WorkerReconciler reconciles standalone Worker resources. Team members are
-// owned by Team CRs and are reconciled by TeamReconciler through the shared
-// member_reconcile helpers, not by WorkerReconciler.
+// WorkerReconciler reconciles Worker resources — both standalone Workers and
+// team members referenced by Team CRs — through the shared member_reconcile
+// helpers (infra, config, container). TeamReconciler layers team-level
+// coordination/policy config on top; it does not re-run the member phases.
 type WorkerReconciler struct {
 	client.Client
 
@@ -62,7 +63,7 @@ type WorkerReconciler struct {
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
 	// when a Worker CR omits spec.runtime. Sourced from
 	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). Empty means
-	// "no operator preference" — backend.ResolveRuntime will fall back to
+	// "no operator preference" 鈥?backend.ResolveRuntime will fall back to
 	// "openclaw".
 	DefaultRuntime string
 
@@ -87,6 +88,13 @@ type WorkerReconciler struct {
 	WorkerDepsStorageEndpoint string
 	MountAuthType             string
 	MountRoleName             string
+
+	// MaxConcurrentReconciles is the Worker controller's worker parallelism.
+	// 0 or 1 keeps the controller-runtime default of 1 (legacy behavior);
+	// raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so a slow/hung
+	// Worker stops starving every other Worker — and every Team, whose Active
+	// gate waits on Worker readiness.
+	MaxConcurrentReconciles int
 }
 
 func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -206,7 +214,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
+	configOwnedByTeam := inTeam && backend.IsManagedRuntime(backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime))
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -307,7 +315,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	// Stamp or remove the service-name label on the Worker CR.
 	// IMPORTANT: snapshot base BEFORE mutating w so MergeFrom produces
-	// a non-empty patch — capturing base after the mutation makes the
+	// a non-empty patch 鈥?capturing base after the mutation makes the
 	// diff identical and the label change never lands.
 	base := w.DeepCopy()
 	if labelChanged := reconcileWorkerSvcLabel(w, svcName); labelChanged {
@@ -432,6 +440,15 @@ func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta
 					w.Status.RoomID,
 				); err != nil {
 					logger.Error(err, "failed to remove Manager from Team worker personal room (non-fatal)", "worker", w.Name, "roomID", w.Status.RoomID)
+					// Fallback: worker rooms grant Manager and admin the same
+					// power level (both 100), so the admin kick 403s and even
+					// the Synapse make_room_admin escalation cannot exceed the
+					// Manager's level. Have the Manager leave with its own
+					// token instead — no power-level dependency.
+					if leaveErr := r.Provisioner.LeaveManagerRoom(ctx, w.Status.RoomID); leaveErr != nil {
+						logger.Error(leaveErr, "manager self-leave fallback also failed (non-fatal)",
+							"worker", w.Name, "roomID", w.Status.RoomID)
+					}
 				}
 			}
 			if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -562,7 +579,7 @@ func mergeBackendResourceRequirements(defaults, override *backend.ResourceRequir
 
 // workerMemberContext translates a Worker CR into a MemberContext for the
 // shared member reconcile helpers. WorkerReconciler always produces a
-// standalone context — team semantics are injected externally by
+// standalone context 鈥?team semantics are injected externally by
 // TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
 // Worker CR annotations.
 //
@@ -626,14 +643,31 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
 		ExistingMatrixUserID: w.Status.MatrixUserID,
 		ExistingRoomID:       w.Status.RoomID,
-		CurrentExposedPorts:  w.Status.ExposedPorts,
-		Owner:                w,
-		DeployMode:           deployMode,
-		ServiceEnabled:       serviceEnabled,
-		Resources:            agentResourcesToBackend(resourceSpec),
-		BackendRuntime:       backendRuntime,
-		StatusBackendRuntime: w.Status.BackendRuntime,
+		// DisplayName falls back to the Worker CR name when spec.displayName
+		// is empty, honoring the CRD contract ("friendly display name ...
+		// falls back to workerName") and the agt --display-name flag help
+		// ("defaults to worker name"). The fallback keeps accounts born
+		// without a displayname from showing only their raw Matrix localpart.
+		DisplayName:                 effectiveWorkerDisplayName(spec.DisplayName, w.Name),
+		DisplayNameSyncedGeneration: w.Status.DisplayNameSyncedGeneration,
+		CurrentExposedPorts:         w.Status.ExposedPorts,
+		Owner:                       w,
+		DeployMode:                  deployMode,
+		ServiceEnabled:              serviceEnabled,
+		Resources:                   agentResourcesToBackend(resourceSpec),
+		BackendRuntime:              backendRuntime,
+		StatusBackendRuntime:        w.Status.BackendRuntime,
 	}
+}
+
+// effectiveWorkerDisplayName resolves the Matrix profile display name for a
+// Worker: spec.displayName wins, otherwise the Worker CR name (the
+// "workerName" contract in the CRD comment and agt --display-name help).
+func effectiveWorkerDisplayName(specDisplayName, workerCRName string) string {
+	if specDisplayName != "" {
+		return specDisplayName
+	}
+	return workerCRName
 }
 
 // applyMemberStateToWorker copies runtime state into Worker.Status fields.
@@ -658,6 +692,9 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	if state.BackendRuntime != "" {
 		w.Status.BackendRuntime = state.BackendRuntime
 	}
+	if state.DisplayNameSynced {
+		w.Status.DisplayNameSyncedGeneration = w.Generation
+	}
 }
 
 // reconcileWorkerSvcLabel adds or removes the worker Service name
@@ -673,7 +710,7 @@ func reconcileWorkerSvcLabel(w *v1beta1.Worker, svcName string) bool {
 		w.Labels[v1beta1.LabelWorkerSvcName] = svcName
 		return true
 	}
-	// Service disabled/removed — delete label if present.
+	// Service disabled/removed 鈥?delete label if present.
 	if _, exists := w.Labels[v1beta1.LabelWorkerSvcName]; !exists {
 		return false
 	}
@@ -688,8 +725,23 @@ func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr e
 }
 
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
+	// Default parallelism is 1 (controller-runtime default, legacy behavior).
+	// Operators may raise it via AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES so
+	// a slow/hung Worker stops starving every other Worker — and every Team,
+	// whose Active gate waits on Worker readiness.
+	maxConcurrent := r.MaxConcurrentReconciles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	// Startup visibility: prints the effective concurrency so a missing or
+	// mis-set AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES (or a stale image)
+	// is visible in `kubectl logs` without checking metrics.
+	mgr.GetLogger().Info("worker reconciler registered",
+		"maxConcurrentReconciles", maxConcurrent,
+		"source", "AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES")
 	bldr := ctrl.NewControllerManagedBy(mgr).
-		For(&v1beta1.Worker{})
+		For(&v1beta1.Worker{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent})
 
 	if r.Backend != nil {
 		ctx := context.Background()
@@ -725,7 +777,7 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 }
 
 // WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile
-// requests. If namespace is non-empty, it overrides obj.GetNamespace() — used
+// requests. If namespace is non-empty, it overrides obj.GetNamespace() 鈥?used
 // for remote clusters where Pod namespace != CR namespace.
 func WorkerPodMapFunc(namespace string) handler.MapFunc {
 	return func(_ context.Context, obj client.Object) []reconcile.Request {
@@ -760,17 +812,21 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //
 // Excluded (do not trigger pod recreation):
 //
-//	Model, McpServers — config-only (consumed by ReconcileMemberConfig)
-//	AccessEntries — permission-only (resolved by credential issuance)
-//	AgentIdentity, CredentialBindings — runtime credential config
-//	State, IdleTimeout — lifecycle/policy
-//	ServiceEnabled, Expose — service-only (consumed by ReconcileMemberService)
+//	Model, DisplayName, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
+//	AccessEntries 鈥?permission-only (resolved by credential issuance)
+//	AgentIdentity, CredentialBindings 鈥?runtime credential config
+//	AdapterMode, CimicodeGatewayUrl, SessionId, SandboxId, TemplateId 鈥?
+//	  worker-bridge bindings: projected to the runtime.yaml bridge section
+//	  and picked up by the running bridge via self-heal, never a pod input
+//	State, IdleTimeout 鈥?lifecycle/policy
+//	ServiceEnabled, Expose 鈥?service-only (consumed by ReconcileMemberService)
 //
 // Consumed by workerMemberContext to populate MemberContext.AppliedSpecHash,
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
+	spec.DisplayName = ""    // Matrix-profile-only: synced via SetDisplayName, does not affect pod
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
 	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
 	spec.AgentIdentity = nil // config-only: written to runtime.yaml
@@ -779,6 +835,7 @@ func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy from hash
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
+	zeroWorkerBridgeBindingFields(&spec) // projected to runtime.yaml bridge section, not pod input
 	layoutVersion := workerDepsLayoutHashVersion(spec)
 	if layoutVersion == "" {
 		buf, err := json.Marshal(spec)
@@ -833,6 +890,7 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
 	spec.Resources = nil
+	zeroWorkerBridgeBindingFields(&spec) // projected to runtime.yaml bridge section, not pod input
 	payload := struct {
 		Spec             v1beta1.WorkerSpec                 `json:"spec"`
 		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
@@ -856,6 +914,19 @@ func workerSpecWithEffectiveBackendRuntimeForHash(spec v1beta1.WorkerSpec, backe
 		spec.BackendRuntime = &backendRuntime
 	}
 	return spec
+}
+
+// zeroWorkerBridgeBindingFields clears the worker-bridge binding fields from
+// a spec before hashing: they are projected into the runtime.yaml bridge
+// section (agents/<name>/runtime/runtime.yaml) and picked up by the running
+// bridge pod through its self-heal polling — changing a binding must rebind
+// the bridge, never rebuild the pod.
+func zeroWorkerBridgeBindingFields(spec *v1beta1.WorkerSpec) {
+	spec.AdapterMode = ""
+	spec.CimicodeGatewayUrl = ""
+	spec.SessionId = ""
+	spec.SandboxId = ""
+	spec.TemplateId = ""
 }
 
 func hashQwenPawPodSpec(spec v1beta1.WorkerSpec) string {
@@ -921,9 +992,9 @@ func workerDepsLayoutVersionForBackendRuntime(backendRuntime string) string {
 // it carries both:
 //
 //   - labelKey (one of the AgentTeams identity labels) with a non-empty
-//     value — identifying which CR
+//     value 鈥?identifying which CR
 //     kind owns the pod.
-//   - agentteams.io/controller == controllerName — identifying which controller
+//   - agentteams.io/controller == controllerName 鈥?identifying which controller
 //     instance owns the pod.
 //
 // The controller filter is defense-in-depth against the informer cache label

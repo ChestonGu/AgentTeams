@@ -346,8 +346,13 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 			MatrixUserID: "@human:matrix.local",
 		}},
 		Spec: v1beta1.WorkerSpec{
-			Model:    "qwen-plus",
-			Package:  "nacos://registry/ns/dev-worker?version=1.2.0",
+			Model:   "qwen-plus",
+			Package: "nacos://registry/ns/dev-worker?version=1.2.0",
+			Skills:  []string{"competition-skill", "shared-skill"},
+			RemoteSkills: []v1beta1.RemoteSkillSource{{
+				Source: "nacos://registry/ns",
+				Skills: []v1beta1.RemoteSkill{{Name: "shared-skill"}, {Name: "remote-skill"}},
+			}},
 			Identity: "frontend specialist",
 			Soul:     "build accessible user interfaces",
 			Agents:   "follow the project workflow",
@@ -426,6 +431,10 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	}
 
 	desired := doc["desired"].(map[string]any)
+	skills := desired["skills"].([]any)
+	if got := fmt.Sprint(skills); got != "[competition-skill shared-skill remote-skill]" {
+		t.Fatalf("desired.skills=%s", got)
+	}
 	model := desired["model"].(map[string]any)
 	if got := fmt.Sprint(model["model"]); got != "qwen-plus" {
 		t.Fatalf("desired.model.model=%q", got)
@@ -1277,5 +1286,109 @@ func TestPrepareWorkerDepsWritesObjectStorageLayout(t *testing.T) {
 	}
 	if strings.Contains(text, "INVALID-KEY") {
 		t.Fatalf("env file should ignore invalid env keys:\n%s", text)
+	}
+}
+
+// ── worker-bridge binding projection ────────────────────────────────────────
+
+// deployBridgeSection runs DeployMemberRuntimeConfig for a runtime=worker-bridge
+// worker and returns the parsed top-level bridge section (nil when absent).
+func deployBridgeSection(t *testing.T, spec v1beta1.WorkerSpec) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider: "oss",
+			StorageBucket:   "agentteams-storage",
+			StorageEndpoint: "https://oss.example.com",
+		},
+	})
+	// Request-level Runtime left empty so the document assembly resolves the
+	// runtime from spec.Runtime — mirrors the real reconciler call shape.
+	if err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:        "worker-cr-wb",
+		RuntimeName: "worker-wb",
+		Role:        "worker",
+		Generation:  1,
+		Spec:        spec,
+	}); err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+	got, err := store.GetObject(ctx, "agents/worker-wb/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, got)
+	}
+	bridge, _ := doc["bridge"].(map[string]any)
+	return bridge
+}
+
+func TestDeployMemberRuntimeConfigProjectsBridgeSection(t *testing.T) {
+	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
+		Runtime:            "worker-bridge",
+		AdapterMode:        "cimicode-stateless",
+		CimicodeGatewayUrl: "http://cimicode.internal:8080",
+		SessionId:          "sess-1",
+		SandboxId:          "sbx-1",
+		TemplateId:         "tpl-1",
+	})
+	if bridge == nil {
+		t.Fatal("bridge section missing for runtime=worker-bridge with full binding")
+	}
+	for key, want := range map[string]string{
+		"adapterMode": "cimicode-stateless",
+		"baseUrl":     "http://cimicode.internal:8080",
+		"sessionId":   "sess-1",
+		"sandboxId":   "sbx-1",
+		"templateId":  "tpl-1",
+	} {
+		if got := fmt.Sprint(bridge[key]); got != want {
+			t.Fatalf("bridge.%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestDeployMemberRuntimeConfigNormalizesEmptyAdapterMode(t *testing.T) {
+	// Binding present but adapterMode empty → normalized to cimicode-pod so
+	// runtime.yaml always carries an explicit dispatch key.
+	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
+		Runtime: "worker-bridge",
+		// no AdapterMode
+		CimicodeGatewayUrl: "http://cimicode.internal:8080",
+	})
+	if bridge == nil {
+		t.Fatal("bridge section missing")
+	}
+	if got := fmt.Sprint(bridge["adapterMode"]); got != "cimicode-pod" {
+		t.Fatalf("bridge.adapterMode = %q, want normalized %q", got, "cimicode-pod")
+	}
+}
+
+func TestDeployMemberRuntimeConfigOmitsBridgeSectionWithoutBinding(t *testing.T) {
+	// runtime=worker-bridge but zero binding fields → no bridge section at
+	// all: the bridge stays undetermined and waits for env-based resolution.
+	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
+		Runtime: "worker-bridge",
+	})
+	if bridge != nil {
+		t.Fatalf("bridge section projected without binding fields: %#v", bridge)
+	}
+}
+
+func TestDeployMemberRuntimeConfigOmitsBridgeSectionForQwenPaw(t *testing.T) {
+	// Binding fields on a non-worker-bridge runtime are inert — qwenpaw must
+	// never see a bridge section even if the CR carries leftover bindings.
+	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
+		Runtime:            "qwenpaw",
+		CimicodeGatewayUrl: "http://cimicode.internal:8080",
+		SessionId:          "sess-1",
+	})
+	if bridge != nil {
+		t.Fatalf("bridge section projected for runtime=qwenpaw: %#v", bridge)
 	}
 }

@@ -55,15 +55,11 @@ func (s source) EnsurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, m
 	}
 
 	logger.Info("creating Matrix account for SSO human via AppService register",
-		"issuer", spec.IdentitySource.Issuer,
-		"subject", spec.IdentitySource.Subject,
-		"matrixLocalpart", localpart,
-		"matrixUserID", expectedUserID)
+		"identityFingerprint", identityFingerprint(spec.IdentitySource.Issuer, spec.IdentitySource.Subject))
 
 	creds, err := s.deps.Provisioner.RegisterAppServiceUser(ctx, localpart)
 	if err != nil {
-		logger.Error(err, "AppService registration failed for SSO human",
-			"matrixLocalpart", localpart, "matrixUserID", expectedUserID)
+		logger.Error(err, "AppService registration failed for SSO human")
 		return humanidentity.Credentials{}, err
 	}
 
@@ -79,6 +75,11 @@ func (s source) EnsurePrecreated(ctx context.Context, spec *v1beta1.HumanSpec, m
 		Password:    "",
 		Created:     creds.Created,
 	}, nil
+}
+
+func identityFingerprint(issuer, subject string) string {
+	digest := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return hex.EncodeToString(digest[:])[:16]
 }
 
 func (s source) ManagesInitialPassword() bool {

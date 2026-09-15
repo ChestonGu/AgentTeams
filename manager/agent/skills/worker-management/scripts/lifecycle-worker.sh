@@ -46,28 +46,34 @@ action_sync_status() {
 }
 
 action_check_idle() {
+    # Auto-sleep disabled (v1.2.2-openclaw-patch): Workers stay Running until
+    # manually stopped. The matching step in HEARTBEAT.md is also commented out
+    # (double insurance). Original idle-detection logic preserved below for
+    # future re-enable.
     _init_files
-    local timeout now worker state idle_since idle_epoch tmp
-    timeout=$(jq -r '.idle_timeout_minutes // 720' "${LIFECYCLE_FILE}")
-    now=$(date -u +%s)
-    while IFS= read -r worker; do
-        [ -n "${worker}" ] || continue
-        state=$(_worker_json "${worker}" | jq -r '.state // "Running"')
-        [ "${state}" = "Running" ] || continue
-        if _has_finite_tasks "${worker}"; then
-            _set_lifecycle "${worker}" idle_since ""
-            continue
-        fi
-        idle_since=$(jq -r --arg w "${worker}" '.workers[$w].idle_since // empty' "${LIFECYCLE_FILE}")
-        if [ -z "${idle_since}" ]; then
-            _set_lifecycle "${worker}" idle_since "$(_ts)"
-            continue
-        fi
-        idle_epoch=$(date -u -d "${idle_since}" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%SZ' "${idle_since}" +%s 2>/dev/null || echo "${now}")
-        if [ $((now - idle_epoch)) -ge $((timeout * 60)) ]; then
-            action_stop "${worker}" true
-        fi
-    done < <(_worker_names)
+    return 0
+    # --- original auto-sleep logic (disabled) ---
+    # local timeout now worker state idle_since idle_epoch tmp
+    # timeout=$(jq -r '.idle_timeout_minutes // 720' "${LIFECYCLE_FILE}")
+    # now=$(date -u +%s)
+    # while IFS= read -r worker; do
+    #     [ -n "${worker}" ] || continue
+    #     state=$(_worker_json "${worker}" | jq -r '.state // "Running"')
+    #     [ "${state}" = "Running" ] || continue
+    #     if _has_finite_tasks "${worker}"; then
+    #         _set_lifecycle "${worker}" idle_since ""
+    #         continue
+    #     fi
+    #     idle_since=$(jq -r --arg w "${worker}" '.workers[$w].idle_since // empty' "${LIFECYCLE_FILE}")
+    #     if [ -z "${idle_since}" ]; then
+    #         _set_lifecycle "${worker}" idle_since "$(_ts)"
+    #         continue
+    #     fi
+    #     idle_epoch=$(date -u -d "${idle_since}" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%SZ' "${idle_since}" +%s 2>/dev/null || echo "${now}")
+    #     if [ $((now - idle_epoch)) -ge $((timeout * 60)) ]; then
+    #         action_stop "${worker}" true
+    #     fi
+    # done < <(_worker_names)
 }
 
 action_stop() {

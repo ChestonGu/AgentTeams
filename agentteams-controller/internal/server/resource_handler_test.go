@@ -516,6 +516,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
+			HumanMembers:   []v1beta1.TeamMemberSpec{{Name: "old-human", Role: "coordinator"}},
 			HeartbeatEvery: "30m",
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "alpha-lead", Role: "team_leader"},
@@ -529,6 +530,7 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 
 	updateBody := []byte(`{
 		"heartbeatEvery":"45m",
+		"humanMembers":[{"name":"new-human","role":"coordinator"}],
 		"workerMembers":[
 			{"name":"alpha-lead","role":"team_leader"},
 			{"name":"alpha-qa","role":"worker"}
@@ -549,6 +551,9 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	if updated.Spec.HeartbeatEvery != "45m" {
 		t.Fatalf("heartbeatEvery = %q, want 45m", updated.Spec.HeartbeatEvery)
 	}
+	if got, want := updated.Spec.HumanMembers, []v1beta1.TeamMemberSpec{{Name: "new-human", Role: "coordinator"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("humanMembers = %#v, want %#v", got, want)
+	}
 	if got, want := updated.Spec.WorkerMembers, []v1beta1.TeamWorkerRef{
 		{Name: "alpha-lead", Role: "team_leader"},
 		{Name: "alpha-qa", Role: "worker"},
@@ -565,6 +570,93 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.WorkerMembers, updated.Spec.WorkerMembers) {
 		t.Fatalf("workerMembers = %#v, want %#v", resp.WorkerMembers, updated.Spec.WorkerMembers)
+	}
+}
+
+func TestTeamMemberOperationsAreIdempotentAndValidateLeader(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	leader := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-lead", Namespace: "default"}}
+	dev := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
+	qa := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-qa", Namespace: "default"}}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "alice", Role: "coordinator"}},
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "alpha-lead", Role: "team_leader"},
+				{Name: "alpha-dev", Role: "worker"},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leader, dev, qa, team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	addHuman := httptest.NewRequest(http.MethodPost, "/api/v1/teams/alpha-team/human-members", bytes.NewReader([]byte(`[{"name":"bob","role":"coordinator"},{"name":"alice"}]`)))
+	addHuman.SetPathValue("name", "alpha-team")
+	addHumanRec := httptest.NewRecorder()
+	handler.AddHumanMembers(addHumanRec, addHuman)
+	if addHumanRec.Code != http.StatusOK {
+		t.Fatalf("add human status = %d: %s", addHumanRec.Code, addHumanRec.Body.String())
+	}
+
+	addWorker := httptest.NewRequest(http.MethodPost, "/api/v1/teams/alpha-team/worker-members", bytes.NewReader([]byte(`[{"name":"alpha-qa","role":"worker"}]`)))
+	addWorker.SetPathValue("name", "alpha-team")
+	addWorkerRec := httptest.NewRecorder()
+	handler.AddWorkerMembers(addWorkerRec, addWorker)
+	if addWorkerRec.Code != http.StatusOK {
+		t.Fatalf("add worker status = %d: %s", addWorkerRec.Code, addWorkerRec.Body.String())
+	}
+
+	removeWorker := httptest.NewRequest(http.MethodDelete, "/api/v1/teams/alpha-team/worker-members/alpha-qa", nil)
+	removeWorker.SetPathValue("name", "alpha-team")
+	removeWorker.SetPathValue("memberName", "alpha-qa")
+	removeWorkerRec := httptest.NewRecorder()
+	handler.RemoveWorkerMember(removeWorkerRec, removeWorker)
+	if removeWorkerRec.Code != http.StatusOK {
+		t.Fatalf("remove worker status = %d: %s", removeWorkerRec.Code, removeWorkerRec.Body.String())
+	}
+
+	removeLeader := httptest.NewRequest(http.MethodDelete, "/api/v1/teams/alpha-team/worker-members/alpha-lead", nil)
+	removeLeader.SetPathValue("name", "alpha-team")
+	removeLeader.SetPathValue("memberName", "alpha-lead")
+	removeLeaderRec := httptest.NewRecorder()
+	handler.RemoveWorkerMember(removeLeaderRec, removeLeader)
+	if removeLeaderRec.Code != http.StatusBadRequest {
+		t.Fatalf("remove leader status = %d, want %d: %s", removeLeaderRec.Code, http.StatusBadRequest, removeLeaderRec.Body.String())
+	}
+
+	var stored v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if got, want := len(stored.Spec.WorkerMembers), 2; got != want {
+		t.Fatalf("worker member count = %d, want %d", got, want)
+	}
+}
+
+func TestTeamResponseIncludesMemberStatuses(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"},
+		Status: v1beta1.TeamStatus{Members: []v1beta1.TeamMemberStatus{{
+			Name: "alpha-lead", Ready: true, Role: "team_leader", MatrixUserID: "@lead:matrix", RoomID: "!room:matrix",
+		}}},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams/alpha-team", nil)
+	req.SetPathValue("name", "alpha-team")
+	rec := httptest.NewRecorder()
+	handler.GetTeam(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get team status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var response TeamResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode team response: %v", err)
+	}
+	if len(response.MemberStatuses) != 1 || response.MemberStatuses[0].RoomID != "!room:matrix" || !response.MemberStatuses[0].Ready {
+		t.Fatalf("memberStatuses = %#v", response.MemberStatuses)
 	}
 }
 
@@ -717,7 +809,11 @@ func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 	}
 }
 
-func TestCreateWorkerDefaultsRuntime(t *testing.T) {
+func TestCreateWorkerOmittedRuntimeStaysEmpty(t *testing.T) {
+	// spec.runtime must not be defaulted into the CR: namespaces whose live
+	// Worker CRD enum lacks the install-time default (e.g. "opencode") would
+	// reject the create. The reconciler applies the default via
+	// RuntimeFallback instead.
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	handler := NewResourceHandler(k8sClient, "default", nil, "")
@@ -734,12 +830,15 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
 		t.Fatalf("get created worker: %v", err)
 	}
-	if got := stored.Spec.Runtime; got != "openclaw" {
-		t.Fatalf("worker.spec.runtime = %q, want openclaw", got)
+	if got := stored.Spec.Runtime; got != "" {
+		t.Fatalf("worker.spec.runtime = %q, want empty", got)
 	}
 }
 
-func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
+func TestCreateWorkerDefaultRuntimeNotPinnedInCR(t *testing.T) {
+	// The install-time default (h.defaultWorkerRuntime) must stay out of the
+	// CR: the reconciler resolves it via RuntimeFallback so the stored
+	// spec.runtime keeps whatever the caller explicitly sent.
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	handler := NewResourceHandler(k8sClient, "default", nil, "")
@@ -757,8 +856,8 @@ func TestCreateWorkerUsesConfiguredDefaultRuntime(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
 		t.Fatalf("get created worker: %v", err)
 	}
-	if got := stored.Spec.Runtime; got != backend.RuntimeQwenPaw {
-		t.Fatalf("worker.spec.runtime = %q, want %q", got, backend.RuntimeQwenPaw)
+	if got := stored.Spec.Runtime; got != "" {
+		t.Fatalf("worker.spec.runtime = %q, want empty (default not pinned)", got)
 	}
 }
 
@@ -804,6 +903,59 @@ func TestCreateHuman_StampsControllerLabel(t *testing.T) {
 	}
 	if got := human.Labels[v1beta1.LabelController]; got != "ctrl-a" {
 		t.Fatalf("expected controller label ctrl-a, got %q", got)
+	}
+}
+
+func TestCreateHuman_InitialPassword(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+
+	body := []byte(`{"name":"h1","displayName":"Human One","initialPassword":"s3cret"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "h1", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.InitialPassword != "s3cret" {
+		t.Errorf("Spec.InitialPassword=%q, want s3cret", human.Spec.InitialPassword)
+	}
+
+	// The create response must not echo the pinned password.
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if _, present := resp["initialPassword"]; present {
+		t.Errorf("response leaked initialPassword: %v", resp["initialPassword"])
+	}
+}
+
+func TestCreateHuman_DisplayNameOptional(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "ctrl-a")
+
+	body := []byte(`{"name":"h1","permissionLevel":2}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "h1", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.DisplayName != "" {
+		t.Errorf("Spec.DisplayName=%q, want empty (optional)", human.Spec.DisplayName)
 	}
 }
 
@@ -881,5 +1033,45 @@ func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, 
 	}
 	if got.Limits.Memory != memLimit {
 		t.Fatalf("limits.memory = %q, want %q (resources=%+v)", got.Limits.Memory, memLimit, got)
+	}
+}
+
+// TestWorkerToResponse_RuntimeEnvFilter pins the bridge self-heal contract:
+// GET /api/v1/workers/{self} exposes only the BRIDGE_RUNTIME_-prefixed
+// subset of spec.env — enough for a late-wired bridge pod (created before
+// the operator wrote spec.env) to pick up its runtime adapter wiring
+// without a pod restart — never the full spec.env, which may carry
+// deployment secrets.
+func TestWorkerToResponse_RuntimeEnvFilter(t *testing.T) {
+	w := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "w1"},
+		Spec: v1beta1.WorkerSpec{Env: map[string]string{
+			"AGENTTEAMS_MATRIX_URL":  "http://synapse:8008",
+			"BRIDGE_RUNTIME_ADAPTER": "opencode",
+		}},
+	}
+	resp := workerToResponse(w)
+	if len(resp.RuntimeEnv) != 1 {
+		t.Fatalf("RuntimeEnv = %v, want exactly the one BRIDGE_RUNTIME_ key", resp.RuntimeEnv)
+	}
+	if resp.RuntimeEnv["BRIDGE_RUNTIME_ADAPTER"] != "opencode" {
+		t.Fatalf("RuntimeEnv[BRIDGE_RUNTIME_ADAPTER] = %q, want opencode", resp.RuntimeEnv["BRIDGE_RUNTIME_ADAPTER"])
+	}
+	if _, ok := resp.RuntimeEnv["AGENTTEAMS_MATRIX_URL"]; ok {
+		t.Fatalf("RuntimeEnv leaked non-prefixed key AGENTTEAMS_MATRIX_URL: %v", resp.RuntimeEnv)
+	}
+}
+
+// TestWorkerToResponse_RuntimeEnvNilWhenAbsent: no BRIDGE_RUNTIME_ keys
+// means RuntimeEnv stays nil (omitted in JSON), so older bridges see no
+// behavioral change.
+func TestWorkerToResponse_RuntimeEnvNilWhenAbsent(t *testing.T) {
+	w := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "w1"},
+		Spec: v1beta1.WorkerSpec{Env: map[string]string{"AGENTTEAMS_MATRIX_URL": "x"}},
+	}
+	resp := workerToResponse(w)
+	if resp.RuntimeEnv != nil {
+		t.Fatalf("RuntimeEnv = %v, want nil when spec.env has no BRIDGE_RUNTIME_ keys", resp.RuntimeEnv)
 	}
 }

@@ -18,6 +18,10 @@ spec:
         {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
     spec:
       serviceAccountName: {{ include "agentteams.controller.serviceAccountName" . }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -84,10 +88,41 @@ spec:
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
+            - name: AGENTTEAMS_WORKER_BRIDGE_IMAGE
+              value: {{ include "agentteams.worker.workerBridgeImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ
               value: {{ .Values.controller.timezone | quote }}
+            {{- /*
+              Team reconciler tuning knobs (wiki/controller-tuning-sop.md).
+              Empty/zero values keep the controller's built-in defaults.
+            */}}
+            {{- if ne (int .Values.controller.teamTuning.maxConcurrentReconciles) 0 }}
+            - name: AGENTTEAMS_TEAM_MAX_CONCURRENT_RECONCILES
+              value: {{ .Values.controller.teamTuning.maxConcurrentReconciles | quote }}
+            {{- end }}
+            {{- if ne (int .Values.controller.teamTuning.reconcileTimeoutSeconds) 0 }}
+            - name: AGENTTEAMS_TEAM_RECONCILE_TIMEOUT_SECONDS
+              value: {{ .Values.controller.teamTuning.reconcileTimeoutSeconds | quote }}
+            {{- end }}
+            {{- if ne (int .Values.controller.teamTuning.reconcileIntervalSeconds) 0 }}
+            - name: AGENTTEAMS_TEAM_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.controller.teamTuning.reconcileIntervalSeconds | quote }}
+            {{- end }}
+            {{- if .Values.controller.teamTuning.activeNoRequeue }}
+            - name: AGENTTEAMS_TEAM_ACTIVE_NO_REQUEUE
+              value: "true"
+            {{- end }}
+            {{- /*
+              Worker reconciler tuning knob. The Worker controller runs the
+              per-member provisioning chain for every Worker CR; raise the
+              concurrency so one slow/hung Worker stops starving the rest.
+            */}}
+            {{- if ne (int .Values.controller.workerTuning.maxConcurrentReconciles) 0 }}
+            - name: AGENTTEAMS_WORKER_MAX_CONCURRENT_RECONCILES
+              value: {{ .Values.controller.workerTuning.maxConcurrentReconciles | quote }}
+            {{- end }}
             - name: AGENTTEAMS_STORAGE_PROVIDER
               value: {{ .Values.storage.provider | quote }}
             - name: AGENTTEAMS_FS_ENDPOINT
@@ -105,6 +140,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "agentteams.storage.adminSecretName" . }}
                   key: {{ include "agentteams.storage.adminSecretKeyKey" . }}
+            {{- else if eq .Values.storage.provider "oss" }}
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.ossCredsSecretName" . }}
+                  key: accessKey
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.storage.ossCredsSecretName" . }}
+                  key: secretKey
             {{- end }}
             - name: AGENTTEAMS_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}
@@ -138,6 +184,8 @@ spec:
               value: {{ include "agentteams.matrix.internalURL" . | quote }}
             - name: AGENTTEAMS_MATRIX_DOMAIN
               value: {{ include "agentteams.matrix.serverName" . | quote }}
+            - name: AGENTTEAMS_MATRIX_PROVIDER
+              value: {{ .Values.matrix.provider | quote }}
             {{- /* OSS storage prefix */}}
             - name: AGENTTEAMS_STORAGE_PREFIX
               value: {{ include "agentteams.storage.remoteRoot" . | quote }}

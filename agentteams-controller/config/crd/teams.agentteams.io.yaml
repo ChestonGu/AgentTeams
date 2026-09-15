@@ -18,6 +18,9 @@ spec:
               properties:
                 description:
                   type: string
+                displayName:
+                  type: string
+                  description: Friendly display name for the Team (used for the Team room name and listings). Falls back to teamName.
                 teamName:
                   type: string
                   description: Runtime/storage team identity. Defaults to metadata.name.
@@ -109,6 +112,10 @@ spec:
                   type: string
                 leaderDMRoomID:
                   type: string
+                displayNameSyncedGeneration:
+                  type: integer
+                  format: int64
+                  description: Generation whose spec.displayName was last applied to the Team room name.
                 leaderReady:
                   type: boolean
                 readyWorkers:
@@ -117,6 +124,24 @@ spec:
                   type: integer
                 message:
                   type: string
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: "Most recent generation observed by the controller. Used to short-circuit unchanged Active teams on restart/informer re-sync."
+                consecutiveFailures:
+                  type: integer
+                  description: "Consecutive reconcile failures driving failTeam's exponential backoff. Reset to 0 on a successful pass."
+                maxRetriesReached:
+                  type: boolean
+                  description: "True once maxTeamRetries consecutive failures stop automatic requeuing. Reset by setting the agentteams.io/retry annotation."
+                reconcileAttempt:
+                  type: integer
+                  format: int64
+                  description: "Monotonic counter incremented per reconcile pass, for correlating logs across passes."
+                phaseTransitionTime:
+                  type: string
+                  format: date-time
+                  description: "When the current Phase was last entered. Used by the backoff guard to skip passes before the backoff window elapses."
                 members:
                   type: array
                   description: "Per-member state (leader + workers). Consolidates all per-member fields (observed, spec hash, roomID, matrixUserID, exposedPorts) into a single sorted-by-name slice."

@@ -6,7 +6,7 @@ func TestAuthorizer_AdminAllowsEverything(t *testing.T) {
 	az := NewAuthorizer()
 	caller := &CallerIdentity{Role: RoleAdmin, Username: "admin"}
 
-	actions := []Action{ActionCreate, ActionUpdate, ActionDelete, ActionGet, ActionList, ActionWake, ActionSleep}
+	actions := []Action{ActionCreate, ActionUpdate, ActionDelete, ActionGet, ActionList, ActionWake, ActionSleep, ActionInvite, ActionKick}
 	for _, a := range actions {
 		if err := az.Authorize(caller, AuthzRequest{Action: a, ResourceKind: "worker"}); err != nil {
 			t.Errorf("admin should be allowed %s worker, got: %v", a, err)
@@ -54,6 +54,8 @@ func TestAuthorizer_TeamLeaderCrossTeamDenied(t *testing.T) {
 		{Action: ActionReady, ResourceKind: "worker", ResourceName: "beta-dev", ResourceTeam: "beta-team"},
 		{Action: ActionWake, ResourceKind: "worker", ResourceName: "beta-dev", ResourceTeam: "beta-team"},
 		{Action: ActionDelete, ResourceKind: "team", ResourceName: "beta-team"},
+		{Action: ActionInvite, ResourceKind: "team", ResourceName: "alpha-team"},
+		{Action: ActionKick, ResourceKind: "team", ResourceName: "alpha-team"},
 		{Action: ActionGateway, ResourceKind: "gateway"},
 	}
 	for _, req := range deniedCases {

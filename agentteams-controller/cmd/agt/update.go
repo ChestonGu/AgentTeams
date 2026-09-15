@@ -23,16 +23,17 @@ func updateCmd() *cobra.Command {
 
 func updateWorkerCmd() *cobra.Command {
 	var (
-		name       string
-		model      string
-		runtime    string
-		image      string
-		identity   string
-		soul       string
-		skills     string
-		packageURI string
-		expose     string
-		state      string
+		name        string
+		displayName string
+		model       string
+		runtime     string
+		image       string
+		identity    string
+		soul        string
+		skills      string
+		packageURI  string
+		expose      string
+		state       string
 	)
 
 	cmd := &cobra.Command{
@@ -62,6 +63,7 @@ func updateWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "model", model)
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
@@ -92,8 +94,9 @@ func updateWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Matrix profile)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|worker-bridge)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content")
@@ -111,6 +114,7 @@ func updateWorkerCmd() *cobra.Command {
 func updateTeamCmd() *cobra.Command {
 	var (
 		name                 string
+		displayName          string
 		teamName             string
 		description          string
 		leaderName           string
@@ -137,6 +141,7 @@ Create or update each Worker separately to configure its runtime fields.`,
 			req := map[string]interface{}{}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
 			if cmd.Flags().Changed("leader-name") || cmd.Flags().Changed("workers") {
 				if leaderName == "" {
@@ -169,6 +174,7 @@ Create or update each Worker separately to configure its runtime fields.`,
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "Friendly display name (Team room name)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name")
 	cmd.Flags().StringVar(&description, "description", "", "Team description")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Existing Worker resource used as Team Leader")
@@ -226,7 +232,7 @@ func updateManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman|worker-bridge)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd

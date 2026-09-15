@@ -9,6 +9,7 @@ package ossfake
 
 import (
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"os"
@@ -73,6 +74,19 @@ func (m *Memory) Stat(_ context.Context, key string) error {
 		return os.ErrNotExist
 	}
 	return nil
+}
+
+// GetETag returns the content MD5 (hex) of the object stored under key,
+// os.ErrNotExist when missing — mirrors the production ETag used for
+// package download caching.
+func (m *Memory) GetETag(_ context.Context, key string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.objects[key]
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	return fmt.Sprintf("%x", md5.Sum(data)), nil
 }
 
 // DeleteObject removes the object stored under key. Deleting a missing key

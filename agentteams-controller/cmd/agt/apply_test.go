@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -27,10 +28,11 @@ func buildZip(t *testing.T, files map[string]string) []byte {
 
 func TestExtractWorkerFieldsFromZip(t *testing.T) {
 	cases := []struct {
-		name        string
-		manifest    string
-		wantModel   string
-		wantRuntime string
+		name          string
+		manifest      string
+		wantModel     string
+		wantRuntime   string
+		wantAdapter   string
 	}{
 		{
 			name:        "empty zip, no manifest",
@@ -57,6 +59,13 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 			wantRuntime: "openclaw",
 		},
 		{
+			name:        "adapterMode flows from worker block",
+			manifest:    `{"runtime":"worker-bridge","worker":{"adapterMode":"cimicode-stateless"}}`,
+			wantModel:   "",
+			wantRuntime: "worker-bridge",
+			wantAdapter: "cimicode-stateless",
+		},
+		{
 			name:        "missing fields stay empty so caller defaults can apply",
 			manifest:    `{"worker":{"suggested_name":"alice"}}`,
 			wantModel:   "",
@@ -77,20 +86,34 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 				files["manifest.json"] = tc.manifest
 			}
 			data := buildZip(t, files)
-			gotModel, gotRuntime := extractWorkerFieldsFromZip(data)
+			gotModel, gotRuntime, gotAdapter := extractWorkerFieldsFromZip(data)
 			if gotModel != tc.wantModel {
 				t.Errorf("model: got %q, want %q", gotModel, tc.wantModel)
 			}
 			if gotRuntime != tc.wantRuntime {
 				t.Errorf("runtime: got %q, want %q", gotRuntime, tc.wantRuntime)
 			}
+			if gotAdapter != tc.wantAdapter {
+				t.Errorf("adapterMode: got %q, want %q", gotAdapter, tc.wantAdapter)
+			}
 		})
 	}
 }
 
 func TestExtractWorkerFieldsFromZip_NotAZip(t *testing.T) {
-	gotModel, gotRuntime := extractWorkerFieldsFromZip([]byte("not a zip"))
-	if gotModel != "" || gotRuntime != "" {
-		t.Errorf("expected empty fields for non-zip input, got model=%q runtime=%q", gotModel, gotRuntime)
+	gotModel, gotRuntime, gotAdapter := extractWorkerFieldsFromZip([]byte("not a zip"))
+	if gotModel != "" || gotRuntime != "" || gotAdapter != "" {
+		t.Errorf("expected empty fields for non-zip input, got model=%q runtime=%q adapterMode=%q", gotModel, gotRuntime, gotAdapter)
+	}
+}
+
+func TestWorkerRuntimeHelpIncludesQwenPaw(t *testing.T) {
+	for name, usage := range map[string]string{
+		"apply":  applyWorkerSubCmd().Flags().Lookup("runtime").Usage,
+		"update": updateWorkerCmd().Flags().Lookup("runtime").Usage,
+	} {
+		if !strings.Contains(usage, "qwenpaw") {
+			t.Errorf("%s worker runtime help %q does not include qwenpaw", name, usage)
+		}
 	}
 }
