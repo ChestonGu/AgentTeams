@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""worker-bridge-operator: per-worker cimicode runtime pod automation.
+"""worker-bridge-operator: per-worker runtime pod automation.
 
 Watches Worker CRs (agentteams.io/v1beta1) in one namespace. For every worker
 whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
@@ -10,36 +10,55 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
                           the runtime.yaml bridge section (controller
                           projection of spec.cimicodeGatewayUrl/sessionId/...).
                           This operator touches nothing.
-    cimicode-pod        → own a single cimicode Deployment + Service:
-                              Service     <worker>-cimicode-svc  (runtime :4096
-                                                                          helper :4097)
+    cimicode-pod        → own a single runtime Deployment + Service:
+                              Service     <worker>-cimicode-svc  (runtime :4096)
                               Deployment  <worker>-cimicode
-                              Secret      <worker>-cimicode-fs (MinIO creds,
-                                          copied read-only from the bridge pod
-                                          env the controller assembled)
+                              Secret      <worker>-cimicode-fs (MinIO creds +
+                                          model config, copied read-only from
+                                          the bridge pod env the controller
+                                          assembled)
                           (role-suffixed so pod names read at a glance: the
                           Deployment's pods are <worker>-cimicode-<rs>-<hash>)
                           and point the Worker CR spec.env at it (the bridge
                           pod picks it up via self-heal polling):
                               BRIDGE_RUNTIME_ADAPTER=cimicode-pod
                               BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc.<ns>.svc:4096
-                              BRIDGE_RUNTIME_HELPER_URL=http://<w>-cimicode-svc.<ns>.svc:4097
 
-The cimicode runtime image (worker-bridge/cimicode-runtime) is a merged
-single-container form: opencode serve (conversation loop, REST per the
-adapter contract) + sandbox helper (AGENTS.md writes, command exec) + the
-full collaboration toolchain (taskflow / agentteams-sync / mc / skills).
-The operator therefore also feeds the pod its working env
-(AGENTTEAMS_WORKER_NAME / FS_* / TEAM / MATRIX_USER_ID) so taskflow and mc
-sync resolve team paths; credentials ride the Secret via secretKeyRef.
+The runtime image is form-agnostic: CIMICODE_IMAGE may point at either
+worker-bridge/cimicode-runtime (internal coder-cimicode base image) or
+worker-bridge/opencode-runtime (external opencode npm form). The two share
+one outward contract — single port :4096 REST (per-turn agent.md via the
+message body system field, model via OPENCODE_CONFIG_CONTENT,
+OPENCODE_PERMISSION allow-all) — so this operator and the bridge treat them
+identically; switching runtimes is an image tag change. The image is a
+merged single-container form: <runtime> serve (conversation loop, REST per
+the adapter contract) + the full collaboration toolchain (taskflow /
+agentteams-sync / mc / skills). The operator therefore also feeds the pod
+its working env (AGENTTEAMS_WORKER_NAME / FS_* / TEAM / MATRIX_USER_ID) so
+taskflow and mc sync resolve team paths; credentials ride the Secret via
+secretKeyRef.
 
-No sandbox pod, no hostPath: /workspace is an emptyDir (conversation state
-survives container restarts; a pod recreation rebuilds sessions via the
-bridge adapter's 404 self-heal — PVC is a known productionization step).
+Model injection (same source as the native worker/leader chain): Worker CR
+spec.model + the bridge pod env pair AGENTTEAMS_AI_GATEWAY_URL /
+AGENTTEAMS_WORKER_GATEWAY_KEY (Higress AI gateway) are rendered into the
+runtime config dialect (see render_model_config) and injected as
+OPENCODE_CONFIG_CONTENT via secretKeyRef — merged last by the runtime, so it
+overrides every other config source. spec.model == "native-config" is a
+sentinel: skip injection, image defaults apply. A missing model or missing
+gateway env defers provisioning (fail loud) — never build a pod whose turns
+cannot run. Config changes (model / gateway / key rotation) roll out via the
+plain-text CIMICODE_MODEL_CONFIG_HASH env: Secret value changes alone do not
+restart pods; the hash change drifts the pod template and ensure_deployment
+replaces the spec → rolling restart.
+
+No sandbox pod, no hostPath, no emptyDir: /workspace is the container's
+writable layer. A pod recreation loses session state — covered by the bridge
+adapter's 404 self-heal, the per-turn system field and taskflow's mc pull
+(PVC is a known productionization step).
 
 CIMICODE_IMAGE is required (no default — fail loud per pass until the env is
 supplied); CIMICODE_PORT defaults to 4096 and the readiness probe to GET
-/session (both pinned by the cimicode-runtime image contract). AGENTTEAMS_FS_
+/session (both pinned by the runtime image contract). AGENTTEAMS_FS_
 ENDPOINT feeds the pod's collaboration env; when missing the operator
 degrades to a plain-chat pod (warning logged — taskflow/sync non-functional).
 
@@ -54,6 +73,8 @@ tracking events, so a crashed/restarted operator self-heals on the next pass.
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import logging
 import os
 import sys
@@ -77,7 +98,9 @@ TEAMS_PLURAL = "teams"
 MANAGED_BY = "worker-bridge-operator"
 ENV_KEY_ADAPTER = "BRIDGE_RUNTIME_ADAPTER"
 ENV_KEY_BASE_URL = "BRIDGE_RUNTIME_BASE_URL"
-ENV_KEY_HELPER_URL = "BRIDGE_RUNTIME_HELPER_URL"
+# 旧 helper 接线键（in-pod AGENTS.md helper 已随 system 字段通道退役）：不再
+# 写入；存量 Worker CR 里历史写入的残留值由 ensure_worker_env 显式清除。
+ENV_KEY_HELPER_URL_RETIRED = "BRIDGE_RUNTIME_HELPER_URL"
 
 ADAPTER_STATELESS = "cimicode-stateless"
 ADAPTER_POD = "cimicode-pod"
@@ -93,6 +116,24 @@ FS_SECRET_KEY_ENV = "AGENTTEAMS_FS_SECRET_KEY"
 SECRET_KEY_ACCESS = "accessKey"
 SECRET_KEY_SECRET = "secretKey"
 
+# 模型注入（与原生 worker/leader 链路同源：controller agentconfig/generator.go
+# 的 agentteams-gateway provider = Higress AI 网关 OpenAI 兼容端点）：
+#   model   = Worker CR spec.model（trim "agentteams-gateway/" 前缀；
+#             "native-config" 哨兵 = 不注入，镜像默认配置生效）
+#   baseURL = bridge pod env AGENTTEAMS_AI_GATEWAY_URL + "/v1"
+#   apiKey  = bridge pod env AGENTTEAMS_WORKER_GATEWAY_KEY（Higress consumer key）
+# 渲染成 cimicode/opencode 配置方言经 OPENCODE_CONFIG_CONTENT env 注入（合并
+# 优先级最高的配置源）；JSON 含 key，整体放 Secret，Deployment spec 只见
+# secretKeyRef + 明文内容哈希 env——Secret 值变更不触发 pod 重启，哈希变更经
+# pod template 漂移滚动生效。
+AI_GATEWAY_URL_ENV = "AGENTTEAMS_AI_GATEWAY_URL"
+GATEWAY_KEY_ENV = "AGENTTEAMS_WORKER_GATEWAY_KEY"
+SECRET_KEY_MODEL_CONFIG = "model-config"
+ENV_MODEL_CONFIG = "OPENCODE_CONFIG_CONTENT"
+ENV_MODEL_CONFIG_HASH = "CIMICODE_MODEL_CONFIG_HASH"
+PROVIDER_ID = "agentteams-gateway"
+NATIVE_CONFIG_MODEL = "native-config"
+
 
 def env(name: str, default: str = "") -> str:
     return os.getenv(name, default)
@@ -105,10 +146,9 @@ class OperatorConfig:
         # specific (internal registry). Missing → per-pass error log, nothing
         # provisioned, instead of silently running a wrong/mocked image.
         self.cimicode_image = env("CIMICODE_IMAGE", "")
-        # Port pair pinned by the cimicode-runtime image contract (opencode
-        # serve / sandbox helper in one container).
+        # Port pinned by the runtime image contract (cimicode serve / opencode
+        # serve; agent.md rides the message body system field — no helper port).
         self.cimicode_port = int(env("CIMICODE_PORT", "4096"))
-        self.cimicode_helper_port = int(env("CIMICODE_HELPER_PORT", "4097"))
         # Readiness probe defaults to the contract surface (GET /session on
         # the opencode port); empty disables it.
         self.cimicode_probe_path = env("CIMICODE_PROBE_PATH", "/session")
@@ -234,6 +274,64 @@ class StackOperator:
         return creds if all(creds.values()) else {}
 
     # ------------------------------------------------------------------
+    # model config（cimicode/opencode 配置方言，OPENCODE_CONFIG_CONTENT 消费）
+    # ------------------------------------------------------------------
+
+    def model_config_content(
+        self, worker_obj: dict[str, Any], bridge_env: dict[str, str]
+    ) -> tuple[str | None, str]:
+        """渲染模型/provider 配置 JSON。
+
+        返回 (content, problem)：
+          content 非 None         → 注入（problem 恒空）
+          content None, problem   → 推迟供给（fail-loud：模型缺失或网关要素
+                                    不在 bridge pod env——先别建一个跑不起来
+                                    turn 的 pod）
+          content None, problem空 → 合法跳过（native-config 哨兵：镜像默认
+                                    配置生效，与 controller isNativeConfigModel
+                                    语义一致——EqualFold + TrimSpace）
+        """
+        spec_model = str(worker_obj.get("spec", {}).get("model") or "").strip()
+        if not spec_model:
+            return None, "spec.model is empty"
+        if spec_model.lower() == NATIVE_CONFIG_MODEL:
+            return None, ""
+        gateway_url = (bridge_env.get(AI_GATEWAY_URL_ENV) or "").strip()
+        gateway_key = (bridge_env.get(GATEWAY_KEY_ENV) or "").strip()
+        missing = [
+            name
+            for name, value in (
+                (AI_GATEWAY_URL_ENV, gateway_url),
+                (GATEWAY_KEY_ENV, gateway_key),
+            )
+            if not value
+        ]
+        if missing:
+            return None, "bridge pod env carries no " + "/".join(missing)
+        return self.render_model_config(spec_model, gateway_url, gateway_key), ""
+
+    @staticmethod
+    def render_model_config(model: str, gateway_url: str, gateway_key: str) -> str:
+        """配置方言：provider agentteams-gateway（openai-compatible）指向
+        Higress AI 网关 /v1，model 主键 agentteams-gateway/<model>——与
+        openclaw 配置/runtime.yaml desired.model 的原生链路同型。
+        URL 归一化（rstrip 尾斜杠）只在此处做，调用侧只 strip 空白。"""
+        model = model.removeprefix(f"{PROVIDER_ID}/")
+        base_url = gateway_url.rstrip("/")
+        config = {
+            "model": f"{PROVIDER_ID}/{model}",
+            "provider": {
+                PROVIDER_ID: {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "AgentTeams AI Gateway",
+                    "options": {"baseURL": f"{base_url}/v1", "apiKey": gateway_key},
+                    "models": {model: {"name": model}},
+                }
+            },
+        }
+        return json.dumps(config, ensure_ascii=False)
+
+    # ------------------------------------------------------------------
     # desired objects
     # ------------------------------------------------------------------
 
@@ -255,11 +353,6 @@ class StackOperator:
                         port=self.cfg.cimicode_port,
                         target_port=self.cfg.cimicode_port,
                     ),
-                    client.V1ServicePort(
-                        name="helper",
-                        port=self.cfg.cimicode_helper_port,
-                        target_port=self.cfg.cimicode_helper_port,
-                    ),
                 ],
             ),
         )
@@ -280,6 +373,7 @@ class StackOperator:
         team: str = "",
         matrix_user: str = "",
         with_fs_secret: bool = False,
+        model_config: str | None = None,
     ) -> client.V1Deployment:
         name = self.cimicode_deploy_name(worker)
         # Working env for the in-pod toolchain (taskflow / mc sync). FS_* 契约
@@ -288,7 +382,6 @@ class StackOperator:
         pod_env: dict[str, str] = {
             "AGENTTEAMS_FS_ROOT": "/workspace",
             "AGENTTEAMS_WORKER_NAME": worker,
-            "SANDBOX_EXEC_URL": f"http://127.0.0.1:{self.cfg.cimicode_helper_port}",
             "OPENCODE_PORT": str(self.cfg.cimicode_port),
         }
         if self.cfg.fs_endpoint:
@@ -299,10 +392,10 @@ class StackOperator:
         if matrix_user:
             pod_env["AGENTTEAMS_MATRIX_USER_ID"] = matrix_user
         container_env = env_list(pod_env)
+        secret_name = self.cimicode_secret_name(worker)
         if with_fs_secret:
             # 凭据不经明文 env：bridge pod env 里的明文复制进 Secret，
             # 这里以 secretKeyRef 引用。
-            secret_name = self.cimicode_secret_name(worker)
             container_env += [
                 client.V1EnvVar(
                     name=FS_ACCESS_KEY_ENV,
@@ -321,6 +414,24 @@ class StackOperator:
                     ),
                 ),
             ]
+        if model_config is not None:
+            # 模型配置整段（含网关 key）走 Secret + secretKeyRef；明文哈希 env
+            # 让内容变更（模型/网关/key 轮转）体现为 pod template 漂移 → 滚动
+            # 重启生效（Secret 值变更本身不触发 pod 重启）。
+            container_env += [
+                client.V1EnvVar(
+                    name=ENV_MODEL_CONFIG_HASH,
+                    value=hashlib.sha256(model_config.encode("utf-8")).hexdigest()[:16],
+                ),
+                client.V1EnvVar(
+                    name=ENV_MODEL_CONFIG,
+                    value_from=client.V1EnvVarSource(
+                        secret_key_ref=client.V1SecretKeySelector(
+                            name=secret_name, key=SECRET_KEY_MODEL_CONFIG
+                        )
+                    ),
+                ),
+            ]
         container = client.V1Container(
             name="cimicode",
             image=self.cfg.cimicode_image,
@@ -328,11 +439,10 @@ class StackOperator:
             env=container_env,
             ports=[
                 client.V1ContainerPort(name="runtime", container_port=self.cfg.cimicode_port),
-                client.V1ContainerPort(name="helper", container_port=self.cfg.cimicode_helper_port),
             ],
-            volume_mounts=[
-                client.V1VolumeMount(name="workspace", mount_path="/workspace")
-            ],
+            # 无 emptyDir/hostPath：/workspace = 容器可写层。pod 重建丢会话由
+            # bridge adapter 的 404 自愈 + 每 turn 重发 system 兜住（容器重启
+            # 也丢——按部署决策接受，PVC 化仍是生产化步骤）。
         )
         if self.cfg.cimicode_probe_path:
             container.readiness_probe = client.V1Probe(
@@ -342,12 +452,7 @@ class StackOperator:
                 initial_delay_seconds=5,
                 period_seconds=10,
             )
-        pod_spec = client.V1PodSpec(
-            containers=[container],
-            # emptyDir：会话/工作区容器重启可存活；pod 重建丢失由 bridge
-            # adapter 的 404 自愈 + 每 turn 重推 AGENTS.md 兜住。
-            volumes=[client.V1Volume(name="workspace", empty_dir={})],
-        )
+        pod_spec = client.V1PodSpec(containers=[container])
         if self.cfg.provision_node_selector:
             pod_spec.node_selector = {
                 "kubernetes.io/hostname": self.cfg.provision_node_selector
@@ -416,23 +521,14 @@ class StackOperator:
         )
         live_env, live_refs = self._env_fingerprint(lc)
         want_env, want_refs = self._env_fingerprint(dc)
-        # `is not None` 而非 bool()：desired 侧 empty_dir 是 {}（falsy），API
-        # 回读侧物化为 V1EmptyDirVolumeSource 实例（truthy）——bool() 比较会
-        # 造成每 pass 幻影漂移（反复空转 replace）。
-        live_volumes = [
-            (v.name, v.empty_dir is not None, v.host_path is not None)
-            for v in live.spec.template.spec.volumes or []
-        ]
-        want_volumes = [
-            (v.name, v.empty_dir is not None, v.host_path is not None)
-            for v in desired.spec.template.spec.volumes or []
-        ]
+        # 无卷可比（/workspace = 容器可写层）：漂移面 = image + probe + env +
+        # secretKeyRef 引用 + nodeSelector。Secret 值变更不重启 pod——模型/
+        # 网关/key 轮转靠 CIMICODE_MODEL_CONFIG_HASH 明文 env 变更入 env 指纹。
         return (
             lc.image != dc.image
             or live_probe_path != want_probe_path
             or live_env != want_env
             or live_refs != want_refs
-            or live_volumes != want_volumes
             or live.spec.template.spec.node_selector != desired.spec.template.spec.node_selector
         )
 
@@ -476,13 +572,16 @@ class StackOperator:
         wanted = {
             ENV_KEY_ADAPTER: ADAPTER_POD,
             ENV_KEY_BASE_URL: f"http://{svc_dns}:{self.cfg.cimicode_port}",
-            ENV_KEY_HELPER_URL: f"http://{svc_dns}:{self.cfg.cimicode_helper_port}",
         }
         current = self.worker_spec_env(worker_obj)
-        if all(current.get(k) == v for k, v in wanted.items()):
+        if all(current.get(k) == v for k, v in wanted.items()) and (
+            ENV_KEY_HELPER_URL_RETIRED not in current
+        ):
             return
         merged = dict(current)
         merged.update(wanted)
+        # 显式清除旧 helper 接线键（存量 Worker CR 一轮收敛；helper 链路已退役）
+        merged.pop(ENV_KEY_HELPER_URL_RETIRED, None)
         body = {"spec": {"env": merged}}
         self.custom.patch_namespaced_custom_object(
             GROUP, VERSION, self.cfg.namespace, WORKERS_PLURAL, worker, body
@@ -555,9 +654,9 @@ class StackOperator:
                 worker,
             )
             return
-        # bridge pod env: MinIO 凭据的权威来源（controller 组装的明文 env）。
-        # pod 未起（双候选都 404）→ 本轮推迟，下一轮重试——凭据到位前建
-        # Secret/Deployment 只会得到一个永远连不上 FS 的 pod。
+        # bridge pod env: MinIO 凭据与模型网关要素的权威来源（controller 组装
+        # 的明文 env）。pod 未起（双候选都 404）→ 本轮推迟，下一轮重试——凭据
+        # 到位前建 Secret/Deployment 只会得到一个永远连不上 FS 的 pod。
         bridge_env = self.bridge_pod_env(worker)
         if bridge_env is None:
             log.info(
@@ -577,7 +676,6 @@ class StackOperator:
                     FS_SECRET_KEY_ENV,
                 )
                 return
-            self.ensure_secret(self.cimicode_secret_name(worker), worker, creds)
             with_fs_secret = True
         else:
             log.warning(
@@ -585,31 +683,51 @@ class StackOperator:
                 "pod (taskflow / mc sync non-functional)",
                 worker,
             )
+        # 模型注入（与原生 worker/leader 链路同源，见 model_config_content）：
+        # 缺模型/缺网关要素 → fail-loud 推迟，不建跑不起来 turn 的 pod。
+        model_config, problem = self.model_config_content(worker_obj, bridge_env)
+        if problem:
+            log.error(
+                "worker %s: model config unavailable — provisioning deferred (%s)",
+                worker,
+                problem,
+            )
+            return
+        # Secret：FS 凭据 + 模型配置（均"明文不进 Deployment spec"）。
+        secret_data: dict[str, str] = dict(creds) if with_fs_secret else {}
+        if model_config is not None:
+            secret_data[SECRET_KEY_MODEL_CONFIG] = model_config
+        if secret_data:
+            self.ensure_secret(self.cimicode_secret_name(worker), worker, secret_data)
         team = self.team_for(worker)
         matrix_user = self.matrix_user_id(worker, worker_obj)
         self.ensure_service(self.svc(worker))
         self.ensure_deployment(
             self.cimicode_deployment(
-                worker, team=team, matrix_user=matrix_user, with_fs_secret=with_fs_secret
+                worker,
+                team=team,
+                matrix_user=matrix_user,
+                with_fs_secret=with_fs_secret,
+                model_config=model_config,
             )
         )
         self.ensure_worker_env(worker, worker_obj)
         log.info(
-            "worker %s reconciled (mode=%s svc=%s team=%s fs=%s)",
+            "worker %s reconciled (mode=%s svc=%s team=%s fs=%s model=%s)",
             worker,
             mode,
             self.cimicode_svc_name(worker),
             team or "-",
             "secret" if with_fs_secret else "degraded",
+            "injected" if model_config is not None else "native-config",
         )
 
     def run(self) -> None:
         log.info(
-            "worker-bridge-operator starting ns=%s cimicode=%s port=%d helper=%d interval=%ss",
+            "worker-bridge-operator starting ns=%s cimicode=%s port=%d interval=%ss",
             self.cfg.namespace,
             self.cfg.cimicode_image or "(CIMICODE_IMAGE unset!)",
             self.cfg.cimicode_port,
-            self.cfg.cimicode_helper_port,
             self.cfg.interval,
         )
         while True:
