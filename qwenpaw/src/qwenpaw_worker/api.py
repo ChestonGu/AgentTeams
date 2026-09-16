@@ -401,7 +401,10 @@ class QwenPawApiClient:
         self,
         agent_id: str,
         *,
-        retries: int = 120,
+        # 409 = qwenpaw 启动期 agent 后台加载中（刻意的门禁）。加载通常
+        # 数秒内完成，30 次重试足够；调用方（worker 启动）对失败已降级
+        # 为 warning，不再需要长退避。
+        retries: int = 30,
         retry_delay: float = 1.0,
     ) -> bool:
         agents = self._request("GET", "/api/agents").get("agents") or []

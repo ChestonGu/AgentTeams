@@ -850,10 +850,23 @@ class Worker:
                     "system_prompt_files": ["AGENTS.md", "SOUL.md", "TEAMS.md"],
                 },
             )
-            await asyncio.to_thread(
-                self.api_client.disable_agent_if_present,
-                "QwenPaw_QA_Agent_0.2",
-            )
+            # 禁用镜像自带的演示 agent。qwenpaw 启动期 agent 后台加载未完时
+            # toggle 返回 409（is_agent_startup_in_progress 门禁，2.0.1 与
+            # 2.2.x 同款）；禁用失败只影响多一个闲置 agent，降级为 warning
+            # 继续启动——否则重试耗尽会让整个 worker CrashLoop。
+            try:
+                await asyncio.to_thread(
+                    self.api_client.disable_agent_if_present,
+                    "QwenPaw_QA_Agent_0.2",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "disable demo agent failed, continuing startup component=worker "
+                    "step=disable_demo_agent worker=%s agent=QwenPaw_QA_Agent_0.2 "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             runtime_config = self._initial_runtime_config or self.updater.load()
