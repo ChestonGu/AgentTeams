@@ -15,7 +15,7 @@ class QwenPawApiError(RuntimeError):
 
 
 class QwenPawApiClient:
-    def __init__(self, base_url: str, timeout: float = 10) -> None:
+    def __init__(self, base_url: str, timeout: float = 30) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
