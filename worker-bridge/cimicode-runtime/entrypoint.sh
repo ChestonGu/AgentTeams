@@ -1,42 +1,40 @@
 #!/bin/sh
-# cimicode pod entrypoint（单容器合并形态）：
-#   1. 把镜像内 skill 树发布到工作目录的 .opencode/skills/（opencode 以
-#      cwd 原生发现 project skills，skill 工具才可用）；
-#   2. 种子 opencode 全局配置（智谱 provider + 转发 bash 工具）到 $HOME；
-#   3. 后台起 sandbox helper（:4097——bridge 推 AGENTS.md / bash 工具
-#      转发 /exec 都走它）；
-#   4. 前台 exec opencode serve（:4096，bridge 的 turn 入口）。
-# 旧双 pod 形态的 180s skill-wait 轮询已删：单 pod 文件本地就绪才继续。
+# cimicode pod entrypoint（单容器，基于内部 cimicode 换皮 opencode）：
+#   1. 种子 cimicode 全局配置到 $HOME/.cimi/cimicode/（存在即不覆盖——排障
+#      时可挂 ConfigMap 手改）；skills 经种子配置的 skills.paths 直读镜像目
+#      录 /opt/agentteams/skills，零拷贝、不往工作目录发布任何东西；
+#   2. 预建空 node_modules——cimicode 对每个配置目录做 node_modules 存在性
+#      检查（core/npm.ts），缺则后台 npm install @opencode-ai/plugin（内网
+#      不可达，注定失败）——空目录让它直接跳过（custom tool 链路已退役，
+#      本无 tools/*.ts 需要加载）；
+#   3. 前台 exec cimicode serve（:4096，bridge 的 turn 入口）。
+# agent.md 不经本脚本：bridge 把每 turn 重拼的 agent.md 放在消息体的
+# system 字段（cimicode 原生通道）随 POST /session/{id}/message 下发，当
+# turn 即生效——无 pod 内 helper、无 AGENTS.md 文件落盘。
+# 工作目录无 emptyDir：/workspace 即容器可写层；pod 重建丢会话由 bridge 的
+# 404 自愈 + taskflow mc pull 兜住。
+# 模型配置也不经本脚本：operator 以 OPENCODE_CONFIG_CONTENT env
+# （secretKeyRef）注入，cimicode 原生消费（合并优先级最高）。
 set -eu
 
 WORKDIR="${AGENTTEAMS_FS_ROOT:-/workspace}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
-HELPER_PORT="${BRIDGE_SANDBOX_HELPER_PORT:-4097}"
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 export AGENTTEAMS_FS_ROOT="$WORKDIR"
-export OPENCODE_WORKDIR="$WORKDIR"
 
-# 发布 skill 树为 opencode project skills（镜像内副本权威，每次启动重同步）
-if [ -d /opt/agentteams/skills ]; then
-    mkdir -p "$WORKDIR/.opencode/skills"
-    cp -rf /opt/agentteams/skills/. "$WORKDIR/.opencode/skills/"
-    echo "[cimicode] skills published to $WORKDIR/.opencode/skills ($(ls "$WORKDIR/.opencode/skills" | wc -l) entries)"
+# 种子全局配置（cimicode 全局配置目录 = $HOME/.cimi/cimicode，配置文件名
+# cimicode.json——见 agi-opencode packages/core/src/global.ts）
+CFG_DIR="$HOME/.cimi/cimicode"
+mkdir -p "$CFG_DIR"
+if [ ! -f "$CFG_DIR/cimicode.json" ]; then
+    cp /opt/agentteams/cimicode.json "$CFG_DIR/cimicode.json"
+    echo "[cimicode] seeded global config to $CFG_DIR/cimicode.json"
 fi
+# 空 node_modules：跳过后台 npm install 尝试（见文件头注释）
+mkdir -p "$CFG_DIR/node_modules"
 
-# 种子 opencode 全局配置（存在即不覆盖——排障时可挂 ConfigMap 手改）
-CFG_DIR="$HOME/.config/opencode"
-mkdir -p "$CFG_DIR/tools"
-if [ ! -f "$CFG_DIR/opencode.json" ]; then
-    cp /opt/agentteams/opencode.json "$CFG_DIR/opencode.json"
-fi
-cp /opt/agentteams/tools/bash.ts "$CFG_DIR/tools/bash.ts"
-
-# bash 工具转发目标：默认同容器 helper 回环地址
-export SANDBOX_EXEC_URL="${SANDBOX_EXEC_URL:-http://127.0.0.1:${HELPER_PORT}}"
-
-echo "[cimicode] workdir=$WORKDIR port=$OPENCODE_PORT helper_port=$HELPER_PORT exec_url=$SANDBOX_EXEC_URL"
-python3 /opt/agentteams/sandbox_helper.py &
-exec opencode serve --port "$OPENCODE_PORT" --hostname 0.0.0.0
+echo "[cimicode] workdir=$WORKDIR port=$OPENCODE_PORT"
+exec cimicode serve --port "$OPENCODE_PORT" --hostname 0.0.0.0
