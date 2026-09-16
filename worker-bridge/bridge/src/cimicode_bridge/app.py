@@ -154,7 +154,6 @@ class BridgeApp:
         """
         adapter_env = os.getenv("BRIDGE_RUNTIME_ADAPTER", "")
         base_url_env = os.getenv("BRIDGE_RUNTIME_BASE_URL", "")
-        helper_url_env = os.getenv("BRIDGE_RUNTIME_HELPER_URL", "")
         turn_timeout = os.getenv("BRIDGE_RUNTIME_TURN_TIMEOUT", "")
         if turn_timeout.isdigit() and int(turn_timeout) > 0:
             self.config.runtime.turn_timeout_seconds = int(turn_timeout)
@@ -163,8 +162,6 @@ class BridgeApp:
         if base_url_env:
             self.config.runtime.base_url = base_url_env
             self._explicit_base_url = True
-        if helper_url_env:
-            self.config.runtime.helper_url = helper_url_env
 
     def _apply_bridge_section(self, files: WorkerBootstrapConfig) -> None:
         """把 runtime.yaml 顶层 bridge 段应用到 runtime 配置（不遮蔽显式 env）。
@@ -274,7 +271,7 @@ class BridgeApp:
         """轮询 controller 直到本 worker 的 runtime 接线到位。
 
         bridge pod 可能在 operator 把 runtime 接线（BRIDGE_RUNTIME_ADAPTER /
-        _BASE_URL / _HELPER_URL）写进 Worker spec.env 之前被创建——controller
+        _BASE_URL）写进 Worker spec.env 之前被创建——controller
         在那次写入后并不会滚动 pod，进程启动时的 env 因此残缺：adapter 默认
         cimicode 又没有 gateway sessionId，bridge 永远卡在 phase=bootstrap。
         与其重建 pod，不如轮询 GET /api/v1/workers/{self} 直到 runtimeEnv 携带
@@ -343,14 +340,10 @@ class BridgeApp:
                 if base_url:
                     self.config.runtime.base_url = base_url
                     self._explicit_base_url = True
-                helper_url = str(runtime_env.get("BRIDGE_RUNTIME_HELPER_URL", ""))
-                if helper_url:
-                    self.config.runtime.helper_url = helper_url
                 logger.info(
-                    "late runtime wiring recovered from controller: adapter=%s base_url=%s helper_url=%s",
+                    "late runtime wiring recovered from controller: adapter=%s base_url=%s",
                     adapter,
                     self.config.runtime.base_url,
-                    self.config.runtime.helper_url,
                 )
                 closer = getattr(self.runtime_client, "close", None)
                 if closer is not None:

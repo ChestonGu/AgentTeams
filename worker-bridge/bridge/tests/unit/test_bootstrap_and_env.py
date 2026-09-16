@@ -53,6 +53,8 @@ class TestBootstrapManagedRuntime:
         assert cfg.matrix_access_token == ""
 
     def test_openclaw_json_still_carries_bridge_section(self, monkeypatch):
+        # legacy openclaw.json 里的 bridge.runtime.helperUrl 残留键不被消费
+        # （helper 链路已退役）——数据容忍，加载不炸。
         openclaw = {"channels": {"matrix": {"accessToken": "tok"}}, "bridge": {"runtime": {"helperUrl": "http://h:4097"}}}
         objects = {
             "agents/w1/openclaw.json": json.dumps(openclaw),
@@ -62,7 +64,7 @@ class TestBootstrapManagedRuntime:
         cfg = boot.load(retries=1)
         assert cfg is not None
         assert cfg.matrix_access_token == "tok"
-        assert cfg.runtime_helper_url == "http://h:4097"
+        assert not hasattr(cfg, "runtime_helper_url")
         assert cfg.runtime_yaml.startswith("member:")
 
     def test_neither_file_present_returns_none(self, monkeypatch):
@@ -164,20 +166,17 @@ class TestEnvOverrides:
     def test_env_routes_to_cimicode_pod(self, monkeypatch):
         monkeypatch.setenv("BRIDGE_RUNTIME_ADAPTER", "cimicode-pod")
         monkeypatch.setenv("BRIDGE_RUNTIME_BASE_URL", "http://cimicode-svc:4096")
-        monkeypatch.setenv("BRIDGE_RUNTIME_HELPER_URL", "http://cimicode-svc:4097")
         monkeypatch.delenv("AGENTTEAMS_FS_ENDPOINT", raising=False)
         app = BridgeApp()
         app.start()
         assert app.config.runtime.adapter == "cimicode-pod"
         assert app.config.runtime.base_url == "http://cimicode-svc:4096"
-        assert app.config.runtime.helper_url == "http://cimicode-svc:4097"
         assert isinstance(app.runtime_client, CimicodePodAdapter)
-        assert app.runtime_client.helper_url == "http://cimicode-svc:4097"
 
     def test_defaults_without_env_undetermined(self, monkeypatch):
         """无 env、无 S3：adapter 未定、client 不建（fail-loud，
         绝不静默回落写死的 mock 地址）。"""
-        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL", "BRIDGE_RUNTIME_HELPER_URL"):
+        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL"):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv("AGENTTEAMS_FS_ENDPOINT", raising=False)
         app = BridgeApp()

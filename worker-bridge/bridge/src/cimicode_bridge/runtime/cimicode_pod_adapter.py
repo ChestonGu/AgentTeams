@@ -4,18 +4,21 @@
 server（``opencode serve``）的 REST API 走，与 stateless 的 SSE gateway
 方言已分化，本文件是独立实现（不继承 CimicodeAdapter 传输基座）。
 
-协议要点（按 opencode 1.18.27 标定，详见 contract/adapter-contract.md）：
+协议要点（按 opencode 1.18.27 与 cimicode 同型标定，详见
+contract/adapter-contract.md）：
   * 会话：``POST /session`` → 会话对象（顶层 ``id``）；``GET /session`` → 列表
-  * 消息：``POST /session/{id}/message`` body ``{"parts": [{"type": "text",
-    "text": ...}]}``——服务端阻塞整 turn 才返回（独立长超时）；
-    ``GET /session/{id}/message`` → ``{info: {id, role, time: {created,
+  * 消息：``POST /session/{id}/message`` body ``{"system": ..., "parts":
+    [{"type": "text", "text": ...}]}``——服务端阻塞整 turn 才返回（独立长
+    超时）；``GET /session/{id}/message`` → ``{info: {id, role, time: {created,
     completed?}, error?}, parts: [...]}`` 列表
   * 完成信号：完成的 assistant 消息带 ``info.time.completed``；失败 turn 带
     ``info.error``（``error.data.message`` 是上游报错原文）。SSE 在近期版本
     不可靠——轮询代替
-  * 系统指令：opencode 从工作目录读 ``AGENTS.md``；bridge 每 turn 重拼的
-    agent.md 经 pod 内 helper（``POST {helper_url}/agents-md``，body 为
-    markdown 原文）推送，随后可复用会话（AGENTS.md 变更在新建会话时生效）
+  * 系统指令：**消息体 ``system`` 字段**（opencode/cimicode 原生通道，
+    1.18.27 session/prompt.ts PromptInput.system 与 cimicode 同型）——随消息
+    持久化在 User 消息上，LLM 调用时拼进 system prompt；历史消息转换不含
+    该字段，只在当前 turn 生效，团队名单变化**当 turn 实时生效**。旧链路
+    （helper POST /agents-md 落 cwd AGENTS.md）已随 pod 内 helper 整体退役
 
 会话绑定：Worker CR 的 runtime.yaml bridge 段不预建会话（pod 形态免绑定）；
 adapter 自持会话（首 turn 创建、之后复用、404 后重建——pod 重建自愈）。
@@ -44,12 +47,10 @@ class CimicodePodAdapter:
         self,
         base_url: str,
         *,
-        helper_url: str = "",
         timeout_seconds: int = 600,
         poll_interval_seconds: float = 1.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.helper_url = helper_url.rstrip("/") if helper_url else ""
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self._session_id = ""                             # adapter 自持的 opencode 会话
@@ -78,20 +79,6 @@ class CimicodePodAdapter:
     async def close(self) -> None:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
-
-    async def _push_agent_md(self, agent_md: str) -> None:
-        """把本 turn 重拼的 agent.md 推到 pod 内 helper（落 AGENTS.md）。"""
-        if not self.helper_url:
-            # fail-loud：helper_url 缺失说明 operator 接线不完整，宁可报错
-            # 也不要静默跳过（否则 opencode 用旧系统指令跑 turn）。
-            raise RuntimeError("cimicode-pod adapter requires helper_url (BRIDGE_RUNTIME_HELPER_URL)")
-        logger.info("cimicode-pod action: push agent.md to helper=%s bytes=%d", self.helper_url, len(agent_md.encode("utf-8")))
-        response = await self._http().post(
-            f"{self.helper_url}/agents-md",
-            content=agent_md.encode("utf-8"),
-            headers={"Content-Type": "text/plain; charset=utf-8"},
-        )
-        response.raise_for_status()
 
     async def _ensure_session(self, session_id: str) -> str:
         """会话自愈：入参（controller 投影，pod 形态恒空）或自持 id 可复用；
@@ -253,26 +240,27 @@ class CimicodePodAdapter:
         history: list[dict[str, Any]],
         user_message: str,
     ) -> list[RuntimeEvent]:
-        """提交 turn：推 agent.md → 会话自愈 → 阻塞 POST → 轮询完成。
+        """提交 turn：会话自愈 → 阻塞 POST（agent.md 走消息体 system 字段）→ 轮询完成。
 
         history 已由调用方折进 user_message（三段式上下文，契约 §4）；
         sandbox 绑定由 base_url 本身承载（单 pod 无独立沙箱）。
+        agent_md 经 POST body 的 ``system`` 字段随消息下发——opencode/cimicode
+        原生通道，当前 turn 即生效（历史消息转换不含该字段，无重复注入）。
         正常完成返回 [TEXT_DELTA(全文), TURN_COMPLETED]——与 stateless 的
         事件形态同构（聚合器按 turn_completed 收口，全文发一次）。
         """
         del history, sandbox_id
         turn_started = time.monotonic()
         try:
-            await self._push_agent_md(agent_md)
             resolved = await self._ensure_session(session_id)
             baseline = self._last_assistant_id(await self._messages(resolved))
             logger.info(
-                "cimicode-pod action: post message session=%s turn=%s user_message=%r",
-                resolved, turn_id, user_message[:300],
+                "cimicode-pod action: post message session=%s turn=%s system_bytes=%d user_message=%r",
+                resolved, turn_id, len(agent_md.encode("utf-8")), user_message[:300],
             )
             response = await self._http().post(
                 f"{self.base_url}/session/{resolved}/message",
-                json={"parts": [{"type": "text", "text": user_message}]},
+                json={"system": agent_md, "parts": [{"type": "text", "text": user_message}]},
                 # POST 服务端阻塞整 turn——给独立长超时（轮询另有自己的窗口）
                 timeout=self.timeout_seconds + 30.0,
             )

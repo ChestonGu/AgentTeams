@@ -19,8 +19,6 @@ def build_runtime_adapter(runtime: RuntimeConfig):
 
     adapter 为空（未定）或 base_url 为空时抛 ValueError——bridge 装配层
     （app.py）负责在两者齐备后才调用本工厂，绝不静默回落到任何默认地址。
-    pod 形态的 helper_url 由调用侧 env 装配，缺失不阻断构建（chat 时
-    fail-loud）。
     """
     if not runtime.adapter:
         raise ValueError("runtime adapter undetermined (no BRIDGE_RUNTIME_ADAPTER env, no bridge section)")
@@ -34,7 +32,6 @@ def build_runtime_adapter(runtime: RuntimeConfig):
     if runtime.adapter == "cimicode-pod":
         return CimicodePodAdapter(
             runtime.base_url,
-            helper_url=runtime.helper_url,
             timeout_seconds=runtime.turn_timeout_seconds,
         )
     raise ValueError(f"unknown runtime adapter: {runtime.adapter!r} (expected one of {VALID_ADAPTERS})")

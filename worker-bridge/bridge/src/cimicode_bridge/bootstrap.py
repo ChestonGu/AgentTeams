@@ -104,15 +104,6 @@ class WorkerBootstrapConfig:
         )
 
     @property
-    def runtime_helper_url(self) -> str:
-        """sandbox AGENTS.md helper 服务地址（legacy opencode 链路用，已退役）。"""
-        return str(
-            self.bridge_runtime_config.get("helperUrl")
-            or self.bridge_runtime_config.get("helper_url")
-            or ""
-        )
-
-    @property
     def runtime_bridge_section(self) -> dict[str, str]:
         """runtime.yaml 顶层 bridge 段（worker-bridge 统一绑定通道）。
 
