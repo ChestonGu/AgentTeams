@@ -3574,27 +3574,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
         content: Dict[str, Any],
         meta: Optional[Dict[str, Any]],
     ) -> None:
-        """Attach Matrix thread relation metadata to an outgoing event.
+        """thread-disabled: never attach m.thread relations to outgoing events.
 
-        Only applies when an explicit thread context has been established
-        (by _with_thread_relation_meta or _ensure_thread_root). The inbound
-        _THREAD_META_ROOT_KEY alone is NOT sufficient — it is always present
-        from the original sender's event_id and would incorrectly thread
-        every reply under the sender's message.
+        This was the last thread path: inbound messages that arrive inside a
+        thread carry thread-root metadata in `meta`, and this method used to
+        re-attach the same thread relation to the reply — so replies sent
+        from a thread view stayed in that thread. With thread support fully
+        removed, every outgoing event goes to the room timeline regardless
+        of any thread context on the inbound message.
         """
-        if not isinstance(content, dict) or not isinstance(meta, dict):
-            return
-        thread_root = (
-            meta.get(_MATRIX_THREAD_META_KEY)
-            or meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
-        )
-        if not thread_root:
-            return
-        content["m.relates_to"] = {
-            "rel_type": "m.thread",
-            "event_id": thread_root,
-            "is_falling_back": False,
-        }
+        return
 
     def _attachment_parent_event_id(self, meta: Optional[Dict[str, Any]]) -> str:
         if not isinstance(meta, dict):
@@ -4013,22 +4002,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_reasoning_message(
             message_type,
         ) or self._is_tool_call_message(message_type):
-            await self._ensure_thread_root(to_handle, send_meta)
-            await self._flush_pending_final_message_to_thread(
-                to_handle,
-                send_meta,
-            )
-            parts = self._message_to_content_parts(event)
-            if not parts:
-                return
-            if self._is_reasoning_message(message_type):
-                send_meta[_MATRIX_FORCE_NOTICE_KEY] = True
-            await self._send_or_queue_thread_parts(
-                to_handle,
-                parts,
-                send_meta,
-            )
-            send_meta.pop(_MATRIX_FORCE_NOTICE_KEY, None)
+            # thread-disabled: reasoning/tool_call progress is dropped
+            # entirely (no placeholder root, no thread parts). The final
+            # reply always goes to the room timeline.
             return
         if self._is_tool_output_message(message_type):
             await self._flush_pending_final_message_to_thread(
@@ -4041,12 +4017,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
 
         if self._is_message_event(message_type):
-            await self._ensure_thread_root(to_handle, send_meta)
-            await self._flush_pending_final_message_to_thread(
-                to_handle,
-                send_meta,
-            )
-            send_meta[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = event
+            # thread-disabled: the final reply always goes to the room
+            # timeline — no placeholder root, no thread attachment.
+            await self.send_message_content(to_handle, event, send_meta)
             return
 
         await self.send_message_content(to_handle, event, send_meta)
@@ -4067,10 +4040,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
             stream_id = getattr(event, "id", None)
             if stream_id:
                 send_meta[_MATRIX_STREAMING_REASONING_STREAM_ID_KEY] = stream_id
-            await self._ensure_thread_root(to_handle, send_meta)
+            # thread-disabled: reasoning streaming does NOT eagerly create a
+            # thread root here. The thread is created lazily by
+            # on_event_message_completed when a reasoning/tool_call message
+            # actually completes, so pure conversational turns (message-only
+            # streams) never spawn a placeholder thread.
             return
-        if stream_type == "message":
-            await self._ensure_thread_root(to_handle, send_meta)
 
     async def on_streaming_delta(
         self,
@@ -4096,16 +4071,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         del request
         text = (accumulated_text or "").strip()
         if stream_type == "reasoning":
-            await self._ensure_thread_root(to_handle, send_meta)
-            if not text:
-                text = self._text_from_message_event(event)
-            if text:
-                text = f"Thinking:\n\n{text}"
-                await self._send_streaming_thread_text(
-                    to_handle,
-                    send_meta,
-                    text,
-                )
+            # thread-disabled: reasoning streams are not surfaced at all —
+            # no thread root, no "Thinking:" parts. The final reply goes to
+            # the room timeline via the message stream.
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_STREAM_ID_KEY, None)
