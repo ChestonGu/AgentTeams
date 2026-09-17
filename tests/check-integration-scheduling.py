@@ -64,9 +64,9 @@ class IntegrationSchedulingTest(unittest.TestCase):
         end = script.index('request = {', start)
         with patch.dict(os.environ, {'AGENTTEAMS_AGENT_ROLE': 'standalone', 'TOKEN': 'secret'}, clear=True):
             scope = {'os': os, 'client': {'env': {
-                'AGENTTEAMS_AGENT_ROLE': 'team_leader', 'TOKEN': '******',
+                'AGENTTEAMS_AGENT_ROLE': 'te******er', 'TOKEN': '******',
                 'TEAMHARNESS_RUNTIME_CONFIG': '******',
-            }}, 'derived_env': {'TEAMHARNESS_RUNTIME_CONFIG': '/worker/runtime/runtime.yaml'}}
+            }}, 'derived_env': {'TEAMHARNESS_RUNTIME_CONFIG': '/worker/runtime/runtime.yaml', 'AGENTTEAMS_AGENT_ROLE': 'team_leader'}}
             exec(script[start:end], scope)
         self.assertEqual(scope['env']['AGENTTEAMS_AGENT_ROLE'], 'team_leader')
         self.assertEqual(scope['env']['TOKEN'], 'secret')
