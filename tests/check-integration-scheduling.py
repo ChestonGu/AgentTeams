@@ -57,6 +57,32 @@ class IntegrationSchedulingTest(unittest.TestCase):
         self.assertTrue(all(not entry['requires_secret'] for entry in matrix))
         self.assertTrue(any(entry['worker_runtime'] == 'qwenpaw' for entry in matrix))
 
+    def test_cleanup_waits_for_resource_deletion(self):
+        cleanup = (ROOT / 'tests/test-100-cleanup.sh').read_text()
+        start = cleanup.index('RECONCILE_TIMEOUT=120')
+        end = cleanup.index('# Section 6:', start)
+        for mode, expected in (('ready', 0), ('delayed', 10), ('stuck', 120), ('api-error', 120)):
+            with self.subTest(mode=mode):
+                result = subprocess.run(['bash', '-c', r'''
+ELAPSED=0
+FAILED=0
+sleep() { ELAPSED=$((ELAPSED + $1)); }
+log_info() { :; }
+log_pass() { :; }
+log_fail() { FAILED=1; }
+list_test_worker_containers() { :; }
+exec_in_agent() {
+    [ "$MODE" != api-error ] || return 1
+    if [ "$MODE" = stuck ] || { [ "$MODE" = delayed ] && [ "$ELAPSED" -lt 10 ]; }; then
+        printf '{"%s":[{"name":"test-pending"}]}\n' "$3"
+    else
+        printf '{"%s":[]}\n' "$3"
+    fi
+}
+''' + cleanup[start:end] + '\nprintf "RESULT %s %s\\n" "$ELAPSED" "$FAILED"'],
+                    env={**os.environ, 'MODE': mode}, capture_output=True, text=True, check=True)
+                self.assertIn(f'RESULT {expected} {int(expected == 120)}', result.stdout)
+
     def run_schedule(self, no_llm, test_filter=''):
         # Execute the runner's actual selection/dispatch/report block. Stub only
         # external scenarios and session polling, preserving exit-code handling.
