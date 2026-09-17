@@ -298,12 +298,14 @@ env = dict(os.environ)
 for key, value in (client.get("env") or {}).items():
     key = str(key)
     value = str(value)
-    if key in os.environ:
-        env[key] = os.environ[key]
+    # Match the MCP client's configured environment. The container's initial
+    # role can still be standalone after team attachment updates the client.
+    if "*" not in value:
+        env[key] = value
     elif key in derived_env:
         env[key] = derived_env[key]
-    elif "*" not in value:
-        env[key] = value
+    elif key in os.environ:
+        env[key] = os.environ[key]
 request = {
     "jsonrpc": "2.0",
     "id": 1,

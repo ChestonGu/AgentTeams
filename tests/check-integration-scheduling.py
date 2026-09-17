@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / '.github/workflows/test-integration.yml').read_text()
@@ -56,6 +57,20 @@ class IntegrationSchedulingTest(unittest.TestCase):
         self.assertEqual(len(matrix), 3)
         self.assertTrue(all(not entry['requires_secret'] for entry in matrix))
         self.assertTrue(any(entry['worker_runtime'] == 'qwenpaw' for entry in matrix))
+
+    def test_mcp_probe_uses_configured_environment(self):
+        script = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()
+        start = script.index('env = dict(os.environ)')
+        end = script.index('request = {', start)
+        with patch.dict(os.environ, {'AGENTTEAMS_AGENT_ROLE': 'standalone', 'TOKEN': 'secret'}, clear=True):
+            scope = {'os': os, 'client': {'env': {
+                'AGENTTEAMS_AGENT_ROLE': 'team_leader', 'TOKEN': '******',
+                'TEAMHARNESS_RUNTIME_CONFIG': '******',
+            }}, 'derived_env': {'TEAMHARNESS_RUNTIME_CONFIG': '/worker/runtime/runtime.yaml'}}
+            exec(script[start:end], scope)
+        self.assertEqual(scope['env']['AGENTTEAMS_AGENT_ROLE'], 'team_leader')
+        self.assertEqual(scope['env']['TOKEN'], 'secret')
+        self.assertEqual(scope['env']['TEAMHARNESS_RUNTIME_CONFIG'], '/worker/runtime/runtime.yaml')
 
     def test_cleanup_waits_for_resource_deletion(self):
         cleanup = (ROOT / 'tests/test-100-cleanup.sh').read_text()
