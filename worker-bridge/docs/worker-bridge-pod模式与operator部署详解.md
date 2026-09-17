@@ -15,12 +15,13 @@
 
 ```
 105 当前:  cm-dev-cimicode / cm-qa-cimicode 两个 Deployment
-           image: agentteams/opencode-runtime:v1.2.3-cimi   ← 外网 opencode 形态
-内网将来:  同名资源，image 换 agentteams/cimicode-runtime:<tag>  ← 内网换皮形态
+           image: agentteams/opencode-runtime:v1.2.3-cimi   ← cimicode 形态的外网模拟件
+内网将来:  同名资源，image 换 agentteams/cimicode-runtime:<tag>  ← cimicode 本体（内网生产）
 ```
 
-两种 runtime 是**同契约的姊妹镜像目录**
-（[opencode-runtime/Dockerfile](../opencode-runtime/Dockerfile) 与
+cimicode-runtime 是本体，opencode-runtime 是 cimicode 形态的**同契约模拟件**
+（外网无内网 registry 条件时的替代；
+[opencode-runtime/Dockerfile](../opencode-runtime/Dockerfile) 与
 [../cimicode-runtime/Dockerfile](../cimicode-runtime/Dockerfile)），对外行为完全
 一致。**内外网切换 = 换 `CIMICODE_IMAGE` 一个值，bridge 与 operator 代码零差异。**
 契约权威文本见 [../contract/adapter-contract.md](../contract/adapter-contract.md) v1.1。

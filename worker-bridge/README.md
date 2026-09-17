@@ -1,10 +1,12 @@
-# worker-bridge — AgentTeams 的 opencode 形态 worker 运行时
+# worker-bridge — AgentTeams 的 cimicode 形态 worker 运行时
 
-把 AgentTeams 里 copaw 形态的 worker 替换为 **opencode 系运行时**，同时保持协作
+把 AgentTeams 里 copaw 形态的 worker 替换为 **cimicode 形态运行时**，同时保持协作
 协议完全同型（taskflow 任务协作、MinIO `shared/` 文件协作、群聊 mention 触发、
-leader projectflow 拆解委派）。内部 cimicode = 换皮 opencode（bun 编译单二进制），
-外网 opencode = npm 包 `opencode-ai` 钉 1.18.27——**两 runtime 是同契约的姊妹镜像
-目录，bridge/operator 单一代码零差异，内外网切换只换 `CIMICODE_IMAGE` 一个值**。
+leader projectflow 拆解委派）。**cimicode 是本体**（内网生产形态，换皮 opencode，
+bun 编译单二进制），分 **stateless / pod 两种模式**（§2）；外网没有内网 registry
+条件，用 npm 包 `opencode-ai` 钉 1.18.27 构建**同契约模拟件**（opencode-runtime，
+仅在外网开发/测试时替代本体）——bridge/operator 单一代码零差异，内外网切换只换
+`CIMICODE_IMAGE` 一个值。
 
 设计总原则（D0）：一切以 copaw 机制为准，唯一改变是工具载体。
 
@@ -25,8 +27,8 @@ leader projectflow 拆解委派）。内部 cimicode = 换皮 opencode（bun 编
                          │ BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc:4096
                          ▼
      ┌───────────────────────────────────────┐
-     │ runtime pod（operator 供给）            │  opencode-runtime / cimicode-runtime
-     │  opencode serve :4096（单端口 REST）   │  命名 <w>-cimicode + <w>-cimicode-svc
+     │ runtime pod（operator 供给）            │  cimicode-runtime（本体）/
+     │  cimicode serve :4096（单端口 REST）   │  opencode-runtime（外网模拟件）
      │  taskflow / agentteams-sync / mc +     │
      │  skills 全套镜像预装                    │
      └───────────────────┬───────────────────┘
@@ -42,10 +44,11 @@ leader projectflow 拆解委派）。内部 cimicode = 换皮 opencode（bun 编
 - **operator**（`agentteams/worker-bridge-operator`）：runtime 无关供给器。watch 本
   ns 内 `runtime=worker-bridge` 的 Worker CR，按 `spec.adapterMode` 分派，供给
   runtime Deployment + svc + Secret，并把接线两键 patch 回 Worker CR env。
-- **runtime pod**：单容器 `opencode serve`（:4096），无卷（/workspace=容器可写层，
-  pod 重建丢会话由 bridge 404 自愈重建兜底；任务态在 MinIO 不丢）。
+- **runtime pod**：单容器 `cimicode serve`（:4096；外网模拟件为 `opencode serve`，
+  同型），无卷（/workspace=容器可写层，pod 重建丢会话由 bridge 404 自愈重建兜底；
+  任务态在 MinIO 不丢）。
 
-## 2. 模式形态（adapterMode）与双 runtime 镜像
+## 2. 模式形态：stateless / pod 两种模式，本体与模拟件双镜像
 
 Worker CR `spec.adapterMode`（[types.go:270](../agentteams-controller/api/v1beta1/types.go#L270)）：
 
@@ -54,13 +57,13 @@ Worker CR `spec.adapterMode`（[types.go:270](../agentteams-controller/api/v1bet
 | `cimicode-pod`（含空值默认） | operator 供给单 runtime pod，bridge 经 svc 直连 | Deployment `<w>-cimicode` + svc `<w>-cimicode-svc`（单端口 :4096）+ Secret `<w>-cimicode-fs`（FS 凭据 + model-config） |
 | `cimicode-stateless` | bridge 直调外部 cimicode 平台（绑定四字段 `cimicodeGatewayUrl`/`sessionId`/`sandboxId`/`templateId`，controller 投影进 runtime.yaml 顶层 bridge 段） | 零供给 |
 
-**runtime 镜像双形态**（目录内差异，对外契约完全同一，见
+**同一形态的两个镜像实现**（对外契约完全同一，见
 [contract/adapter-contract.md](contract/adapter-contract.md) v1.1）：
 
-| 目录 | 基础 | 用途 |
+| 目录 | 基础 | 角色 |
 |---|---|---|
-| `cimicode-runtime/` | 内部 coder-cimicode 基础镜像（`CIMICODE_BASE_IMAGE` 构建必填，内网 registry 地址不进外网仓库，Makefile 空值守卫 fail-loud） | 内网 |
-| `opencode-runtime/` | node:22-slim + npm `opencode-ai@1.18.27`（apt 补 ripgrep/python3） | 外网 |
+| `cimicode-runtime/` | 内部 coder-cimicode 基础镜像（`CIMICODE_BASE_IMAGE` 构建必填，内网 registry 地址不进外网仓库，Makefile 空值守卫 fail-loud） | **本体**（内网生产） |
+| `opencode-runtime/` | node:22-slim + npm `opencode-ai@1.18.27`（apt 补 ripgrep/python3） | **模拟件**（外网无内网镜像条件时开发/测试用） |
 
 切换只改 operator 的 `CIMICODE_IMAGE` env，下一轮 reconcile 对 Deployment 整
 spec replace 滚动。资源命名 `<w>-cimicode*` 固定，跑 opencode-runtime 时也不改名。
@@ -123,8 +126,8 @@ AGENTTEAMS_WORKER_GATEWAY_KEY，controller 注入）
 |---|---|
 | `bridge/` | bridge 进程本体（`src/` FastAPI：matrix 防护、turn 编排、adapter 裁决、自愈轮询）+ `generate_agent_md.py`（agent.md 生成工具）+ `agentteams_log.py`（统一日志）+ `tests/` |
 | `operator/` | worker-bridge-operator（runtime 无关供给器，watch Worker CR 分派供给/推迟/GC）+ `deploy/operator.yaml` 模板 + `tests/`（24 用例） |
-| `cimicode-runtime/` | 内网 runtime 镜像构建上下文（coder-cimicode 基础镜像） |
-| `opencode-runtime/` | 外网 runtime 镜像构建上下文（node:22-slim + npm opencode-ai@1.18.27） |
+| `cimicode-runtime/` | cimicode 本体镜像构建上下文（内网 coder-cimicode 基础镜像） |
+| `opencode-runtime/` | cimicode 形态的外网模拟件（node:22-slim + npm opencode-ai@1.18.27，同契约） |
 | `bin/` | vendored mc 二进制（两 runtime Dockerfile 共享 COPY 源） |
 | `template/worker-bridge-agent/` | worker 模板（AGENTS.md 源模板 + 5 skills + scripts 部署副本） |
 | `template/worker-bridge-leader-agent/` | leader 模板 starter（leader 版 skill + projectflow 三件套，预置未部署） |
@@ -143,9 +146,9 @@ AGENTTEAMS_WORKER_GATEWAY_KEY，controller 注入）
 ### 5.1 构建镜像（仓库根 Makefile）
 
 ```bash
-make VERSION=v1.2.3-cimi build-opencode-runtime      # 外网 runtime（agentteams/opencode-runtime）
 make VERSION=v1.2.3-cimi CIMICODE_BASE_IMAGE=<内网registry>/coder-cimicode:x build-cimicode-runtime
-                                                     # 内网 runtime（BASE_IMAGE 空则守卫 fail-loud）
+                                                     # 本体：内网生产镜像（BASE_IMAGE 空则守卫 fail-loud）
+make VERSION=v1.2.3-cimi build-opencode-runtime      # 模拟件：外网验证契约用（agentteams/opencode-runtime）
 make VERSION=v1.2.3-cimi build-cimicode-bridge       # bridge（agentteams/cimicode-bridge，上下文=仓库根）
 make VERSION=v1.2.3-cimi build-worker-bridge-operator # operator（agentteams/worker-bridge-operator）
 ```
