@@ -7,10 +7,11 @@
 >    `worker-bridge/operator/`——已核实 opencode 1.18.27 具备全部四通道
 >    （`PromptInput.system` / `OPENCODE_CONFIG_CONTENT` / `OPENCODE_PERMISSION`
 >    / `skills.paths`），bridge 与 operator 对两 runtime 完全同一，内外网
->    切换只换运行时镜像（`CIMICODE_IMAGE` / `OPENCODE_RUNTIME_IMAGE`）。
-> 2. **`opencode-runtime/` 非备份**：是同契约的外网运行时形态
->    （node:22-slim + npm `opencode-ai@1.18.27`），与 `cimicode-runtime/`
->    并列；旧 opencode 形态由 git 历史回溯，不做目录存档。
+>    切换只换 operator env `CIMICODE_IMAGE` 一个值。
+> 2. **`opencode-runtime/` 非备份**：是 cimicode 形态的外网**模拟件**
+>    （node:22-slim + npm `opencode-ai@1.18.27`，外网无内网 registry 条件时
+>    验证契约用），`cimicode-runtime/` 才是本体；旧 opencode 形态由 git 历史
+>    回溯，不做目录存档。
 > 3. **vendored mc 已上移 `worker-bridge/bin/mc`**（两 Dockerfile 共享
 >    COPY），文档中 `cimicode-runtime/bin/mc` 路径作废。
 > 4. **`CIMICODE_BASE_IMAGE` 无默认值 + Makefile 守卫**：外网仓库不含内网

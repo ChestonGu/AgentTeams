@@ -3,6 +3,17 @@
 > 面向对象：需要在功能分支上继续开发、部署联调或代码评审的工程师。
 > 基线：`origin/dev-v1.2.2.p1`（merge-base `5d949340`）。
 > 文档基准：feature/worker-bridge-merge @ `da22acf4`（2026-09-14，已推 origin）。
+> **统一形态注记（2026-09-17 后补，`dev-v1.2.3-cimi`）**：本文基准是统一形态
+> 改造**前**的快照。其后六提交（`9929bfa1`…`f87d4ef4`，2026-09-16）已将文中
+> 以下设计全部退役——Worker env 三键→两键（`BRIDGE_RUNTIME_HELPER_URL` 移除
+> 并显式清除残留）、svc 双端口（:4096/:4097）→单端口 :4096、helper 链路
+> （sandbox_helper / `/agents-md` 推送）→ agent.md 改走消息体 `system` 字段、
+> emptyDir→容器可写层、`ZHIPU_API_KEY` build-arg 烘焙→镜像零凭据（operator 经
+> `OPENCODE_CONFIG_CONTENT` secretKeyRef 注入）、新增 `opencode-runtime/`
+> （cimicode 形态的外网模拟件，`cimicode-runtime/` 为本体）。文中这些段落按
+> 历史设计阅读，现状权威：[README.md](../README.md)、
+> [worker-bridge-pod模式与operator部署详解.md](worker-bridge-pod模式与operator部署详解.md)、
+> [../contract/adapter-contract.md](../contract/adapter-contract.md) v1.1。
 
 ---
 

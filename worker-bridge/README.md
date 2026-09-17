@@ -272,6 +272,7 @@ python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
 | [docs/worker-bridge-pod模式与operator部署详解.md](docs/worker-bridge-pod模式与operator部署详解.md) | pod 模式实测形态 + operator 部署使用全流程 + 105 实测坑——**部署权威** |
 | [docs/worker-bridge运行时替换与协作流转详解.md](docs/worker-bridge运行时替换与协作流转详解.md) | 运行时替换设计与协作流转 |
 | [docs/worker-bridge-worker运行时迁移方案.md](docs/worker-bridge-worker运行时迁移方案.md) | 迁移史（D0 总原则） |
+| [docs/worker-bridge功能分支变更详解（vs dev-v1.2.2.p1）.md](docs/worker-bridge功能分支变更详解（vs dev-v1.2.2.p1）.md) | v1.2.3 前半段（三链路收敛）变更详解 @ da22acf4——统一形态改造**前**的快照，头部注记列明已退役设计 |
 | [docs/内网opencode迁移cimicode迁移文档.md](docs/内网opencode迁移cimicode迁移文档.md) | 内网迁移记录（含四外网差异注记） |
 
 本目录随 AgentTeams 主仓库管理（当前开发分支 `dev-v1.2.3-cimi`）。

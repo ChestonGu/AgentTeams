@@ -9,6 +9,14 @@
 > operator（`worker-bridge/operator/`）按 adapterMode 分派：stateless 零供给、pod 单 Deployment+svc
 > （`CIMICODE_IMAGE` 必填）。镜像：`AGENTTEAMS_WORKER_BRIDGE_IMAGE` 默认空，helm values 填、双空 Create 报错。
 > 本文余下 opencode 表述按此映射阅读；测试环境 105（opencode-team-test）相关章节为历史记录。
+> **统一形态注记（2026-09-17 后补）**：其后统一形态改造（`dev-v1.2.3-cimi`
+> 六提交 `9929bfa1`…`f87d4ef4`，2026-09-16）又退役了本文大量机制——helper 链路
+> （`helper_url` / `SANDBOX_EXEC_URL` / `/agents-md` 推送）→ agent.md 每 turn
+> 走消息体 `system` 字段；svc 收敛单端口 :4096；emptyDir 移除（/workspace=
+> 容器可写层）；镜像零凭据（模型经 operator `OPENCODE_CONFIG_CONTENT`
+> secretKeyRef 注入）；新增 `opencode-runtime/`（cimicode 形态的外网模拟件，
+> `cimicode-runtime/` 为本体）。现状权威：[README.md](../README.md)、
+> [worker-bridge-pod模式与operator部署详解.md](worker-bridge-pod模式与operator部署详解.md)。
 
 ---
 

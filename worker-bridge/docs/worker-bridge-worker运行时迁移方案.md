@@ -8,8 +8,10 @@
 > 现已统一为 **worker-bridge**（CRD enum：openclaw/copaw/hermes/qwenpaw/worker-bridge），
 > 旧 opencode 链路（双 pod 沙箱栈/HELPER_URL/105 测试环境）全量退役。
 > adapter 形态拆分为 `cimicode-stateless`（直调外部平台）/`cimicode-pod`（operator 单 pod 供给）。
-> 文中 runtime/镜像/env 的 opencode 表述按此映射阅读；权威现状见仓库根 `worker-bridge/README.md`
-> 与 `worker-bridge分支规整方案.md`。
+> 文中 runtime/镜像/env 的 opencode 表述按此映射阅读；权威现状见 [../README.md](../README.md)
+> 与 [worker-bridge-pod模式与operator部署详解.md](worker-bridge-pod模式与operator部署详解.md)、
+> [../contract/adapter-contract.md](../contract/adapter-contract.md) v1.1
+> （原引用的 `worker-bridge分支规整方案.md` 未入库，改指现行权威文档）。
 
 ---
 
