@@ -502,7 +502,13 @@ class AgentPackageManager:
         if parsed.scheme in ("", "file"):
             path = Path(parsed.path if parsed.scheme == "file" else ref)
             if not path.exists():
-                raise RuntimeError(f"agent package not found: {ref}")
+                # Controller package convention (executor/package.go default
+                # branch): a bare relative ref resolves against the
+                # agentteams-config/ storage prefix, e.g.
+                # "<worker>/<worker>.zip" -> "agentteams-config/<worker>/<worker>.zip".
+                # Java uploads the zip there (WorkerPackageService
+                # S3_PACKAGE_PREFIX); fetch it from MinIO when not local.
+                return self._fetch_config_prefix(ref)
             return path
         if parsed.scheme in ("http", "https"):
             target = self.root_dir / "downloads" / Path(parsed.path).name
@@ -514,6 +520,30 @@ class AgentPackageManager:
         if parsed.scheme == "nacos":
             return self._fetch_nacos(parsed)
         raise RuntimeError(f"unsupported agent package ref scheme: {parsed.scheme}")
+
+    def _fetch_config_prefix(self, ref: str) -> Path:
+        """Fetch a bare-relative agent package from the agentteams-config/ prefix.
+
+        Mirrors the Go controller's package resolution (executor/package.go:
+        key := "agentteams-config/" + uri) so wrapper semantics stay aligned.
+        Reuses the same downloads cache dir and mc-based transport as the
+        oss:// fetch path.
+        """
+        target = self.root_dir / "downloads" / Path(ref).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            return target
+        storage_prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX", "").strip().rstrip("/") or "agentteams/agentteams-storage"
+        remote = f"{storage_prefix}/agentteams-config/{ref.lstrip('/')}"
+        try:
+            subprocess.run(["mc", "cp", remote, str(target)], check=True, capture_output=True, text=True)
+        except FileNotFoundError:
+            raise RuntimeError("mc binary not found for agent package fetch") from None
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            message = f": {detail}" if detail else ""
+            raise RuntimeError(f"fetch agent package failed: {remote}{message}") from None
+        return target
 
     def _fetch_oss(self, parsed) -> Path:
         oss_path = f"{parsed.netloc}{parsed.path}".strip("/")
@@ -1352,7 +1382,21 @@ class RuntimeUpdater:
         self._apply_channel_policy(config)
         self._apply_team_context_prompt(config)
 
-        applied_package = self.package_manager.apply(config)
+        # Agent package application is best-effort at apply time: a missing or
+        # corrupt zip must not kill the worker (the runtime.yaml inline config
+        # still provides identity/soul). Degrade to a warning; the update loop
+        # retries on the next pass, so a late-uploaded package still converges.
+        try:
+            applied_package = self.package_manager.apply(config)
+        except Exception as exc:
+            logger.warning(
+                "agent package apply failed, continuing without package "
+                "component=update worker=%s error_type=%s error=%s",
+                self.config.worker_name,
+                type(exc).__name__,
+                exc,
+            )
+            applied_package = None
         self._apply_package_mcp_servers(applied_package)
         self._apply_package_skills(applied_package)
         self._apply_managed_skills(config)

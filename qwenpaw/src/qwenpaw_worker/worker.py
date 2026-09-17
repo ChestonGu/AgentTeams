@@ -867,8 +867,31 @@ class Worker:
                     self.config.worker_name,
                     type(exc).__name__,
                 )
-            await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
-            await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
+            # 内置插件 MCP 配置（teamharness/workerflow 工具）。预热期
+            # /api/mcp 可能排队超时；配置失败只影响这两个插件的工具调用，
+            # 降级为 warning 继续启动（Matrix channel 不依赖它）——否则
+            # 整个 worker 会 CrashLoop。运行时 update loop 会周期性重试
+            # 应用 desired state，MCP 配置最终会收敛。
+            try:
+                await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
+            except Exception as exc:
+                logger.warning(
+                    "builtin plugin MCP clients config failed, continuing startup "
+                    "component=worker step=configure_mcp_clients worker=%s "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
+            try:
+                await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
+            except Exception as exc:
+                logger.warning(
+                    "builtin plugin MCP policies config failed, continuing startup "
+                    "component=worker step=configure_mcp_policies worker=%s "
+                    "error_type=%s",
+                    self.config.worker_name,
+                    type(exc).__name__,
+                )
             runtime_config = self._initial_runtime_config or self.updater.load()
             stage_started = self._log_worker_stage_begin("apply_desired_state")
             await asyncio.to_thread(
@@ -943,19 +966,40 @@ class Worker:
             )
 
     async def _wait_for_qwenpaw_api(self) -> None:
-        deadline = time.monotonic() + 60
+        """Wait until the qwenpaw API is genuinely ready, not just listening.
+
+        qwenpaw prints "Server ready" while agents/plugins still load in the
+        background; during that warm-up the FastAPI event loop is blocked by
+        synchronous init (ReMe/chromadb, plugin bootstrap) and requests queue
+        for tens of seconds (measured: /api/version took 58s during warm-up).
+        A single 200 response can be a queued request that finally got
+        through — it does not mean the next request will be fast. Require
+        consecutive fast responses before proceeding to the config chain.
+        """
+        deadline = time.monotonic() + 180
+        consecutive_fast = 0
+        required_consecutive = 3
         last_error: Optional[Exception] = None
         while time.monotonic() < deadline:
             if self._process is not None and self._process.returncode is not None:
                 raise RuntimeError(
                     f"qwenpaw app exited before API readiness: {self._process.returncode}",
                 )
+            started = time.monotonic()
             try:
                 await asyncio.to_thread(self.api_client.require_version, "2.0.1")
-                return
+                elapsed = time.monotonic() - started
+                if elapsed < 2.0:
+                    consecutive_fast += 1
+                    if consecutive_fast >= required_consecutive:
+                        return
+                else:
+                    # Slow response = still warming up; reset the streak.
+                    consecutive_fast = 0
             except Exception as exc:
                 last_error = exc
-                await asyncio.sleep(0.5)
+                consecutive_fast = 0
+            await asyncio.sleep(0.5)
         raise RuntimeError(f"qwenpaw API did not become ready: {last_error}")
 
     def _configure_builtin_plugin_mcp_clients(self) -> None:
