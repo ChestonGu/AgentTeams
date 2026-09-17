@@ -47,7 +47,6 @@ class RuntimeConfig(BaseModel):
 
     adapter: str = ""                                  # cimicode-stateless / cimicode-pod（空=未定）
     base_url: str = ""                                 # stateless 取 bridge 段；pod 取 operator env
-    helper_url: str = ""                               # pod 专用：cimicode pod 内 AGENTS.md helper（operator env）
     template_id: str = ""                              # 仅来自 CR 投影，无假默认
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox

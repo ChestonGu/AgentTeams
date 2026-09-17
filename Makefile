@@ -57,6 +57,7 @@ LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_CIMICODE_BRIDGE = agentteams/worker-bridge:$(VERSION)
 LOCAL_CIMICODE_RUNTIME = agentteams/cimicode-runtime:$(VERSION)
+LOCAL_OPENCODE_RUNTIME = agentteams/opencode-runtime:$(VERSION)
 LOCAL_WORKER_BRIDGE_OPERATOR = agentteams/worker-bridge-operator:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
@@ -114,7 +115,7 @@ LINES          ?= 50
 # ---------- Phony targets ----------
 
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        build-qwenpaw-worker build-cimicode-bridge build-cimicode-runtime build-worker-bridge-operator \
+        build-qwenpaw-worker build-cimicode-bridge build-cimicode-runtime build-opencode-runtime build-worker-bridge-operator \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker push-cimicode-bridge \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
@@ -224,19 +225,35 @@ build-cimicode-bridge: ## Build cimicode-bridge Worker image
 		.
 
 # Standalone worker-bridge 镜像（不进 build: 聚合）：
-#   cimicode-runtime     cimicode pod 合并镜像（opencode + 协作工具 + skills；
-#                        ZHIPU_API_KEY build-arg 必填——key 不进仓库）
+#   cimicode-runtime     cimicode pod 合并镜像（内部 coder-cimicode 基础镜像 +
+#                        协作工具 + skills；模型由 operator 供给期注入，镜像
+#                        零凭据——CIMICODE_BASE_IMAGE 必填且无默认值，内网
+#                        registry 地址不进本仓库，Makefile 空值守卫 fail-loud）
+#   opencode-runtime     opencode pod 合并镜像（外网 opencode npm 形态，与
+#                        cimicode-runtime 同契约——单端口/system 字段/零凭据，
+#                        node:22-slim + npm install opencode-ai 钉版本）
 #   worker-bridge-operator  per-worker cimicode pod 供给器
+CIMICODE_BASE_IMAGE ?=
+# opencode-runtime 构建参数（外网 npm 包钉版本；内网构建换 NPM_REGISTRY 镜像源）
 OPENCODE_VERSION ?= 1.18.27
-ZHIPU_API_KEY    ?=
+NPM_REGISTRY     ?= https://registry.npmjs.org
 
-build-cimicode-runtime: ## Build cimicode-runtime merged image (opencode + tools + skills; requires ZHIPU_API_KEY)
+build-cimicode-runtime: ## Build cimicode-runtime merged image (cimicode base + tools + skills; requires CIMICODE_BASE_IMAGE)
+	@test -n "$(CIMICODE_BASE_IMAGE)" || { echo "ERROR: CIMICODE_BASE_IMAGE is required（内网 registry 地址不进仓库）:"; echo "  make build-cimicode-runtime CIMICODE_BASE_IMAGE=<internal-registry>/library/coder-cimicode:0.5.0"; exit 1; }
 	@echo "==> Building cimicode-runtime image: $(LOCAL_CIMICODE_RUNTIME)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
-		--build-arg OPENCODE_VERSION=$(OPENCODE_VERSION) \
-		--build-arg ZHIPU_API_KEY=$(ZHIPU_API_KEY) \
+		--build-arg CIMICODE_BASE_IMAGE=$(CIMICODE_BASE_IMAGE) \
 		-f worker-bridge/cimicode-runtime/Dockerfile \
 		-t $(LOCAL_CIMICODE_RUNTIME) \
+		.
+
+build-opencode-runtime: ## Build opencode-runtime merged image (opencode npm + tools + skills)
+	@echo "==> Building opencode-runtime image: $(LOCAL_OPENCODE_RUNTIME)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		--build-arg OPENCODE_VERSION=$(OPENCODE_VERSION) \
+		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
+		-f worker-bridge/opencode-runtime/Dockerfile \
+		-t $(LOCAL_OPENCODE_RUNTIME) \
 		.
 
 build-worker-bridge-operator: ## Build worker-bridge-operator image

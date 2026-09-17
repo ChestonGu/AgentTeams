@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,11 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 import worker_bridge_operator as wbo
+
+GATEWAY_ENVS = {
+    wbo.AI_GATEWAY_URL_ENV: "http://higress-gw.ai.svc.cluster.local:8080",
+    wbo.GATEWAY_KEY_ENV: "consumer-key-1",
+}
 
 
 def make_cfg(**overrides) -> wbo.OperatorConfig:
@@ -129,33 +137,41 @@ def make_bridge_pod(envs: dict[str, str]):
 
 def _materialized_secret(body) -> client.V1Secret:
     """模拟 API server 的 string_data → data(base64) 物化。"""
-    import base64 as _b64
-
     return client.V1Secret(
         metadata=body.metadata,
-        data={k: _b64.b64encode(v.encode()).decode() for k, v in (body.string_data or {}).items()},
+        data={k: base64.b64encode(v.encode()).decode() for k, v in (body.string_data or {}).items()},
     )
 
 
+def _decoded_secret(core: FakeCore, name: str) -> dict[str, str]:
+    live = core.secrets[name]
+    return {k: base64.b64decode(v).decode() for k, v in (live.data or {}).items()}
+
+
 # ----------------------------------------------------------------------
-# svc：双端口（runtime/helper）
+# svc：单端口（runtime）
 # ----------------------------------------------------------------------
-def test_svc_exposes_runtime_and_helper_ports():
+def test_svc_exposes_single_runtime_port():
     op = make_operator(make_cfg())
     svc = op.svc("w1")
     ports = {p.name: p.port for p in svc.spec.ports}
-    assert ports == {"runtime": 4096, "helper": 4097}
+    assert ports == {"runtime": 4096}
     assert svc.metadata.name == "w1-cimicode-svc"
     assert svc.spec.selector == {"app": "w1-cimicode"}
 
 
 # ----------------------------------------------------------------------
-# deployment：工作 env + secretKeyRef + emptyDir
+# deployment：工作 env + secretKeyRef（FS + 模型）+ 无卷
 # ----------------------------------------------------------------------
 def test_deployment_env_and_secret_ref():
     op = make_operator(make_cfg(fs_endpoint="http://minio:9000"))
+    model_config = op.render_model_config("glm-5.3-flash", "http://gw", "key-1")
     deploy = op.cimicode_deployment(
-        "w1", team="t1", matrix_user="@w1:matrix.local", with_fs_secret=True
+        "w1",
+        team="t1",
+        matrix_user="@w1:matrix.local",
+        with_fs_secret=True,
+        model_config=model_config,
     )
     container = deploy.spec.template.spec.containers[0]
     plain = {e.name: e.value for e in container.env if e.value is not None}
@@ -164,9 +180,14 @@ def test_deployment_env_and_secret_ref():
     assert plain["AGENTTEAMS_TEAM"] == "t1"
     assert plain["AGENTTEAMS_MATRIX_USER_ID"] == "@w1:matrix.local"
     assert plain["AGENTTEAMS_FS_ENDPOINT"] == "http://minio:9000"
-    assert plain["SANDBOX_EXEC_URL"] == "http://127.0.0.1:4097"
+    # 旧 helper 链路 env 不再出现（agent.md 走消息体 system 字段）
+    assert "SANDBOX_EXEC_URL" not in plain
     # AGENTTEAMS_RUNTIME 绝不出现（mc 同步只认 k8s/aliyun，本 pod 走 local 三元组）
     assert "AGENTTEAMS_RUNTIME" not in plain
+    # 模型哈希明文 env = sha256(content)[:16]（内容变更 → env 指纹漂移 → 滚动）
+    assert plain[wbo.ENV_MODEL_CONFIG_HASH] == hashlib.sha256(
+        model_config.encode("utf-8")
+    ).hexdigest()[:16]
     refs = {
         e.name: (e.value_from.secret_key_ref.name, e.value_from.secret_key_ref.key)
         for e in container.env
@@ -175,22 +196,79 @@ def test_deployment_env_and_secret_ref():
     assert refs == {
         "AGENTTEAMS_FS_ACCESS_KEY": ("w1-cimicode-fs", "accessKey"),
         "AGENTTEAMS_FS_SECRET_KEY": ("w1-cimicode-fs", "secretKey"),
+        wbo.ENV_MODEL_CONFIG: ("w1-cimicode-fs", "model-config"),
     }
-    volumes = deploy.spec.template.spec.volumes
-    assert len(volumes) == 1 and volumes[0].name == "workspace" and volumes[0].empty_dir is not None
+    # 无卷：/workspace = 容器可写层（emptyDir 已按部署决策移除）
+    assert deploy.spec.template.spec.volumes is None
     assert container.readiness_probe.http_get.path == "/session"
 
 
 def test_deployment_without_fs_secret_has_no_refs():
     op = make_operator(make_cfg(fs_endpoint=""))
-    deploy = op.cimicode_deployment("w1", with_fs_secret=False)
+    deploy = op.cimicode_deployment("w1", with_fs_secret=False, model_config=None)
     container = deploy.spec.template.spec.containers[0]
     assert not [e for e in container.env if e.value_from]
     assert "AGENTTEAMS_FS_ENDPOINT" not in {e.name for e in container.env}
 
 
 # ----------------------------------------------------------------------
-# drift：env 变化要被识别
+# model_config_content / render_model_config：三态 + 方言形状
+# ----------------------------------------------------------------------
+def test_model_config_content_empty_model_defers():
+    op = make_operator()
+    content, problem = op.model_config_content({"spec": {}}, dict(GATEWAY_ENVS))
+    assert content is None
+    assert problem == "spec.model is empty"
+
+
+def test_model_config_content_native_config_sentinel_case_insensitive():
+    """哨兵与 controller isNativeConfigModel 对齐（EqualFold + TrimSpace）。"""
+    op = make_operator()
+    for sentinel in ("native-config", "Native-Config", " NATIVE-CONFIG "):
+        content, problem = op.model_config_content(
+            {"spec": {"model": sentinel}}, dict(GATEWAY_ENVS)
+        )
+        assert content is None
+        assert problem == ""
+
+
+def test_model_config_content_missing_gateway_envs_reports_all():
+    op = make_operator()
+    # 两要素都缺 → 一次性报齐（fail-loud 排障可读）
+    content, problem = op.model_config_content({"spec": {"model": "glm"}}, {})
+    assert content is None
+    assert problem == (
+        f"bridge pod env carries no {wbo.AI_GATEWAY_URL_ENV}/{wbo.GATEWAY_KEY_ENV}"
+    )
+    # 只缺 key → 只报 key
+    content, problem = op.model_config_content(
+        {"spec": {"model": "glm"}},
+        {wbo.AI_GATEWAY_URL_ENV: "http://gw"},
+    )
+    assert content is None
+    assert problem == f"bridge pod env carries no {wbo.GATEWAY_KEY_ENV}"
+    # 齐备 → 注入
+    content, problem = op.model_config_content({"spec": {"model": "glm"}}, dict(GATEWAY_ENVS))
+    assert content is not None and problem == ""
+
+
+def test_render_model_config_shape():
+    content = wbo.StackOperator.render_model_config(
+        "agentteams-gateway/glm-5.3-flash", "http://gw/", "key-1"
+    )
+    config = json.loads(content)
+    # provider 前缀剥离后作为 model 名；model 主键带前缀（原生链路同型）
+    assert config["model"] == "agentteams-gateway/glm-5.3-flash"
+    provider = config["provider"]["agentteams-gateway"]
+    # URL 尾斜杠归一化——baseURL 不出现 //v1
+    assert provider["options"]["baseURL"] == "http://gw/v1"
+    assert provider["options"]["apiKey"] == "key-1"
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert provider["models"] == {"glm-5.3-flash": {"name": "glm-5.3-flash"}}
+
+
+# ----------------------------------------------------------------------
+# drift：env / secretKeyRef / 模型哈希变化要被识别
 # ----------------------------------------------------------------------
 def test_deployment_drift_reports_env_change():
     op = make_operator()
@@ -208,16 +286,17 @@ def test_deployment_drift_reports_missing_secret_ref():
     assert op.deployment_drift(without_ref, with_ref) is True
 
 
-def test_deployment_drift_stable_after_api_materialization():
-    """API 会把 empty_dir={} 物化回 V1EmptyDirVolumeSource 实例——回读的
-    live 不得因此对 desired 报漂移（bool() vs {} 的幻影漂移回归）。"""
+def test_deployment_drift_reports_model_hash_change():
+    """模型/网关/key 轮转 → 内容哈希变化 → env 指纹漂移（滚动重启的钥匙）：
+    Secret 值本身变更不会触发，哈希 env 是唯一入漂移面的载体。"""
     op = make_operator()
-    desired = op.cimicode_deployment("w1", team="t1", matrix_user="@w1:m", with_fs_secret=True)
-    live = op.cimicode_deployment("w1", team="t1", matrix_user="@w1:m", with_fs_secret=True)
-    for v in live.spec.template.spec.volumes:
-        if v.empty_dir is not None:
-            v.empty_dir = client.V1EmptyDirVolumeSource()
-    assert op.deployment_drift(live, desired) is False
+    m1 = wbo.StackOperator.render_model_config("glm-a", "http://gw", "key-1")
+    m2 = wbo.StackOperator.render_model_config("glm-b", "http://gw", "key-1")
+    with_a = op.cimicode_deployment("w1", model_config=m1)
+    with_a_again = op.cimicode_deployment("w1", model_config=m1)
+    with_b = op.cimicode_deployment("w1", model_config=m2)
+    assert op.deployment_drift(with_a_again, with_a) is False
+    assert op.deployment_drift(with_b, with_a) is True
 
 
 # ----------------------------------------------------------------------
@@ -278,21 +357,24 @@ def test_matrix_user_id_prefers_status():
 
 
 # ----------------------------------------------------------------------
-# ensure_worker_env：三键 patch
+# ensure_worker_env：两键 patch + 残留 helper 键清除
 # ----------------------------------------------------------------------
-def test_ensure_worker_env_patches_three_keys():
-    custom = FakeCustom(workers={"w1": {"spec": {"env": {"OTHER": "keep"}}}})
+def test_ensure_worker_env_patches_two_keys_and_retires_helper_key():
+    """R3：存量 Worker CR 里 operator 时代写入的 BRIDGE_RUNTIME_HELPER_URL
+    要被显式清除——一轮收敛，不留双通道歧义。"""
+    custom = FakeCustom(workers={"w1": {"spec": {"env": {
+        "OTHER": "keep",
+        "BRIDGE_RUNTIME_HELPER_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4097",
+    }}}})
     op = make_operator(custom=custom)
     op.ensure_worker_env("w1", custom.workers["w1"])
     name, body = custom.patches[0]
     assert name == "w1"
     envs = body["spec"]["env"]
-    assert envs["OTHER"] == "keep"
     assert envs == {
         "OTHER": "keep",
         "BRIDGE_RUNTIME_ADAPTER": "cimicode-pod",
         "BRIDGE_RUNTIME_BASE_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4096",
-        "BRIDGE_RUNTIME_HELPER_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4097",
     }
 
 
@@ -300,7 +382,6 @@ def test_ensure_worker_env_no_patch_when_current():
     custom = FakeCustom(workers={"w1": {"spec": {"env": {
         "BRIDGE_RUNTIME_ADAPTER": "cimicode-pod",
         "BRIDGE_RUNTIME_BASE_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4096",
-        "BRIDGE_RUNTIME_HELPER_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4097",
     }}}})
     op = make_operator(custom=custom)
     op.ensure_worker_env("w1", custom.workers["w1"])
@@ -311,8 +392,6 @@ def test_ensure_worker_env_no_patch_when_current():
 # ensure_secret：创建与轮转
 # ----------------------------------------------------------------------
 def test_ensure_secret_creates_then_rotates():
-    import base64
-
     core = FakeCore()
     op = make_operator(core=core)
     op.ensure_secret("w1-cimicode-fs", "w1", {"accessKey": "ak", "secretKey": "sk"})
@@ -321,9 +400,7 @@ def test_ensure_secret_creates_then_rotates():
     op.ensure_secret("w1-cimicode-fs", "w1", {"accessKey": "ak", "secretKey": "sk"})
     # 轮转
     op.ensure_secret("w1-cimicode-fs", "w1", {"accessKey": "ak2", "secretKey": "sk2"})
-    live = core.secrets["w1-cimicode-fs"]
-    decoded = {k: base64.b64decode(v).decode() for k, v in (live.data or {}).items()}
-    assert decoded == {"accessKey": "ak2", "secretKey": "sk2"}
+    assert _decoded_secret(core, "w1-cimicode-fs") == {"accessKey": "ak2", "secretKey": "sk2"}
 
 
 # ----------------------------------------------------------------------
@@ -356,7 +433,7 @@ def test_garbage_collect_keeps_secret_for_live_pod_worker():
 
 
 # ----------------------------------------------------------------------
-# reconcile_worker：bridge 未起推迟 / 全链路建齐
+# reconcile_worker：bridge 未起 / 模型缺失推迟 / 全链路建齐
 # ----------------------------------------------------------------------
 def test_reconcile_defers_when_bridge_pod_missing():
     custom = FakeCustom(workers={"w1": {"spec": {"runtime": "worker-bridge"}}})
@@ -367,13 +444,15 @@ def test_reconcile_defers_when_bridge_pod_missing():
     assert custom.patches == []
 
 
-def test_reconcile_provisions_full_stack():
+def test_reconcile_defers_when_model_missing():
+    """fail-loud：spec.model 空或网关要素不在 bridge pod env → 推迟供给
+    （不建跑不起来 turn 的 pod，也不建 Secret / 不 patch env）。"""
     custom = FakeCustom(
         workers={"w1": {"spec": {"runtime": "worker-bridge"},
                         "status": {"matrixUserID": "@w1:matrix.local"}}},
-        teams=[{"metadata": {"name": "t1"}, "spec": {"workerMembers": [{"name": "w1"}]}}],
     )
     core = FakeCore(pods={
+        # FS 凭据齐但模型网关要素缺失
         "agentteams-worker-w1-bridge": make_bridge_pod({
             "AGENTTEAMS_FS_ACCESS_KEY": "ak", "AGENTTEAMS_FS_SECRET_KEY": "sk",
         }),
@@ -381,17 +460,47 @@ def test_reconcile_provisions_full_stack():
     apps = FakeApps()
     op = make_operator(make_cfg(fs_endpoint="http://minio:9000"), custom=custom, core=core, apps=apps)
     op.reconcile_worker("w1", custom.workers["w1"])
+    assert apps.deployments == {}
+    assert core.secrets == {}
+    assert custom.patches == []
 
+
+def test_reconcile_provisions_full_stack():
+    custom = FakeCustom(
+        workers={"w1": {"spec": {"runtime": "worker-bridge", "model": "glm-5.3-flash"},
+                        "status": {"matrixUserID": "@w1:matrix.local"}}},
+        teams=[{"metadata": {"name": "t1"}, "spec": {"workerMembers": [{"name": "w1"}]}}],
+    )
+    core = FakeCore(pods={
+        "agentteams-worker-w1-bridge": make_bridge_pod({
+            "AGENTTEAMS_FS_ACCESS_KEY": "ak", "AGENTTEAMS_FS_SECRET_KEY": "sk",
+            **GATEWAY_ENVS,
+        }),
+    })
+    apps = FakeApps()
+    op = make_operator(make_cfg(fs_endpoint="http://minio:9000"), custom=custom, core=core, apps=apps)
+    op.reconcile_worker("w1", custom.workers["w1"])
+
+    # Secret：FS 凭据 + 渲染的模型配置（3 key）
     assert "w1-cimicode-fs" in core.secrets
+    secret_data = _decoded_secret(core, "w1-cimicode-fs")
+    assert secret_data["accessKey"] == "ak"
+    assert secret_data["secretKey"] == "sk"
+    assert json.loads(secret_data["model-config"])["model"] == "agentteams-gateway/glm-5.3-flash"
+
     assert "w1-cimicode" in apps.deployments
     container = apps.deployments["w1-cimicode"].spec.template.spec.containers[0]
     plain = {e.name: e.value for e in container.env if e.value is not None}
     assert plain["AGENTTEAMS_TEAM"] == "t1"
     assert plain["AGENTTEAMS_MATRIX_USER_ID"] == "@w1:matrix.local"
+    assert plain[wbo.ENV_MODEL_CONFIG_HASH] == hashlib.sha256(
+        secret_data["model-config"].encode("utf-8")
+    ).hexdigest()[:16]
     assert [e.name for e in container.env if e.value_from] == [
-        "AGENTTEAMS_FS_ACCESS_KEY", "AGENTTEAMS_FS_SECRET_KEY",
+        "AGENTTEAMS_FS_ACCESS_KEY", "AGENTTEAMS_FS_SECRET_KEY", wbo.ENV_MODEL_CONFIG,
     ]
     assert custom.patches and custom.patches[0][0] == "w1"
+    assert "BRIDGE_RUNTIME_HELPER_URL" not in custom.patches[0][1]["spec"]["env"]
 
 
 def test_reconcile_stateless_touches_nothing():
