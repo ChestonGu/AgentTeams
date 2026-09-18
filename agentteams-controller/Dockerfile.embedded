@@ -85,6 +85,7 @@ COPY manager/agent/copaw-worker-agent/ /opt/agentteams/agent/copaw-worker-agent/
 COPY manager/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agent/
 COPY manager/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/agentteams/agent/skills/
+COPY manager/agent/worker-skills/ /opt/agentteams/agent/worker-skills/
 
 # Plugin packages (skill catalog "plugin" source: plugin.yaml + skills/ trees)
 COPY plugins/ /opt/agentteams/plugins/

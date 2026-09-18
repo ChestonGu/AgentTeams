@@ -1128,8 +1128,9 @@ server = mcp.get(mcp_name) or {}
 if server.get("url") != mcp_url or server.get("transport") != api_mcp_transport:
     problems.append("mcp:api")
 authorization = (server.get("headers") or {}).get("Authorization", "")
-if not authorization or "*" not in authorization:
-    problems.append("auth:api")
+# This fixture is outside the trusted gateway; never forward its credential.
+if authorization:
+    problems.append("auth:external_credential_leak")
 package_server = mcp.get(package_mcp_name) or {}
 if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
     problems.append("package_mcp:api")

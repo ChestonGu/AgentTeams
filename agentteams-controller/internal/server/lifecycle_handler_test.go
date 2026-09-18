@@ -355,3 +355,37 @@ func TestLifecycleReadyStaleLastActiveAtNotOverwritten(t *testing.T) {
 		t.Errorf("agentStatus should still update independently, got %q", updated.Status.AgentStatus)
 	}
 }
+
+func TestLifecycleWorkerStatusDoesNotReportStoppedContainerAsRunning(t *testing.T) {
+	for _, tc := range []struct{ name, desired, phase, want string }{
+		{"unexpected exit", "Running", "Running", "Stopped"},
+		{"stale ready", "Running", "Ready", "Stopped"},
+		{"intentional sleep", "Sleeping", "Sleeping", "Sleeping"},
+		{"intentional stop", "Stopped", "Stopped", "Stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+				Spec:       v1beta1.WorkerSpec{State: &tc.desired},
+				Status:     v1beta1.WorkerStatus{Phase: tc.phase},
+			}
+			k8sClient := fake.NewClientBuilder().WithScheme(newLifecycleTestScheme(t)).WithObjects(worker).Build()
+			handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{&stubWorkerBackend{status: backend.StatusStopped}}), "default")
+			handler.setReady("alpha-dev", true)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev/status", nil)
+			req.SetPathValue("name", "alpha-dev")
+			rec := httptest.NewRecorder()
+			handler.GetWorkerRuntimeStatus(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			var resp WorkerResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Phase != tc.want || resp.ContainerState != "stopped" {
+				t.Fatalf("got phase=%s container=%s, want %s/stopped", resp.Phase, resp.ContainerState, tc.want)
+			}
+		})
+	}
+}
