@@ -1,8 +1,15 @@
 # Runtime Adapter 传输契约（cimicode-stateless / cimicode-pod 统一形态）
 
-**版本** v1.1（2026-09-16）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
+**版本** v1.2（2026-09-18）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
 （adapter 层）、`worker-bridge/cimicode-runtime/` + `worker-bridge/opencode-runtime/`
 （双 runtime 镜像）、`worker-bridge/operator/`（供给与模型注入）
+
+**v1.2 变更**（自 v1.1，2026-09-16）：接线改为 **bridge 自推导**——operator
+不再 patch Worker CR（ensure_worker_env 退役）；pod 模式 base_url 从 svc 命名
+契约推导（`<w>-cimicode-svc:4096`）+ `GET /session` 健康门禁；自愈轮询扩为三
+通道（bootstrap 重拉 / 推导健康等待 / controller env 兼容存量）；accepted 消息
+在接线不全时可见降级（告警 + 即时唤醒自愈）而非静默丢弃。根因：CR env 回写
+追不上 bridge pod 创建竞态（pod env 快照不可变），见下"接线"节。
 
 **v1.1 变更**（自 v1.0，2026-09-13）：helper 通道（:4097 `/agents-md` `/exec`）
 整体退役——agent.md 改走消息体 `system` 字段原生通道；端口收敛为单 4096；
@@ -101,19 +108,51 @@ source="local"，优先级最高）——不落盘、不进镜像；
 `OPENCODE_PERMISSION`（config.ts:559-563，JSON parse 后 mergeDeep）由镜像
 ENV 固化；`skills.paths`（skill/index.ts:211）直读生效。
 
-## 接线（Worker CR spec.env → bridge 自愈轮询）
+## 接线（v1.2：bridge 自推导，operator 零 CR 写入）
 
-operator patch 两键（bridge 经 controller runtimeEnv 读取，或 pod env 直接注入）：
+**裁决四态**（`app.py _resolve_adapter_mode`，唯一权威顺序）：
 
 ```
-BRIDGE_RUNTIME_ADAPTER=cimicode-pod
-BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc.<ns>.svc:4096
+① 显式 BRIDGE_RUNTIME_ADAPTER env（部署层覆盖 / 存量 operator 写入）
+② runtime.yaml 顶层 bridge.adapterMode（controller 投影）
+③ pod 模式命名推导：worker-bridge 的 runtime.yaml 在手且无 bridge 段
+   （= Worker CR 绑定全空 = controller 归一化下的 pod 默认）→ cimicode-pod
+④ 未定态（bootstrap 未落地——stateless 的绑定可能就在没拉到的配置里，
+   不猜 pod）：不建 client，自愈轮询每 15s 重查
 ```
 
-v1.0 的 `BRIDGE_RUNTIME_HELPER_URL` 退役：新 bridge 不读；存量 Worker CR
-残留键由 operator 每轮显式清除（`ENV_KEY_HELPER_URL_RETIRED`）。
+**base_url 推导 + 健康门禁**（仅 pod 模式、且无显式 base_url 时）：
+svc 命名是 operator 供给契约的确定值 `http://<w>-cimicode-svc:4096`（同
+namespace 短名直解）——值可提前知道，晚到的只是**可达性**。推导地址须过
+`GET /session` 探测（timeout 2s，**<500 即就绪**——4xx 说明 HTTP 栈已通）
+才建 client；探测不过则回滚推导值、由自愈轮询重试。显式 env / bridge 段
+的 base_url 信任配置方，不探测（stateless 的 SSE 网关健康端点未必是
+/session）。
 
-会话门禁（app.py 三处 `== "cimicode-stateless"`）语义是"仅 stateless 要求预建
+**自愈三通道**（`_recover_late_runtime_wiring`，15s 轮询、无限重试、谁先
+就绪谁接管；重建前过 `_gateway_running` 守卫——在跑的 Matrix sync 循环
+绝不重启，否则双长轮询双消费 timeline 事件）：
+
+| 通道 | 服务场景 |
+|---|---|
+| A. S3 bootstrap 重拉 | runtime.yaml / matrix 凭证晚于 bridge pod 落地 |
+| B. 推导健康等待（**主通道**） | pod 模式目标已定、runtime pod 未起——逐轮重探 |
+| C. controller env 查询（兼容） | 存量 CR 里旧 operator 写入的两键（`GET /api/v1/workers/{self}` runtimeEnv） |
+
+**触发与降级**（v1.2 修复的三层事故面）：`start_background` 在 gateway 已通
+而 client 未建时也起自愈任务（ready/phase 刻意不动——中间态必须保持
+ready=True，否则就绪探针 fail → k8s 重启 bridge 也换不来接线，竞态原地
+打转成崩溃循环）；accepted mention 在 client 缺失时**可见降级**（warning
+日志 + `_kick_recovery` 立即唤醒自愈，而非裸 return 静默丢弃）。
+
+**operator 侧**：`ensure_worker_env` 已删除——operator 对 Worker CR 纯只读。
+存量 Worker CR 里历史写入的 `BRIDGE_RUNTIME_ADAPTER` / `BRIDGE_RUNTIME_BASE_URL`
+**无害**：值与推导一致（同一 svc），按①显式 env 优先消费；v1.0 的
+`BRIDGE_RUNTIME_HELPER_URL` 残留键新 bridge 不读。发版序约束：**bridge 与
+operator 同窗口升级**——旧 bridge + 新 operator 会回归竞态（无人写 env 且
+无推导）；新 bridge + 旧 operator 兼容（推导为主、env 为显式覆盖）。
+
+会话门禁（app.py `== "cimicode-stateless"`）语义是"仅 stateless 要求预建
 绑定"——pod 形态免预建，勿放宽为通用检查。
 
 ## 已知限制（生产化备忘）
@@ -121,6 +160,10 @@ v1.0 的 `BRIDGE_RUNTIME_HELPER_URL` 退役：新 bridge 不读；存量 Worker 
 - **无卷**：/workspace=容器可写层，pod 重建即丢（会话目录 + 任务状态）。
   会话由 404 自愈重建兜底；任务状态经 taskflow `mc pull` 恢复。PVC 化是
   生产化步骤。
+- **接线未就绪窗口内的 mention 不重放**：自愈完成前的 accepted mention
+  只告警不处理；bridge 重启靠 memory store 的 initial sync 只带回最近
+  timeline 窗口（~10 条），超窗真丢。窗口典型 <1min（推导 + 15s 轮询），
+  重放兜底的产品化（如 controller 侧重放队列）另议。
 - **ripgrep 必装**：opencode skill 工具 shell 出 rg，缺则每次挂 130s
   （cimicode 基础镜像自带；opencode-runtime 镜像 apt 已装）。
 - **S1（1.18.27 system 历史语义）**：历史消息转换是否重复注入 system——

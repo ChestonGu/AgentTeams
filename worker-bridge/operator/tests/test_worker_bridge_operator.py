@@ -357,38 +357,6 @@ def test_matrix_user_id_prefers_status():
 
 
 # ----------------------------------------------------------------------
-# ensure_worker_env：两键 patch + 残留 helper 键清除
-# ----------------------------------------------------------------------
-def test_ensure_worker_env_patches_two_keys_and_retires_helper_key():
-    """R3：存量 Worker CR 里 operator 时代写入的 BRIDGE_RUNTIME_HELPER_URL
-    要被显式清除——一轮收敛，不留双通道歧义。"""
-    custom = FakeCustom(workers={"w1": {"spec": {"env": {
-        "OTHER": "keep",
-        "BRIDGE_RUNTIME_HELPER_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4097",
-    }}}})
-    op = make_operator(custom=custom)
-    op.ensure_worker_env("w1", custom.workers["w1"])
-    name, body = custom.patches[0]
-    assert name == "w1"
-    envs = body["spec"]["env"]
-    assert envs == {
-        "OTHER": "keep",
-        "BRIDGE_RUNTIME_ADAPTER": "cimicode-pod",
-        "BRIDGE_RUNTIME_BASE_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4096",
-    }
-
-
-def test_ensure_worker_env_no_patch_when_current():
-    custom = FakeCustom(workers={"w1": {"spec": {"env": {
-        "BRIDGE_RUNTIME_ADAPTER": "cimicode-pod",
-        "BRIDGE_RUNTIME_BASE_URL": "http://w1-cimicode-svc.test-ns.svc.cluster.local:4096",
-    }}}})
-    op = make_operator(custom=custom)
-    op.ensure_worker_env("w1", custom.workers["w1"])
-    assert custom.patches == []
-
-
-# ----------------------------------------------------------------------
 # ensure_secret：创建与轮转
 # ----------------------------------------------------------------------
 def test_ensure_secret_creates_then_rotates():
@@ -499,8 +467,9 @@ def test_reconcile_provisions_full_stack():
     assert [e.name for e in container.env if e.value_from] == [
         "AGENTTEAMS_FS_ACCESS_KEY", "AGENTTEAMS_FS_SECRET_KEY", wbo.ENV_MODEL_CONFIG,
     ]
-    assert custom.patches and custom.patches[0][0] == "w1"
-    assert "BRIDGE_RUNTIME_HELPER_URL" not in custom.patches[0][1]["spec"]["env"]
+    # operator 不碰 Worker CR：bridge 从 svc 命名契约自行推导接线
+    #（<w>-cimicode-svc:4096 + GET /session 健康门禁），全程零 patch。
+    assert custom.patches == []
 
 
 def test_reconcile_stateless_touches_nothing():

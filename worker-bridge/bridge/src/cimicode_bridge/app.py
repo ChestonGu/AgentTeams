@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI
 
 from cimicode_bridge.api.routes import register_routes
-from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig
+from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig, managed_runtime_type
 from cimicode_bridge.config import BridgeConfig, load_config
 from cimicode_bridge.controller.client import fetch_worker_runtime_env, refresh_matrix_token
 from cimicode_bridge.log import setup_logging
@@ -34,6 +36,12 @@ from cimicode_bridge.store.memory import MemoryStore
 from cimicode_bridge.store.redis import RedisStore
 
 logger = logging.getLogger(__name__)
+
+# pod 模式推导常量：operator 供给的 svc 命名与端口是契约级确定值
+# （adapter-contract：`<w>-cimicode-svc:4096`）。接线目标因此可以提前
+# 推导——晚到的从来不是值，是可达性；operator 无需再回写 Worker CR env。
+ADAPTER_POD_DEFAULT = "cimicode-pod"
+RUNTIME_SVC_PORT = 4096
 
 
 @dataclass
@@ -125,7 +133,7 @@ class BridgeApp:
         self.history_manager = HistoryManager(capacity=self.config.history.max_entries)
         # Runtime SPI：adapter 未定或 base_url 缺失时不建 client（fail-loud，
         # 绝不静默回落默认地址），由自愈轮询等接线（BRIDGE_RUNTIME_* env /
-        # runtime.yaml bridge 段，谁晚到都行）。
+        # runtime.yaml bridge 段 / pod 模式命名推导 + 健康探测，谁先就绪谁接管）。
         self.runtime_client = self._build_runtime_client()
         self.state_store = self._build_state_store()
         self.matrix_gateway = self._build_matrix_gateway()
@@ -192,11 +200,16 @@ class BridgeApp:
     def _resolve_adapter_mode(self) -> str:
         """adapter 形态判定（唯一权威顺序，bootstrap 与自愈轮询共用）。
 
-        ① 显式 BRIDGE_RUNTIME_ADAPTER env——operator patch（pod 模式接线）
-           或部署层手动覆盖，最高优先；
+        ① 显式 BRIDGE_RUNTIME_ADAPTER env——部署层覆盖或存量 operator
+           写入（兼容），最高优先；
         ② runtime.yaml 顶层 bridge.adapterMode——controller 投影
            （cimicode-stateless / cimicode-pod）；
-        ③ 都没有 → 空串（未定态）：不建 runtime client，自愈轮询每 15s 重查。
+        ③ worker-bridge 的 runtime.yaml 在手但无 bridge 段 = Worker CR
+           绑定全空 = controller 归一化下的 pod 默认——按命名契约推导
+           pod 模式（base_url 同样可推导，见 _derived_base_url）；
+        ④ 都没有（bootstrap 未落地）→ 空串（未定态）：不建 runtime
+           client，自愈轮询每 15s 重查。stateless 的绑定可能就在那份
+           没拉到的 bootstrap 里，此时不猜 pod。
         """
         explicit = os.getenv("BRIDGE_RUNTIME_ADAPTER", "")
         if explicit:
@@ -205,21 +218,67 @@ class BridgeApp:
             mode = self.worker_files.bridge_adapter_mode
             if mode:
                 return mode
+            if self.worker_files.runtime_yaml and \
+                    managed_runtime_type(self.worker_files.runtime_yaml) == "worker-bridge":
+                return ADAPTER_POD_DEFAULT
         return ""
+
+    def _derived_base_url(self) -> str:
+        """pod 模式 svc 地址推导（契约级确定值，不是猜）。
+
+        operator 供给命名固定 `<w>-cimicode-svc`（CIMICODE_PORT 默认
+        4096），bridge 与 runtime 恒同 namespace，短名直解。worker 名
+        缺失（本地开发/测试）返回空串——无从推导。
+        """
+        worker = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip()
+        if not worker:
+            return ""
+        return f"http://{worker}-cimicode-svc:{RUNTIME_SVC_PORT}"
+
+    def _probe_runtime_health(self, base_url: str) -> bool:
+        """推导地址的就绪探测：GET /session，<500 即算服务在答。
+
+        4xx 也算在（HTTP 栈已通，404/405 比 connection refused 更接近
+        "起来了"）；连接拒绝/DNS 未解析/超时/5xx 才算没就绪。只对推导
+        出的 base_url 使用——显式 env / bridge 段给的地址信任配置方
+        （stateless 的 SSE 网关健康端点未必是 /session，不能拿来探测）。
+        """
+        try:
+            resp = httpx.get(f"{base_url.rstrip('/')}/session", timeout=2.0)
+            return resp.status_code < 500
+        except httpx.HTTPError:
+            return False
 
     def _build_runtime_client(self) -> Any | None:
         """adapter 与 base_url 齐备才构建 runtime adapter；否则 None（等自愈）。
 
         fail-loud 约束：base_url 没有任何合法来源时绝不猜一个默认地址
-        （旧版写死 "http://cimicode-gateway" 的 mock 残留已清除）。
+        （旧版写死 "http://cimicode-gateway" 的 mock 残留已清除）。唯一
+        例外是 pod 模式的推导地址：svc 命名是 operator 供给契约的确定
+        值，但可达性要等 runtime pod 起来——推导地址过健康门禁
+        （_probe_runtime_health）才建 client，把"等 operator 回写 env"
+        变成"等 runtime 健康"。
         """
-        mode = self._resolve_adapter_mode()
+        mode = self._resolve_adapter_mode() or self.config.runtime.adapter
         if not mode:
             logger.warning("runtime adapter undetermined (no env, no bridge section); leaving client unbuilt")
             return None
         self.config.runtime.adapter = mode
+        derived = False
+        if not self.config.runtime.base_url and mode == ADAPTER_POD_DEFAULT:
+            base_url = self._derived_base_url()
+            if base_url:
+                self.config.runtime.base_url = base_url
+                derived = True
         if not self.config.runtime.base_url:
             logger.warning("runtime base_url missing for adapter %r; leaving client unbuilt", mode)
+            return None
+        if derived and not self._probe_runtime_health(self.config.runtime.base_url):
+            logger.info(
+                "derived runtime base_url %s not healthy yet; leaving client unbuilt (self-heal poll retries)",
+                self.config.runtime.base_url,
+            )
+            self.config.runtime.base_url = ""
             return None
         try:
             client = build_runtime_adapter(self.config.runtime)
@@ -267,16 +326,59 @@ class BridgeApp:
             return FileStore()
         return MemoryStore()
 
-    async def _recover_late_runtime_wiring(self) -> None:
-        """轮询 controller 直到本 worker 的 runtime 接线到位。
+    def _gateway_running(self) -> bool:
+        """Matrix sync 循环是否在跑。
 
-        bridge pod 可能在 operator 把 runtime 接线（BRIDGE_RUNTIME_ADAPTER /
-        _BASE_URL）写进 Worker spec.env 之前被创建——controller
-        在那次写入后并不会滚动 pod，进程启动时的 env 因此残缺：adapter 默认
-        cimicode 又没有 gateway sessionId，bridge 永远卡在 phase=bootstrap。
-        与其重建 pod，不如轮询 GET /api/v1/workers/{self} 直到 runtimeEnv 携带
-        adapter，然后**进程内**重建 runtime adapter 与 Matrix 网关（优先级与
-        启动时一致：S3 bootstrap 配置已应用；controller runtimeEnv 补 env 缺口）。
+        gateway 重建必须先过这道守卫——对在跑的循环再 start 一个 gateway
+        会起第二个 sync 长轮询，双消费 timeline 事件（mention 双触发）。
+        task 已结束（gateway 崩溃退出）不算在跑，允许重建。
+        """
+        return (
+            self.matrix_gateway is not None
+            and self.matrix_task is not None
+            and not self.matrix_task.done()
+        )
+
+    async def _close_runtime_client(self) -> None:
+        """关掉旧 runtime client（如带 close 方法），置空待重建。"""
+        closer = getattr(self.runtime_client, "close", None)
+        if closer is not None:
+            await closer()
+        self.runtime_client = None
+
+    async def _settle_wiring(self, source: str) -> bool:
+        """接线收尾（自愈三通道共用）：回填过滤器身份 + 就绪位。
+
+        gateway 在跑就不动它（调用方先过 _gateway_running 守卫）；ready
+        语义不变——Matrix 通 +（仅 stateless 要求）session 绑定齐。
+        """
+        if self.matrix_gateway is not None and self.matrix_gateway.user_id:
+            self.mention_filter.user_id = self.matrix_gateway.user_id
+            self.mention_filter.role_resolver.self_user_id = self.matrix_gateway.user_id
+        self.matrix_connected = bool(self.matrix_gateway and self.matrix_gateway.connected)
+        self.runtime_healthy = self.matrix_connected
+        session_required = self.config.runtime.adapter == "cimicode-stateless"
+        self.ready = self.matrix_connected and (bool(self.config.runtime.session_id) or not session_required)
+        self.phase = "listening" if self.ready else "bootstrap"
+        if self.phase == "listening":
+            logger.info("%s reached listening (adapter=%s)", source, self.config.runtime.adapter)
+        return self.phase == "listening"
+
+    async def _recover_late_runtime_wiring(self) -> None:
+        """自愈轮询：等 runtime 接线到位并在进程内重建（绝不重建 pod）。
+
+        bridge pod 可能早于接线就绪启动（历史事故：operator 在 pod 创建
+        ~44s 后才把 BRIDGE_RUNTIME_* 写进 Worker spec.env，而 controller
+        对 spec.env 变化不滚动 pod，进程 env 快照残缺）。三个通道，谁先
+        就绪谁接管：
+          A. S3 bootstrap 重拉——runtime.yaml（连带 matrix 凭证）晚到时
+             重建网关与 client；
+          B. pod 模式推导接线（主通道）——目标形态已可判定而 client 未建
+             （runtime pod 未起、健康探测不过）时逐轮重试。operator 已
+             不再回写 env：晚到的只是可达性，不是值；
+          C. controller env 查询（兼容存量）——GET /api/v1/workers/{self}
+             的 runtimeEnv 携带 BRIDGE_RUNTIME_* 时按 env 重建（覆盖旧
+             operator 写过的存量 CR）。
         """
         worker = os.getenv("AGENTTEAMS_WORKER_NAME", "")
         controller_url = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").rstrip("/")
@@ -286,52 +388,49 @@ class BridgeApp:
             )
             return
         logger.info(
-            "bridge in bootstrap without a gateway; polling controller for late runtime wiring every %.0fs",
+            "bridge wiring incomplete; self-heal polling every %.0fs (bootstrap / derived pod / controller env)",
             self.RECOVERY_POLL_SECONDS,
         )
         last_adapter = ""
         while True:
-            # 修复（r2 it-w1）：早于 controller 推送 agents/<w>/runtime/runtime.yaml
-            # 启动的 bridge pod 若只追 env 接线会永远卡死——bootstrap 对象
-            #（连带 matrix 凭证）始终不加载，网关也永远建不起来。每轮重试
-            # S3 bootstrap；落地后在进程内重建网关。
+            # --- A. bootstrap 晚到：每轮重拉 S3，落地后进程内重建 ---
+            #（修复 r2 it-w1：只追 env 接线的轮询会让 bootstrap 始终不加载
+            # 的 bridge 永远卡死——网关也建不起来。）
             if (self.worker_files is None or not self.worker_files.runtime_yaml) \
                     and self.s3_bootstrap is not None:
                 refetched = self.s3_bootstrap.load(retries=1, retry_interval_seconds=0)
                 if refetched is not None and refetched.runtime_yaml:
-                    logger.info("bootstrap objects recovered by self-heal poll; rebuilding gateway")
+                    logger.info("bootstrap objects recovered by self-heal poll; rebuilding wiring")
                     self.worker_files = refetched
                     if not self.matrix_access_token:
                         self.matrix_access_token = refetched.matrix_access_token
                     # bridge 段（runtime.yaml）应用 + adapter 形态重判（显式
                     # env 仍最高优先，见 _resolve_adapter_mode）。
                     self._apply_bridge_section(refetched)
-                    if self.runtime_client is not None:
-                        closer = getattr(self.runtime_client, "close", None)
-                        if closer is not None:
-                            await closer()
-                        self.runtime_client = None
+                    await self._close_runtime_client()
                     self.runtime_client = self._build_runtime_client()
-                    gateway = self._build_matrix_gateway()
-                    if gateway is not None:
-                        self.matrix_gateway = gateway
-                        self.matrix_task = asyncio.create_task(gateway.start())
-                        while not gateway.connected and not self.matrix_task.done():
-                            await asyncio.sleep(0.05)
-                        self.matrix_connected = gateway.connected
-                        self.runtime_healthy = gateway.connected
-                        if gateway.connected:
-                            self.phase = "listening" if (
-                                self.config.runtime.adapter != "cimicode-stateless"
-                                or self.config.runtime.session_id
-                            ) else "bootstrap"
-                            self.ready = self.phase == "listening"
+                    if not self._gateway_running():
+                        gateway = self._build_matrix_gateway()
+                        if gateway is not None:
+                            self.matrix_gateway = gateway
+                            self.matrix_task = asyncio.create_task(gateway.start())
+                            while not gateway.connected and not self.matrix_task.done():
+                                await asyncio.sleep(0.05)
                             logger.info(
-                                "gateway rebuilt from late bootstrap (phase=%s); matrix sync will replay unconsumed mentions",
-                                self.phase,
+                                "gateway rebuilt from late bootstrap; matrix sync will replay unconsumed mentions"
                             )
-                            if self.phase == "listening":
-                                return
+                    if await self._settle_wiring("late bootstrap wiring"):
+                        if self.runtime_client is not None:
+                            return
+            # --- B. pod 推导接线（主通道）：client 未建而目标形态已知 ---
+            #（config 兜底覆盖 C 通道只写进内存的 adapter——env 变化检测
+            # 用的 last_adapter 不回填 _resolve_adapter_mode。）
+            effective_mode = self._resolve_adapter_mode() or self.config.runtime.adapter
+            if self.runtime_client is None and effective_mode == ADAPTER_POD_DEFAULT:
+                self.runtime_client = self._build_runtime_client()
+                if self.runtime_client is not None and await self._settle_wiring("derived pod wiring"):
+                    return
+            # --- C. controller env（兼容存量 operator 写过的两键）---
             runtime_env = await self._fetch_runtime_env(worker, controller_url)
             adapter = str(runtime_env.get("BRIDGE_RUNTIME_ADAPTER", ""))
             if adapter and adapter != last_adapter:
@@ -345,31 +444,27 @@ class BridgeApp:
                     adapter,
                     self.config.runtime.base_url,
                 )
-                closer = getattr(self.runtime_client, "close", None)
-                if closer is not None:
-                    await closer()
-                self.runtime_client = None
+                await self._close_runtime_client()
                 self.config.runtime.adapter = adapter
                 self.runtime_client = self._build_runtime_client()
-                self.matrix_gateway = self._build_matrix_gateway()
-                if self.matrix_gateway is not None:
-                    self.matrix_task = asyncio.create_task(self.matrix_gateway.start())
-                    while not self.matrix_gateway.connected and not self.matrix_task.done():
-                        await asyncio.sleep(0.05)
-                    self.matrix_connected = self.matrix_gateway.connected
-                    if self.matrix_gateway.user_id:
-                        self.mention_filter.user_id = self.matrix_gateway.user_id
-                        self.mention_filter.role_resolver.self_user_id = self.matrix_gateway.user_id
-                    self.runtime_healthy = self.matrix_gateway.connected
-                    session_required = self.config.runtime.adapter == "cimicode-stateless"
-                    self.ready = self.matrix_connected and (bool(self.config.runtime.session_id) or not session_required)
-                    self.phase = "listening" if self.ready else "bootstrap"
-                    if self.phase == "listening":
+                if not self._gateway_running():
+                    self.matrix_gateway = self._build_matrix_gateway()
+                    if self.matrix_gateway is not None:
+                        self.matrix_task = asyncio.create_task(self.matrix_gateway.start())
+                        while not self.matrix_gateway.connected and not self.matrix_task.done():
+                            await asyncio.sleep(0.05)
+                if await self._settle_wiring("controller env wiring"):
+                    if self.runtime_client is not None:
                         logger.info(
                             "bridge recovered to listening without a pod restart (adapter=%s)",
                             adapter,
                         )
                         return
+                    logger.warning(
+                        "wiring recovered but runtime client unbuilt (adapter=%s); keep polling",
+                        adapter,
+                    )
+                else:
                     logger.warning(
                         "recovered wiring did not reach listening (phase=%s); keep polling for changes",
                         self.phase,
@@ -399,6 +494,25 @@ class BridgeApp:
         session_required = self.config.runtime.adapter == "cimicode-stateless"
         self.ready = self.matrix_connected and (bool(self.config.runtime.session_id) or not session_required)
         self.phase = "listening" if self.ready else "bootstrap"
+        if self.runtime_client is None:
+            # Matrix 通了但 runtime client 未建（典型：pod 模式 runtime pod
+            # 尚未健康）。ready/phase 刻意不动——中间态必须保持 ready=True，
+            # 否则就绪探针 fail → k8s 重启 bridge pod 也换不来接线（env 快照
+            # 残缺的竞态会原地打转成崩溃循环）；client 重建交给自愈轮询。
+            logger.warning(
+                "matrix gateway up but runtime client unbuilt (adapter=%s); "
+                "recovery polling retries wiring every %.0fs",
+                self.config.runtime.adapter or "(undetermined)",
+                self.RECOVERY_POLL_SECONDS,
+            )
+            self.recovery_task = asyncio.create_task(self._recover_late_runtime_wiring())
+
+    def _kick_recovery(self) -> None:
+        """立即（重）启自愈轮询：在睡的取消重来，让刚到的 mention 触发一次
+        即时重试而不是等下一个 15s tick。幂等——没有轮询在跑就直接起。"""
+        if self.recovery_task is not None and not self.recovery_task.done():
+            self.recovery_task.cancel()
+        self.recovery_task = asyncio.create_task(self._recover_late_runtime_wiring())
 
     def stop(self) -> None:
         """标记停机（探针翻 false）。"""
@@ -446,6 +560,16 @@ class BridgeApp:
                 self.history_manager.record_ambient(room_id, sender, body, event_id=event_id)
             return
         if self.runtime_client is None or self.matrix_gateway is None:
+            # 静默丢弃是历史事故的第三层根因：accepted 消息必须可见地降级
+            # ——告警 + 立即唤醒自愈轮询（丢的这条救不回，但下一条 mention
+            # 不必再等下一个 15s tick）。
+            logger.warning(
+                "accepted mention %s dropped: runtime wiring incomplete (client=%s, gateway=%s); kicking recovery",
+                event_id,
+                self.runtime_client is not None,
+                self.matrix_gateway is not None,
+            )
+            self._kick_recovery()
             return
         # session 绑定缺失（仅 cimicode-stateless 需要——外部平台预建绑定；
         # cimicode-pod 的会话由 pod 内 cimicode 自管）→ 拒绝处理

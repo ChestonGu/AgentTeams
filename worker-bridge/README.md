@@ -23,8 +23,8 @@ bun 编译单二进制），分 **stateless / pod 两种模式**（§2）；外�
      │  matrix 防护 / turn 编排 / 自愈轮询     │  （controller 创建）
      │  generate_agent_md.py → system prompt  │
      └───────────────────┬───────────────────┘
-                         │ BRIDGE_RUNTIME_ADAPTER=cimicode-pod
-                         │ BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc:4096
+                         │ 推导接线 http://<w>-cimicode-svc:4096
+                         │（GET /session 健康门禁通过才建 client）
                          ▼
      ┌───────────────────────────────────────┐
      │ runtime pod（operator 供给）            │  cimicode-runtime（本体）/
@@ -39,11 +39,14 @@ bun 编译单二进制），分 **stateless / pod 两种模式**（§2）；外�
 
 - **bridge pod**：controller 消化 Worker CR（`runtime: worker-bridge`）后创建，持有
   与 worker 相同的 Matrix 身份和 runtime.yaml 投影。会话循环不在它自己身上——它把
-  每个 turn 转发给 runtime pod，等待并回传。adapter 裁决顺序：**显式 env 两键 >
-  runtime.yaml 顶层 bridge 段 > 未定态**（不建 client，轮询等接线）。
+  每个 turn 转发给 runtime pod，等待并回传。adapter 裁决四态：**显式 env >
+  runtime.yaml 顶层 bridge 段 > pod 模式推导**（worker_files 在手且无 bridge 段 →
+  `cimicode-pod`，base_url 从 svc 命名契约推导，`GET /session` 健康门禁通过才建
+  client）**> 未定态**（不建 client，15s 轮询等接线）。
 - **operator**（`agentteams/worker-bridge-operator`）：runtime 无关供给器。watch 本
   ns 内 `runtime=worker-bridge` 的 Worker CR，按 `spec.adapterMode` 分派，供给
-  runtime Deployment + svc + Secret，并把接线两键 patch 回 Worker CR env。
+  runtime Deployment + svc + Secret。**不写 Worker CR**——接线由 bridge 从 svc
+  命名契约自行推导（存量 CR 里旧 operator 写入的两键无害，显式优先消费）。
 - **runtime pod**：单容器 `cimicode serve`（:4096；外网模拟件为 `opencode serve`，
   同型），无卷（/workspace=容器可写层，pod 重建丢会话由 bridge 404 自愈重建兜底；
   任务态在 MinIO 不丢）。
@@ -58,7 +61,7 @@ Worker CR `spec.adapterMode`（[types.go:270](../agentteams-controller/api/v1bet
 | `cimicode-stateless` | bridge 直调外部 cimicode 平台（绑定四字段 `cimicodeGatewayUrl`/`sessionId`/`sandboxId`/`templateId`，controller 投影进 runtime.yaml 顶层 bridge 段） | 零供给 |
 
 **同一形态的两个镜像实现**（对外契约完全同一，见
-[contract/adapter-contract.md](contract/adapter-contract.md) v1.1）：
+[contract/adapter-contract.md](contract/adapter-contract.md) v1.2）：
 
 | 目录 | 基础 | 角色 |
 |---|---|---|
@@ -116,16 +119,20 @@ AGENTTEAMS_WORKER_GATEWAY_KEY，controller 注入）
 | 来源 | env | 作用 |
 |---|---|---|
 | controller → bridge pod | `AGENTTEAMS_MATRIX_USER_ID` / `_TEAM` / `_WORKER_NAME`、`AGENTTEAMS_FS_ROOT`/`_ENDPOINT`/`_BUCKET`/`_ACCESS_KEY`/`_SECRET_KEY`、`AGENTTEAMS_AI_GATEWAY_URL` + `AGENTTEAMS_WORKER_GATEWAY_KEY` | 身份 / 协作存储 / 模型网关 |
-| operator → Worker CR env（最终落 bridge pod） | `BRIDGE_RUNTIME_ADAPTER` / `BRIDGE_RUNTIME_BASE_URL` | 接线两键（残留 HELPER 键显式清除） |
 | operator → runtime pod | `OPENCODE_CONFIG_CONTENT`（secretKeyRef）、`CIMICODE_MODEL_CONFIG_HASH` | 模型注入 |
 | 镜像 ENV → runtime pod | `OPENCODE_PORT=4096`、`OPENCODE_PERMISSION={"*":"allow"}`、`AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills` | 服务端口 / 权限 / skills |
+
+接线不走 env 注入（v1.2 起）：pod 模式由 bridge 从 `<w>-cimicode-svc:4096`
+推导 + 健康门禁；存量 Worker CR 里旧 operator 写入的
+`BRIDGE_RUNTIME_ADAPTER` / `BRIDGE_RUNTIME_BASE_URL` 无害（显式优先），v1.0 的
+HELPER 残留键新 bridge 不读。
 
 ## 4. 目录结构
 
 | 目录 | 内容 |
 |---|---|
 | `bridge/` | bridge 进程本体（`src/` FastAPI：matrix 防护、turn 编排、adapter 裁决、自愈轮询）+ `generate_agent_md.py`（agent.md 生成工具）+ `agentteams_log.py`（统一日志）+ `tests/` |
-| `operator/` | worker-bridge-operator（runtime 无关供给器，watch Worker CR 分派供给/推迟/GC）+ `deploy/operator.yaml` 模板 + `tests/`（24 用例） |
+| `operator/` | worker-bridge-operator（runtime 无关供给器，watch Worker CR 分派供给/推迟/GC，**不写 Worker CR**）+ `deploy/operator.yaml` 模板 + `tests/`（22 用例） |
 | `cimicode-runtime/` | cimicode 本体镜像构建上下文（内网 coder-cimicode 基础镜像） |
 | `opencode-runtime/` | cimicode 形态的外网模拟件（node:22-slim + npm opencode-ai@1.18.27，同契约） |
 | `bin/` | vendored mc 二进制（两 runtime Dockerfile 共享 COPY 源） |
@@ -134,7 +141,7 @@ AGENTTEAMS_WORKER_GATEWAY_KEY，controller 注入）
 | `cli/taskflow/` | taskflow CLI（worker 侧 check/ack/submit）+ mc 同步后端 + 统一日志模块 |
 | `cli/sync/` | agentteams-sync CLI（pull/push/stat/list） |
 | `cli/projectflow/` | projectflow CLI（leader 侧，core=copaw task.py 全量 vendor） |
-| `contract/` | `interface-contract.md` v2.4（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.1（统一形态传输契约） |
+| `contract/` | `interface-contract.md` v2.4（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.2（统一形态传输契约） |
 | `cimicode-sandbox/` | stateless 形态 cimicode 自用沙箱的基础镜像 |
 | `docs/` | 设计与操作文档（见 §8 索引） |
 
@@ -179,7 +186,9 @@ kubectl -n <ns> set env deploy/agentteams-cimicode-controller \
 
 **升级序禁令：禁止先换 runtime 镜像后升 operator**——新镜像零凭据，旧 operator
 不注入模型 env，runtime 起来后每个 turn 全失败。正确序：runtime 镜像导入 →
-operator 升级 → controller 侧 bridge 同窗口升。
+operator 升级 → controller 侧 bridge 同窗口升。**bridge 与 operator 必须同窗口**
+（v1.2 接线推导）：旧 bridge + 新 operator = 无人写 env 且无推导，竞态回归；
+新 bridge + 旧 operator 兼容（推导为主、env 为显式覆盖）。
 
 ### 5.3 创建 Worker / Team CR（105 实测形态）
 
@@ -239,12 +248,12 @@ mention 触发一轮 turn 即为端到端验证。
 ## 6. 本地验证
 
 ```bash
-# 单测（共 208 个；开发机需 pip install pyyaml）
+# 单测（共 214 个；开发机需 pip install pyyaml）
 cd cli/taskflow && python -m unittest discover -s tests   # 40 个（taskflow + mc_sync + 统一日志）
 cd cli/sync && python -m unittest discover -s tests       # 10 个（agentteams-sync）
 cd cli/projectflow && python -m unittest discover -s tests # 20 个（leader core + CLI + 与 worker 闭环）
-cd bridge && python -m pytest tests -q        # 114 个（进程单测 71 + 生成器 43）
-cd ../operator && python -m pytest tests -q    # 24 个（svc/模型注入+哈希 drift/两键/GC/推迟）
+cd bridge && python -m pytest tests -q        # 122 个（进程单测 79 + 生成器 43）
+cd ../operator && python -m pytest tests -q    # 22 个（svc/模型注入+哈希 drift/GC/推迟；不写 CR）
 
 # agent.md 生成工具（bridge 调用形态；runtime.yaml/SOUL/PROFILE 从 MinIO 拉下后传路径）
 python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
@@ -267,7 +276,7 @@ python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
 
 | 文档 | 内容 |
 |---|---|
-| [contract/adapter-contract.md](contract/adapter-contract.md) | 统一形态传输契约 v1.1（REST 双标定、模型注入、两键接线、已知限制）——**接口权威** |
+| [contract/adapter-contract.md](contract/adapter-contract.md) | 统一形态传输契约 v1.2（REST 双标定、模型注入、接线推导与自愈三通道、已知限制）——**接口权威** |
 | [contract/interface-contract.md](contract/interface-contract.md) | 协作契约 v2.4（env/镜像布局/消息/命令/统一日志/agent.md 生成契约） |
 | [docs/worker-bridge-pod模式与operator部署详解.md](docs/worker-bridge-pod模式与operator部署详解.md) | pod 模式实测形态 + operator 部署使用全流程 + 105 实测坑——**部署权威** |
 | [docs/worker-bridge运行时替换与协作流转详解.md](docs/worker-bridge运行时替换与协作流转详解.md) | 运行时替换设计与协作流转 |

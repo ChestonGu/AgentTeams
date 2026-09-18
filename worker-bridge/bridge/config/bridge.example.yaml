@@ -3,9 +3,10 @@ matrix:
   token_env: AGENTTEAMS_WORKER_MATRIX_TOKEN
   sync_timeout_seconds: 30
 runtime:
-  # adapter / base_url 留空：由 BRIDGE_RUNTIME_* env（operator patch / 部署层）
-  # 或 runtime.yaml 顶层 bridge 段（controller 投影）裁决，两者皆缺时 bridge
-  # 保持未定态等待自愈——绝不在此写死回退地址。
+  # adapter / base_url 留空：由 BRIDGE_RUNTIME_* env（部署层/存量 operator）
+  # 或 runtime.yaml 顶层 bridge 段（controller 投影）裁决；pod 模式还可从
+  # svc 命名契约推导（<w>-cimicode-svc:4096，过健康门禁后接线）。皆缺时
+  # bridge 保持未定态等待自愈——绝不在此写死回退地址。
   auth_type: none
 filter:
   require_mention: true

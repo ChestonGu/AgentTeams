@@ -19,10 +19,16 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
                                           assembled)
                           (role-suffixed so pod names read at a glance: the
                           Deployment's pods are <worker>-cimicode-<rs>-<hash>)
-                          and point the Worker CR spec.env at it (the bridge
-                          pod picks it up via self-heal polling):
-                              BRIDGE_RUNTIME_ADAPTER=cimicode-pod
-                              BRIDGE_RUNTIME_BASE_URL=http://<w>-cimicode-svc.<ns>.svc:4096
+
+                          The bridge derives its own wiring from the naming
+                          contract (<w>-cimicode-svc:4096, gated by a GET
+                          /session health probe): this operator never writes
+                          the Worker CR — the pod-created-before-wiring race
+                          is absorbed by the bridge's self-heal loop, not by
+                          a CR patch that arrives too late anyway (the pod
+                          env snapshot is immutable). Legacy BRIDGE_RUNTIME_*
+                          keys left in spec.env by an older operator are
+                          harmless: same values, highest priority, explicit.
 
 The runtime image is form-agnostic: CIMICODE_IMAGE may point at either
 worker-bridge/cimicode-runtime (internal coder-cimicode base image) or
@@ -96,11 +102,6 @@ WORKERS_PLURAL = "workers"
 TEAMS_PLURAL = "teams"
 
 MANAGED_BY = "worker-bridge-operator"
-ENV_KEY_ADAPTER = "BRIDGE_RUNTIME_ADAPTER"
-ENV_KEY_BASE_URL = "BRIDGE_RUNTIME_BASE_URL"
-# 旧 helper 接线键（in-pod AGENTS.md helper 已随 system 字段通道退役）：不再
-# 写入；存量 Worker CR 里历史写入的残留值由 ensure_worker_env 显式清除。
-ENV_KEY_HELPER_URL_RETIRED = "BRIDGE_RUNTIME_HELPER_URL"
 
 ADAPTER_STATELESS = "cimicode-stateless"
 ADAPTER_POD = "cimicode-pod"
@@ -167,9 +168,6 @@ class OperatorConfig:
         # or homogeneous clusters). Empty → leave scheduling to the scheduler.
         self.provision_node_selector = env("PROVISION_NODE_SELECTOR", "")
 
-    def cluster_dns(self, service: str) -> str:
-        return f"{service}.{self.namespace}.svc.cluster.local"
-
 
 def labels_for(worker: str) -> dict[str, str]:
     return {
@@ -211,10 +209,6 @@ class StackOperator:
         # Empty → cimicode-pod, mirroring the controller's projection
         # normalization (empty adapterMode with a binding → cimicode-pod).
         return mode or ADAPTER_POD
-
-    def worker_spec_env(self, worker_obj: dict[str, Any]) -> dict[str, str]:
-        raw = worker_obj.get("spec", {}).get("env") or {}
-        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
 
     def team_for(self, worker: str) -> str:
         """Team CR 名反查（workerMembers 按名字匹配；无 team 返回空）。
@@ -567,27 +561,6 @@ class StackOperator:
             self.core.replace_namespaced_secret(name, self.cfg.namespace, secret)
             log.info("updated Secret %s (credentials rotated)", name)
 
-    def ensure_worker_env(self, worker: str, worker_obj: dict[str, Any]) -> None:
-        svc_dns = self.cfg.cluster_dns(self.cimicode_svc_name(worker))
-        wanted = {
-            ENV_KEY_ADAPTER: ADAPTER_POD,
-            ENV_KEY_BASE_URL: f"http://{svc_dns}:{self.cfg.cimicode_port}",
-        }
-        current = self.worker_spec_env(worker_obj)
-        if all(current.get(k) == v for k, v in wanted.items()) and (
-            ENV_KEY_HELPER_URL_RETIRED not in current
-        ):
-            return
-        merged = dict(current)
-        merged.update(wanted)
-        # 显式清除旧 helper 接线键（存量 Worker CR 一轮收敛；helper 链路已退役）
-        merged.pop(ENV_KEY_HELPER_URL_RETIRED, None)
-        body = {"spec": {"env": merged}}
-        self.custom.patch_namespaced_custom_object(
-            GROUP, VERSION, self.cfg.namespace, WORKERS_PLURAL, worker, body
-        )
-        log.info("patched Worker %s spec.env -> cimicode pod %s", worker, wanted[ENV_KEY_BASE_URL])
-
     # ------------------------------------------------------------------
     # garbage collection
     # ------------------------------------------------------------------
@@ -711,7 +684,8 @@ class StackOperator:
                 model_config=model_config,
             )
         )
-        self.ensure_worker_env(worker, worker_obj)
+        # 不 patch Worker CR：bridge 从 svc 命名契约自行推导接线（见模块
+        # docstring）——CR env 回写追不上 pod 创建竞态，且 pod env 快照不可变。
         log.info(
             "worker %s reconciled (mode=%s svc=%s team=%s fs=%s model=%s)",
             worker,

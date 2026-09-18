@@ -187,7 +187,8 @@ class TestEnvOverrides:
 
 
 class TestAdapterResolution:
-    """判定顺序（§3.3）：显式 env > runtime.yaml bridge.adapterMode > 未定。"""
+    """判定顺序（§3.3 四态）：显式 env > runtime.yaml bridge.adapterMode
+    > pod 模式命名推导（worker_files 在手且无 bridge 段）> 未定。"""
 
     BRIDGE_YAML = (
         "member:\n"
@@ -224,17 +225,69 @@ class TestAdapterResolution:
         app = self._app_with_files(self.BRIDGE_YAML)
         assert app._resolve_adapter_mode() == "cimicode-pod"
 
-    def test_undetermined_when_both_missing(self, monkeypatch):
+    def test_pod_default_derived_when_bridge_section_absent(self, monkeypatch):
         monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        monkeypatch.delenv("AGENTTEAMS_WORKER_NAME", raising=False)
         app = self._app_with_files("member:\n  runtime: worker-bridge\n")
+        # worker_files 在手 + 无 bridge 段 = Worker CR 绑定全空 = controller
+        # 归一化下的 pod 默认——推导 pod 模式；worker 名缺失则地址无从
+        # 推导，client 仍不建（等自愈轮询）。
+        assert app._resolve_adapter_mode() == "cimicode-pod"
+        assert app._build_runtime_client() is None
+
+    def test_legacy_runtime_yaml_stays_undetermined(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        app = self._app_with_files("member:\n  runtime: qwenpaw\n")
+        # 非 worker-bridge 的 bootstrap（legacy 形态）不推导 pod——保持
+        # 未定态等接线（controller 只为 worker-bridge CR 建 bridge pod）。
         assert app._resolve_adapter_mode() == ""
+
+    def test_derived_base_url_shape(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        app = self._app_with_files("member:\n  runtime: worker-bridge\n")
+        assert app._derived_base_url() == "http://w1-cimicode-svc:4096"
+        monkeypatch.delenv("AGENTTEAMS_WORKER_NAME", raising=False)
+        assert app._derived_base_url() == ""
+
+    def test_derived_pod_client_built_once_healthy(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        monkeypatch.delenv("BRIDGE_RUNTIME_BASE_URL", raising=False)
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        app = self._app_with_files("member:\n  runtime: worker-bridge\n")
+        monkeypatch.setattr(app, "_probe_runtime_health", lambda base_url: True)
+        client = app._build_runtime_client()
+        assert isinstance(client, CimicodePodAdapter)
+        assert app.config.runtime.base_url == "http://w1-cimicode-svc:4096"
+
+    def test_derived_pod_client_deferred_while_unhealthy(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        monkeypatch.delenv("BRIDGE_RUNTIME_BASE_URL", raising=False)
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        app = self._app_with_files("member:\n  runtime: worker-bridge\n")
+        monkeypatch.setattr(app, "_probe_runtime_health", lambda base_url: False)
+        # runtime pod 未起：健康门禁不过 → client 不建，base_url 回滚为空
+        #（保持"未接线"状态，自愈轮询每 15s 重探）。
+        assert app._build_runtime_client() is None
+        assert app.config.runtime.base_url == ""
+
+    def test_stateless_mode_never_derives_base_url(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_RUNTIME_ADAPTER", raising=False)
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        app = self._app_with_files(
+            "member:\n  runtime: worker-bridge\nbridge:\n  adapterMode: cimicode-stateless\n"
+        )
+        app._apply_bridge_section(app.worker_files)
+        # stateless 的 SSE 网关地址来自平台绑定，不可从命名契约推导
+        assert app._resolve_adapter_mode() == "cimicode-stateless"
         assert app._build_runtime_client() is None
 
     def test_base_url_missing_leaves_client_unbuilt(self, monkeypatch):
         monkeypatch.setenv("BRIDGE_RUNTIME_ADAPTER", "cimicode-pod")
         monkeypatch.delenv("BRIDGE_RUNTIME_BASE_URL", raising=False)
+        monkeypatch.delenv("AGENTTEAMS_WORKER_NAME", raising=False)
         app = self._app_with_files("member:\n  runtime: worker-bridge\n")
-        # adapter 有（env）但 base_url 无任何来源 → 不建 client
+        # adapter 有（env）但 base_url 无来源、worker 名也缺（无从推导）→ 不建 client
         assert app._build_runtime_client() is None
 
     def test_managed_runtime_type(self):
