@@ -20,6 +20,7 @@ on:
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-env-data-dir-readback.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
+      - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
       - 'tests/check-installer-deepseek-harness-runtime-options.sh'
       - 'tests/check-powershell-deepseek-harness-latest.ps1'
@@ -48,6 +49,9 @@ jobs:
 
       - name: Check embedded latest image pulling
         run: bash tests/check-installer-embedded-latest-pull.sh
+
+      - name: Check automatic installer version and platform selection
+        run: bash tests/check-installer-auto-version-images.sh
 
       - name: Check image build and release workflows
         run: |

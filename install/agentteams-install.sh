@@ -65,6 +65,8 @@ set -e
 
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
 AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.3"   # fallback if GitHub API is unreachable
+AGENTTEAMS_FALLBACK_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
+AGENTTEAMS_AUTO_VERSION=0
 AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION="v1.2.4"
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.0}"
 
@@ -1181,6 +1183,80 @@ manager_image_for_runtime() {
     esac
 }
 
+# Return 1 only for a missing tag/platform; other failures must not downgrade.
+# Pulling here also caches the images that the installation will subsequently use.
+_check_install_image() {
+    local image="$1" platform="$2" output local_platform
+    local_platform=$(${DOCKER_CMD} image inspect --format '{{.Os}}/{{.Architecture}}' "${image}" 2>/dev/null) || local_platform=""
+    if [ "${local_platform}" = "${platform}" ]; then
+        return 0
+    fi
+    log "Checking installation image for ${platform}: ${image}"
+    if output=$(${DOCKER_CMD} pull --platform "${platform}" "${image}" 2>&1); then
+        local_platform=$(${DOCKER_CMD} image inspect --format '{{.Os}}/{{.Architecture}}' "${image}" 2>/dev/null) || return 2
+        [ "${local_platform}" = "${platform}" ] && return 0
+        error "Image ${image} has platform ${local_platform}, expected ${platform}."
+        return 1
+    fi
+    error "Cannot prepare ${image} for ${platform}: ${output}"
+    case "${output}" in
+        *"manifest unknown"*|*"manifest not found"*|*"no matching manifest for "*) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+_check_version_images() {
+    (
+        # Keep candidate image names isolated until the entire set has passed.
+        AGENTTEAMS_VERSION="$1"
+        local platform="$2" image status
+        resolve_image_tags
+        for image in "${EMBEDDED_IMAGE}" "$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")" \
+            "${WORKER_IMAGE}" "${COPAW_WORKER_IMAGE}" "${QWENPAW_WORKER_IMAGE}" \
+            "${HERMES_WORKER_IMAGE}" "${DEEPSEEK_HARNESS_WORKER_IMAGE}"; do
+            [ -n "${image}" ] || continue
+            if _check_install_image "${image}" "${platform}"; then
+                :
+            else
+                status=$?
+                return "${status}"
+            fi
+        done
+        if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
+            _check_install_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.4}}" "${platform}" || return $?
+        fi
+        return 0
+    )
+}
+
+_select_available_auto_version() {
+    [ "${AGENTTEAMS_AUTO_VERSION:-0}" = "1" ] || return 0
+    local platform status
+    platform=$(${DOCKER_CMD} info --format '{{.OSType}}/{{.Architecture}}') || die "Cannot determine the container engine platform."
+    case "${platform}" in
+        linux/x86_64|linux/amd64) platform=linux/amd64 ;;
+        linux/aarch64|linux/arm64) platform=linux/arm64 ;;
+        *) die "Unsupported container engine platform: ${platform}" ;;
+    esac
+    if _check_version_images "${AGENTTEAMS_VERSION}" "${platform}"; then
+        resolve_image_tags
+        return 0
+    else
+        status=$?
+    fi
+    [ "${status}" = "1" ] || die "Image verification failed; fix the registry connection or credentials and retry. No version fallback was applied."
+    [ "${AGENTTEAMS_UPGRADE:-0}" != "1" ] || die "The upgrade image set is incomplete. No automatic downgrade was applied."
+    [ "${AGENTTEAMS_VERSION}" != "${AGENTTEAMS_FALLBACK_VERSION}" ] || die "The stable image set is incomplete for ${platform}."
+    if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "deepseek-harness" ] && ! _supports_deepseek_harness "${AGENTTEAMS_FALLBACK_VERSION}"; then
+        die "The fallback version does not support the selected DeepSeek Harness runtime."
+    fi
+    log "${AGENTTEAMS_VERSION} images are incomplete for ${platform}; checking stable fallback ${AGENTTEAMS_FALLBACK_VERSION}."
+    _check_version_images "${AGENTTEAMS_FALLBACK_VERSION}" "${platform}" || die "The fallback image set could not be verified. Installation stopped."
+    AGENTTEAMS_VERSION="${AGENTTEAMS_FALLBACK_VERSION}"
+    resolve_image_tags
+    log "Selected complete image set: ${AGENTTEAMS_VERSION} (${platform})."
+}
+
 # Resolve the embedded controller image. Embedded mode is the only supported
 # architecture since PR #616 (manager image no longer bundles Higress/Tuwunel/MinIO).
 # If the embedded image is unavailable for the requested version, fail fast with an
@@ -1195,6 +1271,11 @@ resolve_embedded_image() {
     # a locally-built tag), respect it as-is without any registry probe.
     if [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
         EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE}"
+        return 0
+    fi
+
+    # Automatic stable selection has already pulled and verified this exact image.
+    if [ "${AGENTTEAMS_AUTO_VERSION:-0}" = "1" ]; then
         return 0
     fi
 
@@ -1796,7 +1877,7 @@ clear_step_vars() {
     local step_fn="$1"
     case "${step_fn}" in
         step_mode)   unset AGENTTEAMS_QUICKSTART ;;
-        step_version) unset AGENTTEAMS_VERSION ;;
+        step_version) unset AGENTTEAMS_VERSION; AGENTTEAMS_AUTO_VERSION=0 ;;
         step_existing) unset AGENTTEAMS_UPGRADE UPGRADE_EXISTING_WORKERS ;;
         step_llm)
             unset AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL AGENTTEAMS_OPENAI_BASE_URL
@@ -1904,16 +1985,19 @@ step_version() {
             log "$(msg install.version.selected_latest)"
             ;;
         2|stable)
+            AGENTTEAMS_AUTO_VERSION=1
             AGENTTEAMS_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
             log "$(msg install.version.selected_stable "${AGENTTEAMS_VERSION}")"
             ;;
         3|custom)
             local CUSTOM_VERSION
             read -e -p "$(msg install.version.custom_prompt): " CUSTOM_VERSION
+            [ -n "${CUSTOM_VERSION}" ] || AGENTTEAMS_AUTO_VERSION=1
             AGENTTEAMS_VERSION="${CUSTOM_VERSION:-${AGENTTEAMS_KNOWN_STABLE_VERSION}}"
             log "$(msg install.version.selected_custom "${AGENTTEAMS_VERSION}")"
             ;;
         *)
+            AGENTTEAMS_AUTO_VERSION=1
             AGENTTEAMS_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
             log "$(msg install.version.invalid "${AGENTTEAMS_VERSION}")"
             ;;
@@ -3417,6 +3501,7 @@ install_manager() {
     # Non-interactive fallback: resolve version immediately so image tags are available
     # before the step state machine runs. Interactive mode lets step_version handle it.
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        [ -n "${AGENTTEAMS_VERSION}" ] || AGENTTEAMS_AUTO_VERSION=1
         if [ -z "${AGENTTEAMS_VERSION}" ] || [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
             _refresh_known_stable_version
         fi
@@ -3509,6 +3594,10 @@ install_manager() {
         fi
     done
     # ── End state machine ──────────────────────────────────────────────────────
+
+    # Runtime and dashboard choices are now known. Verify before saving configuration
+    # or stopping existing containers, and never downgrade an upgrade automatically.
+    _select_available_auto_version
 
     # Post-machine defaults for any steps that were skipped
     local _detected_data_vol
