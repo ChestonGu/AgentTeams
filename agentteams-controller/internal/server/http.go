@@ -39,6 +39,7 @@ type ServerDeps struct {
 	Provisioner     *service.Provisioner // for Matrix token refresh
 
 	DefaultWorkerRuntime string // install-time default for Worker create requests
+	DefaultModel         string // install-time model for Worker create requests without a model
 	WorkerAgentDir       string // source of builtin agent templates (skill catalog)
 	PluginDir            string // bundled plugin packages (skill catalog plugin source); empty = no plugin entries
 }
@@ -77,6 +78,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	auditClient := audit.NewClient(deps.OSS)
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName, auditClient).WithOSS(deps.OSS)
 	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
+	rh.defaultWorkerModel = deps.DefaultModel
 	nameFn := authpkg.NameFromPath
 
 	// Workers

@@ -5,9 +5,9 @@ package server
 //
 // Each worker's qwenpaw app (QwenPaw >= 2.1) exposes workspace file
 // endpoints on :8088 (0.0.0.0 listen; no auth in worker context because no
-// console user is registered): /workspace/tree (paginated directory
-// listing), /workspace/file-metadata, /workspace/file-content (bounded
-// UTF-8 chunk reads and ETag-guarded writes), and /workspace/file-download
+// console user is registered): /api/workspace/tree (paginated directory
+// listing), /api/workspace/file-metadata, /api/workspace/file-content (bounded
+// UTF-8 chunk reads and ETag-guarded writes), and /api/workspace/file-download
 // (bounded stream). The Controller proxies those four subpaths so L2 humans
 // and the workbench plugin can inspect — and, where the Human CR grants it,
 // update — a worker's knowledge base (MEMORY.md, memory/**, digest/**)
@@ -352,7 +352,7 @@ func (h *WorkspaceFilesHandler) proxyWorkspaceFiles(w http.ResponseWriter, r *ht
 		return
 	}
 
-	target := h.workerBaseURL(name, worker.Spec.Env) + "/workspace/" + sub
+	target := h.workerBaseURL(name, worker.Spec.Env) + "/api/workspace/" + sub
 	if query != "" {
 		target += "?" + query
 	}
@@ -406,7 +406,7 @@ func (h *WorkspaceFilesHandler) proxyWorkspaceFiles(w http.ResponseWriter, r *ht
 // absent (a write must NOT carry If-Match — upstream treats an ETag on a
 // missing file as a conflict).
 func (h *WorkspaceFilesHandler) upstreamKBFileExists(ctx context.Context, baseURL, path string) (bool, error) {
-	target := baseURL + "/workspace/file-metadata?path=" + url.QueryEscape(path) + "&root=workspace"
+	target := baseURL + "/api/workspace/file-metadata?path=" + url.QueryEscape(path) + "&root=workspace"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return false, err
@@ -570,7 +570,7 @@ func (h *WorkspaceFilesHandler) proxyWorkspaceFileWrite(w http.ResponseWriter, r
 		return
 	}
 
-	target := baseURL + "/workspace/file-content?path=" + url.QueryEscape(path) + "&root=workspace"
+	target := baseURL + "/api/workspace/file-content?path=" + url.QueryEscape(path) + "&root=workspace"
 	body, _ := json.Marshal(map[string]string{"content": payload.Content})
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPut, target, strings.NewReader(string(body)))
 	if err != nil {

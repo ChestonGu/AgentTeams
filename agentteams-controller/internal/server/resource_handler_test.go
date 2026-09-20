@@ -1369,3 +1369,43 @@ func TestGetWorker_L2MCPCredentialsVerbatim(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateWorkerDefaultModel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"omitted", `{"name":"default-model"}`, "deployment-model"},
+		{"empty", `{"name":"default-model","model":""}`, "deployment-model"},
+		{"whitespace", `{"name":"default-model","model":"  "}`, "deployment-model"},
+		{"explicit", `{"name":"default-model","model":"worker-model"}`, "worker-model"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).Build()
+			mw := authpkg.NewMiddleware(&alwaysAdminAuth{}, authpkg.NewCREnricher(k8s, "default"), authpkg.NewAuthorizer(), k8s, "default")
+			srv := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "default", AuthMw: mw, DefaultModel: "deployment-model"})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer sa-token")
+			rec := httptest.NewRecorder()
+			srv.Mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var response WorkerResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Model != tc.want {
+				t.Errorf("response model=%q, want %q", response.Model, tc.want)
+			}
+			var worker v1beta1.Worker
+			if err := k8s.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "default-model"}, &worker); err != nil {
+				t.Fatal(err)
+			}
+			if worker.Spec.Model != tc.want {
+				t.Errorf("persisted model=%q, want %q", worker.Spec.Model, tc.want)
+			}
+		})
+	}
+}

@@ -40,6 +40,7 @@ type ResourceHandler struct {
 	oss oss.StorageClient
 
 	defaultWorkerRuntime string
+	defaultWorkerModel   string
 
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
@@ -108,6 +109,9 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		containerManaged = *req.ContainerManaged
 	}
 	runtime := backend.ResolveRuntime(req.Runtime, h.defaultWorkerRuntime)
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = h.defaultWorkerModel
+	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{

@@ -68,8 +68,8 @@ func TestWorkspaceFilesTree_ForwardsWithRootPinned(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/workspace/tree" {
-		t.Fatalf("upstream path=%q, want /workspace/tree", gotPath)
+	if gotPath != "/api/workspace/tree" {
+		t.Fatalf("upstream path=%q, want /api/workspace/tree", gotPath)
 	}
 	want := url.Values{"path": {"memory"}, "root": {"workspace"}}
 	if gotQuery != want.Encode() {
@@ -100,7 +100,7 @@ func TestWorkspaceFilesFileContent_ForwardsOffsetLimit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/workspace/file-content" {
+	if gotPath != "/api/workspace/file-content" {
 		t.Fatalf("upstream path=%q", gotPath)
 	}
 	want := url.Values{"path": {"MEMORY.md"}, "offset": {"0"}, "limit": {"4096"}, "root": {"workspace"}}
@@ -126,7 +126,7 @@ func TestWorkspaceFilesFileMetadata_Forwards(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/workspace/file-metadata" {
+	if gotPath != "/api/workspace/file-metadata" {
 		t.Fatalf("upstream path=%q", gotPath)
 	}
 	want := url.Values{"path": {"MEMORY.md"}, "root": {"workspace"}}
@@ -582,7 +582,7 @@ func TestWorkspaceFiles_EffectivePrefixAndPortReachUpstream(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	want := "http://acme-worker-market-writer:8088/workspace/file-metadata?path=MEMORY.md&root=workspace"
+	want := "http://acme-worker-market-writer:8088/api/workspace/file-metadata?path=MEMORY.md&root=workspace"
 	if rt.gotURL.String() != want {
 		t.Fatalf("upstream URL=%s, want %s", rt.gotURL.String(), want)
 	}
@@ -628,14 +628,14 @@ func kbWriteUpstream(t *testing.T, exists bool, wantIfMatch string) (*httptest.S
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/workspace/file-metadata"):
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/workspace/file-metadata"):
 			if exists {
 				_, _ = w.Write([]byte(`{"path":"memory/t.md","size":6,"modified":1,"etag":"et-1"}`))
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"detail":"File not found"}`))
 			}
-		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/workspace/file-content"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/workspace/file-content"):
 			putCalls++
 			body, _ := io.ReadAll(r.Body)
 			if r.Header.Get("If-Match") != wantIfMatch {
@@ -748,7 +748,7 @@ func TestWorkspaceFilesWrite_ETagConflictPassthrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/workspace/file-metadata"):
+		case strings.HasPrefix(r.URL.Path, "/api/workspace/file-metadata"):
 			_, _ = w.Write([]byte(`{"path":"memory/t.md","size":6,"modified":1,"etag":"et-1"}`))
 		default: // the PUT
 			w.WriteHeader(http.StatusConflict)
@@ -957,7 +957,7 @@ func TestWorkspaceFilesWrite_UnknownSubpathAndBody(t *testing.T) {
 // attachment headers forwarded verbatim.
 func TestWorkspaceFilesDownload_InScopeAllowed(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/workspace/file-download") {
+		if !strings.HasPrefix(r.URL.Path, "/api/workspace/file-download") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}

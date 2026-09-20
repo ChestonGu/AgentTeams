@@ -670,6 +670,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		Provisioner:     a.provisioner,
 
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		DefaultModel:         a.cfg.DefaultModel,
 		WorkerAgentDir:       a.cfg.WorkerAgentDir(),
 		PluginDir:            a.cfg.PluginDir(),
 		SkillScanner:         a.skillScanner,
