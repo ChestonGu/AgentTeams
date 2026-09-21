@@ -889,6 +889,7 @@ func teamWorkerEntries(members []teamWorkerMember, leaderName string) []service.
 			RoomID:       member.worker.Status.RoomID,
 			DisplayName:  display,
 			MatrixUserID: member.worker.Status.MatrixUserID,
+			Description:  member.worker.Spec.Description,
 		})
 	}
 	return entries
@@ -994,6 +995,10 @@ func runtimeConfigTeamMembers(t *v1beta1.Team, members []teamWorkerMember, leade
 			Role:           role.String(),
 			MatrixUserID:   member.worker.Status.MatrixUserID,
 			PersonalRoomID: member.worker.Status.RoomID,
+			// Mirror the MemberContext path: friendly display name with
+			// fallback to the member name, plus the responsibility description.
+			DisplayName: effectiveWorkerDisplayName(member.worker.Spec.DisplayName, member.ref.Name),
+			Description: member.worker.Spec.Description,
 		})
 	}
 	for _, human := range t.Spec.HumanMembers {
@@ -1580,6 +1585,7 @@ func (r *TeamReconciler) runtimeConfigTeamMembers(t *v1beta1.Team, desiredMember
 			disp = member.Name
 		}
 		entry.DisplayName = disp
+		entry.Description = member.Spec.Description
 		// Populate Matrix IDs / room from Team status when available, then
 		// fall back to any cached Existing* values on the MemberContext and
 		// finally to the provisioner-derived mapping.

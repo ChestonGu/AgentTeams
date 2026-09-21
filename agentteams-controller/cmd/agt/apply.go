@@ -152,17 +152,18 @@ func splitYAMLDocs(content string) []string {
 
 func applyWorkerSubCmd() *cobra.Command {
 	var (
-		name       string
-		model      string
-		zipFile    string
-		runtime    string
-		image      string
-		identity   string
-		soul       string
-		soulFile   string
-		skills     string
-		packageURI string
-		expose     string
+		name        string
+		model       string
+		description string
+		zipFile     string
+		runtime     string
+		image       string
+		identity    string
+		soul        string
+		soulFile    string
+		skills      string
+		packageURI  string
+		expose      string
 	)
 
 	cmd := &cobra.Command{
@@ -185,13 +186,14 @@ func applyWorkerSubCmd() *cobra.Command {
 				return applyWorkerZip(name, zipFile, runtime)
 			}
 
-			return applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
+			return applyWorkerParams(name, model, description, runtime, image, identity, soul, soulFile,
 				skills, packageURI, expose)
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
+	cmd.Flags().StringVar(&description, "description", "", "Worker responsibility description (shown in listings and team rosters)")
 	cmd.Flags().StringVar(&zipFile, "zip", "", "Local ZIP package (manifest.json)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|worker-bridge)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
@@ -271,7 +273,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 }
 
 // applyWorkerParams creates or updates a Worker from CLI flags (upsert semantics).
-func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
+func applyWorkerParams(name, model, description, runtime, image, identity, soul, soulFile,
 	skills, packageURI, expose string) error {
 
 	if model == "" {
@@ -310,6 +312,7 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 	req := map[string]interface{}{
 		"model": model,
 	}
+	setIfNotEmpty(req, "description", description)
 	setIfNotEmpty(req, "runtime", runtime)
 	setIfNotEmpty(req, "image", image)
 	setIfNotEmpty(req, "identity", identity)

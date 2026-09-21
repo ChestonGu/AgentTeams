@@ -126,7 +126,11 @@ type RuntimeConfigTeamMember struct {
 	MatrixUserID   string `json:"matrixUserId,omitempty"`
 	PersonalRoomID string `json:"personalRoomId,omitempty"`
 	// DisplayName is the friendly name for the member (optional).
-	DisplayName    string `json:"displayName,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	// Description is the member's spec.description: what this worker does
+	// (optional). Lets roster consumers (leader AGENTS.md, worker agent.md)
+	// understand each member's responsibility without extra lookups.
+	Description string `json:"description,omitempty"`
 }
 
 // CoordinationDeployRequest describes coordination context injection for a team leader.
@@ -152,6 +156,9 @@ type TeamWorkerEntry struct {
 	DisplayName string
 	// MatrixUserID is the member's Matrix MXID, if known.
 	MatrixUserID string
+	// Description is the member's spec.description, shown in the leader
+	// roster so task decomposition can match worker responsibilities. May be empty.
+	Description string
 }
 
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
@@ -484,6 +491,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 				RoomID:       member.PersonalRoomID,
 				DisplayName:  member.DisplayName,
 				MatrixUserID: member.MatrixUserID,
+				Description:  member.Description,
 			})
 		}
 		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
@@ -654,6 +662,7 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 			RoomID:       tw.RoomID,
 			DisplayName:  tw.DisplayName,
 			MatrixUserID: tw.MatrixUserID,
+			Description:  tw.Description,
 		})
 	}
 

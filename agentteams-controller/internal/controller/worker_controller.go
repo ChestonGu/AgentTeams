@@ -812,7 +812,7 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //
 // Excluded (do not trigger pod recreation):
 //
-//	Model, DisplayName, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
+//	Model, DisplayName, Description, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
 //	AccessEntries 鈥?permission-only (resolved by credential issuance)
 //	AgentIdentity, CredentialBindings 鈥?runtime credential config
 //	AdapterMode, CimicodeGatewayUrl, SessionId, SandboxId, TemplateId 鈥?
@@ -825,8 +825,9 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
-	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
-	spec.DisplayName = ""    // Matrix-profile-only: synced via SetDisplayName, does not affect pod
+	spec.Model = ""        // config-only: written to openclaw.json/runtime.yaml
+	spec.DisplayName = ""  // Matrix-profile-only: synced via SetDisplayName, does not affect pod
+	spec.Description = ""  // roster-only: projected to runtime.yaml members + AGENTS.md, does not affect pod
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
 	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
 	spec.AgentIdentity = nil // config-only: written to runtime.yaml

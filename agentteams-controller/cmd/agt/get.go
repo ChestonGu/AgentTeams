@@ -291,6 +291,7 @@ func getManagersCmd() *cobra.Command {
 type workerResp struct {
 	Name             string                   `json:"name"`
 	DisplayName      string                   `json:"displayName,omitempty"`
+	Description      string                   `json:"description,omitempty"`
 	WorkerName       string                   `json:"workerName,omitempty"`
 	Phase            string                   `json:"phase"`
 	ContainerManaged bool                     `json:"containerManaged"`
@@ -337,6 +338,7 @@ type teamResp struct {
 		Name        string `json:"name"`
 		Role        string `json:"role,omitempty"`
 		DisplayName string `json:"displayName,omitempty"`
+		Description string `json:"description,omitempty"`
 		MatrixUserID string `json:"matrixUserID,omitempty"`
 	} `json:"workerMemberDetails,omitempty"`
 }
@@ -406,6 +408,7 @@ func workerDetail(w workerResp) []KeyValue {
 	return []KeyValue{
 		{"Name", w.Name},
 		{"DisplayName", w.DisplayName},
+		{"Description", w.Description},
 		{"Phase", or(w.Phase, "Pending")},
 		{"Model", w.Model},
 		{"Runtime", or(w.Runtime, "openclaw")},
@@ -442,6 +445,7 @@ func formatWorkerList(names []string, refs []map[string]string, details []struct
 	Name string `json:"name"`
 	Role string `json:"role,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
+	Description string `json:"description,omitempty"`
 	MatrixUserID string `json:"matrixUserID,omitempty"`
 }) string {
 	// Prefer details when available.

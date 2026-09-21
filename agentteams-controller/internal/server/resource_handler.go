@@ -106,6 +106,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Model:            req.Model,
 			ModelProvider:    req.ModelProvider,
 			DisplayName:      req.DisplayName,
+			Description:      req.Description,
 			WorkerName:       req.WorkerName,
 			Runtime:          runtime,
 			Image:            req.Image,
@@ -232,6 +233,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.DisplayName != "" {
 			worker.Spec.DisplayName = req.DisplayName
+		}
+		if req.Description != "" {
+			worker.Spec.Description = req.Description
 		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
@@ -407,6 +411,7 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 				} else {
 					detail.DisplayName = ref.Name
 				}
+				detail.Description = wk.Spec.Description
 				detail.MatrixUserID = wk.Status.MatrixUserID
 			}
 			resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
@@ -438,6 +443,7 @@ func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
 					} else {
 						detail.DisplayName = ref.Name
 					}
+					detail.Description = wk.Spec.Description
 					detail.MatrixUserID = wk.Status.MatrixUserID
 				}
 				resp.WorkerMemberDetails = append(resp.WorkerMemberDetails, detail)
@@ -1086,6 +1092,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		Name:             w.Name,
 		DisplayName:      w.Spec.DisplayName,
+		Description:      w.Spec.Description,
 		WorkerName:       w.Spec.WorkerName,
 		Phase:            w.Status.Phase,
 		State:            w.Spec.DesiredState(),

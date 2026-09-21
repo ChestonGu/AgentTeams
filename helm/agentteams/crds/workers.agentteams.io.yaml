@@ -61,6 +61,9 @@ spec:
                 displayName:
                   type: string
                   description: Friendly display name for the worker (used as the Matrix profile displayname and in listings). Falls back to workerName.
+                description:
+                  type: string
+                  description: What this worker does. Surfaced in API/agt listings and team rosters (leader AGENTS.md, runtime.yaml members) so task assignment can match worker responsibilities. Config-only; changing it never rebuilds the pod.
                 workerName:
                   type: string
                   description: Business/runtime identity for Matrix localpart and OSS path key (fallback to metadata.name)

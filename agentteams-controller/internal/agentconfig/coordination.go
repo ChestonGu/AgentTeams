@@ -29,6 +29,10 @@ type TeamWorkerInfo struct {
 	DisplayName string
 	// MatrixUserID is the member's Matrix MXID, if known.
 	MatrixUserID string
+	// Description is the member's spec.description: what this worker does
+	// (can be empty). Rendered after the room so the leader can match task
+	// decomposition to worker responsibilities.
+	Description string
 }
 
 const (
@@ -85,11 +89,16 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 				if w.RoomID != "" {
 					roomInfo = w.RoomID
 				}
-				// Prefer showing friendly display name when available.
+				// Prefer showing friendly display name when available; append
+				// the worker's responsibility description when set.
+				desc := ""
+				if w.Description != "" {
+					desc = " — " + w.Description
+				}
 				if w.DisplayName != "" && w.DisplayName != w.Name {
-					fmt.Fprintf(&b, "  - %s (@%s:%s) — Room: %s\n", w.DisplayName, w.Name, ctx.MatrixDomain, roomInfo)
+					fmt.Fprintf(&b, "  - %s (@%s:%s) — Room: %s%s\n", w.DisplayName, w.Name, ctx.MatrixDomain, roomInfo, desc)
 				} else {
-					fmt.Fprintf(&b, "  - @%s:%s — Room: %s\n", w.Name, ctx.MatrixDomain, roomInfo)
+					fmt.Fprintf(&b, "  - @%s:%s — Room: %s%s\n", w.Name, ctx.MatrixDomain, roomInfo, desc)
 				}
 			}
 		}

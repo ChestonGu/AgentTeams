@@ -181,6 +181,7 @@ type WorkerSpec struct {
 	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | worker-bridge (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	DisplayName   string                     `json:"displayName,omitempty"`   // friendly display name (Matrix profile, listings); falls back to workerName
+	Description   string                     `json:"description,omitempty"`   // what this worker does; surfaced in API/agt listings and team rosters (AGENTS.md, runtime.yaml members)
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
