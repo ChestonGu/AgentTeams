@@ -795,10 +795,25 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     # Skip duplicate uploads through the runtime skills symlink; the canonical
     # standard-space skills/ directory is still pushed normally.
     # Auto-mirrored shared directories are handled by explicit filesync ops.
+    # Runtime-local caches (tool_result/file_store/media/embedding_cache)
+    # mirror the upstream qwenpaw exclusion list — they are never team
+    # assets and must not leak into the agent's MinIO prefix.
     _EXCLUDE_PATH_PREFIXES = (
         ".qwenpaw/workspaces/default/skills",
         ".qwenpaw/workspaces/default/shared",
         ".qwenpaw/workspaces/default/global-shared",
+        ".qwenpaw/workspaces/default/tool_result",
+        ".qwenpaw/workspaces/default/file_store",
+        ".qwenpaw/workspaces/default/media",
+        ".qwenpaw/workspaces/default/embedding_cache",
+        # copaw layout: WORKING_DIR is <install-dir>/<worker>/.copaw, so the
+        # same runtime caches land directly under .copaw/ (media holds Matrix
+        # downloads; verified leaking to agents/<worker>/.copaw/media on the
+        # 105 test env).
+        ".copaw/media",
+        ".copaw/tool_result",
+        ".copaw/file_store",
+        ".copaw/embedding_cache",
         "shared",
         "global-shared",
     )

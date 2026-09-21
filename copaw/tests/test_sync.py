@@ -391,6 +391,11 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
         "global-shared/reference.md": "global shared",
         ".qwenpaw/workspaces/default/shared/tasks/st-01/report.md": "runtime shared",
         ".qwenpaw/workspaces/default/global-shared/reference.md": "runtime global shared",
+        ".qwenpaw/workspaces/default/tool_result/tool-out.json": "tool output",
+        ".qwenpaw/workspaces/default/file_store/blob.bin": "file store",
+        ".qwenpaw/workspaces/default/media/abc12345_photo.png": "matrix media cache",
+        ".qwenpaw/workspaces/default/embedding_cache/index.idx": "embedding cache",
+        ".copaw/media/LgriJnD_方案文档_v1.md": "copaw-layout matrix media cache",
         "memory/note.txt": "remember this",
         "memory/shared/note.txt": "user data with shared path segment",
         "AGENTS.md": "worker prompt",
@@ -424,6 +429,13 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
         "agentteams/agentteams-storage/agents/dag-team-dev/memory/shared/note.txt",
         "agentteams/agentteams-storage/agents/dag-team-dev/skills/github/SKILL.md",
     }
+    # Runtime-local caches (incl. Matrix media downloads) must never leak
+    # into the agent's MinIO prefix — mirrors the upstream qwenpaw list.
+    assert not any(
+        part in dest
+        for dest in pushed_destinations
+        for part in ("/media/", "tool_result", "file_store", "embedding_cache")
+    )
 
 
 class _RecordingHealth:

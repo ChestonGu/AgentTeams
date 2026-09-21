@@ -47,6 +47,18 @@ from copaw_worker.hooks.message_filter import (
 
 logger = logging.getLogger("copaw.channels.matrix")
 
+
+def _sanitize_media_filename(name: str) -> str:
+    """Collapse a Matrix media body (filename) into a safe object-name part.
+
+    Matrix ``body`` is client-controlled free text; keep it usable as an
+    S3 object-name component (word chars, dot, dash; everything else →
+    ``_``) so archived keys never carry path separators or odd glyphs.
+    """
+    base = Path(name or "").name
+    base = re.sub(r"[^\w.\-]+", "_", base).strip("._")
+    return base[:120]
+
 # ---------------------------------------------------------------------------
 # Lazy import of QwenPaw base types so this file can be syntax-checked without
 # qwenpaw installed (it's only executed inside a qwenpaw environment).
@@ -459,6 +471,8 @@ class MatrixChannel(BaseChannel):
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
         # Track active thread root per room for error handling
         self._active_thread_roots: Dict[str, str] = {}
+        # Cached FileSync for media archiving (None=unresolved, False=no env)
+        self._media_filesync: Any = None
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -1389,14 +1403,20 @@ class MatrixChannel(BaseChannel):
             body_desc = (
                 f"[sent an image: {body}]" if body else "[sent an image]"
             )
-            if self._cfg.vision_enabled:
-                mxc_url: str = getattr(event, "url", "") or ""
-                if mxc_url:
-                    eid = event.event_id[:8].lstrip("$")
-                    filename = body or f"matrix_media_{eid}"
-                    filename = f"{eid}_{filename}"
-                    local_path = await self._download_mxc(mxc_url, filename)
-                    if local_path:
+            mxc_url: str = getattr(event, "url", "") or ""
+            if mxc_url:
+                eid = event.event_id[:8].lstrip("$")
+                filename = body or f"matrix_media_{eid}"
+                filename = f"{eid}_{filename}"
+                # Download regardless of vision: the team archive needs the
+                # bytes even when the model cannot see images. The vision
+                # gate below only decides whether the image enters the turn.
+                local_path = await self._download_mxc(mxc_url, filename)
+                if local_path:
+                    await self._archive_media_to_shared(
+                        local_path, room_id, event, body,
+                    )
+                    if self._cfg.vision_enabled:
                         media_parts.append(
                             ImageContent(
                                 type=ContentType.IMAGE,
@@ -1412,6 +1432,9 @@ class MatrixChannel(BaseChannel):
                 filename = f"{eid}_{filename}"
                 local_path = await self._download_mxc(mxc_url, filename)
                 if local_path:
+                    await self._archive_media_to_shared(
+                        local_path, room_id, event, body,
+                    )
                     media_parts.append(
                         FileContent(
                             type=ContentType.FILE,
@@ -1442,6 +1465,137 @@ class MatrixChannel(BaseChannel):
     # local media dir; mxc fetch; AES decrypt for
     # encrypted attachments; cleartext + RoomEncrypted* inbound paths (§7).
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Media archiving — room uploads → team shared/knowledge/matrix/
+    # Every media event in a group room (mentioned or not) is pushed to the
+    # team's MinIO shared tree so any member can filesync-pull it. Opt-out
+    # via AGENTTEAMS_MEDIA_ARCHIVE=0; failures never break the message flow.
+    # ------------------------------------------------------------------
+
+    def _media_archive_enabled(self) -> bool:
+        flag = os.environ.get("AGENTTEAMS_MEDIA_ARCHIVE", "1")
+        return flag.strip().lower() not in ("0", "false", "no", "off")
+
+    def _get_media_filesync(self) -> Any:
+        """Lazily build (and cache) a FileSync for media archiving.
+
+        Returns None when the MinIO environment is absent (e.g. local dev
+        without a Worker CR), which silently disables archiving.
+        """
+        cached = getattr(self, "_media_filesync", None)
+        if cached is not None:
+            return cached or None
+
+        from copaw_worker.sync import FileSync
+
+        worker_name = os.getenv("AGENTTEAMS_WORKER_NAME") or os.getenv(
+            "COPAW_WORKER_NAME"
+        )
+        endpoint = os.getenv("AGENTTEAMS_FS_ENDPOINT") or os.getenv(
+            "COPAW_MINIO_ENDPOINT"
+        )
+        access_key = os.getenv("AGENTTEAMS_FS_ACCESS_KEY") or os.getenv(
+            "COPAW_MINIO_ACCESS_KEY"
+        )
+        secret_key = os.getenv("AGENTTEAMS_FS_SECRET_KEY") or os.getenv(
+            "COPAW_MINIO_SECRET_KEY"
+        )
+        bucket = (
+            os.getenv("AGENTTEAMS_FS_BUCKET")
+            or os.getenv("COPAW_MINIO_BUCKET")
+            or "agentteams-storage"
+        )
+        if not (worker_name and endpoint and access_key and secret_key):
+            self._media_filesync = False
+            return None
+        self._media_filesync = FileSync(
+            endpoint=endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            bucket=bucket,
+            worker_name=worker_name,
+            worker_cr_name=os.getenv("AGENTTEAMS_WORKER_CR_NAME")
+            or os.getenv("COPAW_WORKER_CR_NAME"),
+            secure=str(endpoint).startswith("https://"),
+        )
+        return self._media_filesync
+
+    def _archive_media_sync(
+        self,
+        local_path: str,
+        room_id: str,
+        event: Any,
+        body: str,
+    ) -> Optional[str]:
+        """Blocking half of media archiving: mc cp to the team shared tree.
+
+        Returns the user-facing shared path (``shared/knowledge/matrix/...``)
+        or None when archiving is unavailable.
+        """
+        from copaw_worker import sync as sync_module
+
+        fs = self._get_media_filesync()
+        if fs is None:
+            return None
+        eid = (getattr(event, "event_id", "") or "")[:8].lstrip("$")
+        room_key = (room_id or "")[:8].lstrip("!")
+        safe_name = _sanitize_media_filename(body) or f"matrix_media_{eid}"
+        filename = f"{eid}_{safe_name}"
+        remote = (
+            f"{fs._get_shared_remote()}"
+            f"knowledge/matrix/{room_key}/{filename}"
+        )
+        sync_module._mc("cp", local_path, remote, check=True)
+        return f"shared/knowledge/matrix/{room_key}/{filename}"
+
+    async def _archive_media_to_shared(
+        self,
+        local_path: str,
+        room_id: str,
+        event: Any,
+        body: str,
+    ) -> None:
+        """Archive a downloaded room media file to team shared storage.
+
+        Uploads to ``shared/knowledge/matrix/<room>/<event>_<name>`` on the
+        team's MinIO shared tree (``teams/<team>/shared/`` for team members,
+        global ``shared/`` for standalone workers) and notifies the room via
+        m.notice so members know the filesync-pullable path.
+        """
+        if not self._media_archive_enabled():
+            return
+        try:
+            rel_path = await asyncio.to_thread(
+                self._archive_media_sync,
+                local_path,
+                room_id,
+                event,
+                body,
+            )
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: media archive failed for %s: %s",
+                getattr(event, "event_id", "?"),
+                exc,
+            )
+            return
+        if not rel_path:
+            return
+        if not self._client:
+            return
+        notice = f"已归档文件 {rel_path}（团队成员可通过 filesync pull 获取）"
+        try:
+            await self._client.room_send(
+                room_id,
+                "m.room.message",
+                {"msgtype": "m.notice", "body": notice},
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: archive notice send failed: %s", exc,
+            )
 
     def _media_dir(self) -> Path:
         """Return (and create) the local media storage directory."""
@@ -1627,6 +1781,30 @@ class MatrixChannel(BaseChannel):
                         if body
                         else "[sent an encrypted file]"
                     )
+                # Archive encrypted room files even without a mention: the
+                # turn only gets the text description, but the team archive
+                # still needs the decrypted bytes.
+                if isinstance(
+                    event, (RoomEncryptedImage, RoomEncryptedFile)
+                ):
+                    enc_mxc = getattr(event, "url", "") or ""
+                    enc_key = getattr(event, "key", {}) or {}
+                    enc_hashes = getattr(event, "hashes", {}) or {}
+                    enc_iv = getattr(event, "iv", "") or ""
+                    if enc_mxc and enc_key and enc_iv:
+                        eeid = event.event_id[:8].lstrip("$")
+                        efname = body or f"matrix_media_{eeid}"
+                        elocal = await self._download_encrypted_mxc(
+                            enc_mxc,
+                            f"{eeid}_{efname}",
+                            enc_key,
+                            enc_hashes,
+                            enc_iv,
+                        )
+                        if elocal:
+                            await self._archive_media_to_shared(
+                                elocal, room_id, event, body,
+                            )
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -1661,6 +1839,10 @@ class MatrixChannel(BaseChannel):
                 iv,
             )
             if local_path:
+                if not is_dm:
+                    await self._archive_media_to_shared(
+                        local_path, room_id, event, body,
+                    )
                 file_uri = Path(local_path).as_uri()
                 if isinstance(event, RoomEncryptedImage):
                     if self._cfg.vision_enabled:
@@ -2102,6 +2284,10 @@ class MatrixChannel(BaseChannel):
             filename = f"{eid}_{filename}"
             local_path = await self._download_mxc(mxc_url, filename)
             if local_path:
+                if not is_dm:
+                    await self._archive_media_to_shared(
+                        local_path, room_id, event, body,
+                    )
                 file_uri = Path(local_path).as_uri()
                 if isinstance(event, RoomMessageImage):
                     if self._cfg.vision_enabled:
