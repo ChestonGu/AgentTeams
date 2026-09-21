@@ -38,21 +38,28 @@ team:
   members:
   - matrixUserId: '@t-8a3f2c-leader:example.org'
     name: t-8a3f2c-leader
+    description: Decomposes incoming tasks and assigns sub-tasks to team workers
+    displayName: Tower Lead
     personalRoomId: '!zPPIHODHIjLCdyrWih:example.org'
     role: team_leader
     runtimeName: t-8a3f2c-leader
   - matrixUserId: '@t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8:example.org'
     name: t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8
+    description: Builds and reviews web UI components
+    displayName: Frontend Dev
     personalRoomId: '!rqdYRKBDqkdsOMeHsg:example.org'
     role: worker
     runtimeName: t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8
   - matrixUserId: '@t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org'
     name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+    description: Owns API endpoints and database schemas
+    displayName: Backend Dev
     personalRoomId: '!lLybQDJXFYjcenbOjZ:example.org'
     role: worker
     runtimeName: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
   - matrixUserId: '@t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7:example.org'
     name: t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7
+    displayName: QA Tester
     personalRoomId: '!jieRczOpKrgLxDBPla:example.org'
     role: worker
     runtimeName: t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7

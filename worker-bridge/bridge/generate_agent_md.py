@@ -130,6 +130,8 @@ def parse_runtime_config(text):
         'worker_name', 'matrix_id', 'domain', 'role',   # member.*
         'team_name', 'leader_id', 'admin_id',            # team.*
         'coordinators': [mxid, ...],                     # team.members[role=coordinator]
+        'roster': [{name, matrix_user_id, role,          # team.members[] (Team Roster)
+                    display_name, description}, ...],
         'team': bool,                                    # team section present
         'storage_prefix',                                # storage.sharedPrefix
       }
@@ -193,6 +195,7 @@ def parse_runtime_config(text):
         raise GenerateError("team.members is not a list")
     leader_id = None
     coordinators = []
+    roster = []
     seen = set()
     for item in members:
         if not isinstance(item, dict):
@@ -205,6 +208,17 @@ def parse_runtime_config(text):
                 and mxid != admin_id and mxid not in seen:
             seen.add(mxid)
             coordinators.append(mxid)
+        # Team Roster: every member entry (workers, leader, humans) with the
+        # fields the controller projects (RuntimeConfigTeamMember). Members
+        # whose Matrix identity has not landed yet keep name/role — the
+        # renderer degrades gracefully instead of dropping them.
+        roster.append({
+            "name": item.get("runtimeName") or item.get("name") or "",
+            "matrix_user_id": mxid,
+            "role": item_role,
+            "display_name": item.get("displayName") or "",
+            "description": item.get("description") or "",
+        })
 
     if role == "worker" and (not has_team or not leader_id):
         raise GenerateError(
@@ -220,6 +234,7 @@ def parse_runtime_config(text):
         "leader_id": leader_id,
         "admin_id": admin_id,
         "coordinators": coordinators,
+        "roster": roster,
         "team": has_team,
         "storage_prefix": storage.get("sharedPrefix") or "",
     }
@@ -228,6 +243,33 @@ def parse_runtime_config(text):
 def load_runtime_config(path):
     with open(path, encoding="utf-8") as fh:
         return parse_runtime_config(fh.read())
+
+
+def _roster_lines(cfg):
+    """Team Roster bullets: one per member except self.
+
+    Mirrors the leader AGENTS.md roster intent (coordination.go Team
+    Workers) from the worker's perspective: who is on the team, their
+    Matrix identity, role, and — when the controller projected
+    spec.description — what they do, so @mention routing and task
+    hand-offs can match responsibilities. Entries without a Matrix
+    identity yet (member.matrixUserId lands after registration) still
+    render with name + role."""
+    lines = []
+    for entry in cfg["roster"]:
+        if entry["matrix_user_id"] == cfg["matrix_id"]:
+            continue  # self: identity lives in the Environment section
+        label = entry["display_name"] or entry["name"]
+        role = entry["role"] or "member"
+        if entry["matrix_user_id"]:
+            head = f"  - {label} ({entry['matrix_user_id']}, {role})"
+        else:
+            head = f"  - {label} ({role})"
+        if entry["description"]:
+            lines.append(f"{head} — {entry['description']}")
+        else:
+            lines.append(head)
+    return lines
 
 
 def render_coordination(cfg):
@@ -253,6 +295,10 @@ def render_coordination(cfg):
         for mxid in cfg["coordinators"]:
             lines.append(f"  - {mxid} — can assign tasks and make "
                          "decisions within the team")
+    roster = _roster_lines(cfg)
+    if roster:
+        lines.append("- **Team Roster**:")
+        lines.extend(roster)
     lines.append("- Report task completion, blockers, and questions "
                  "to your coordinator")
     audiences = ["your coordinator"]

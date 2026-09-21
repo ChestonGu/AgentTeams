@@ -160,6 +160,12 @@ Do not:
 - **Team Admin**: @u1234:example.org (has admin authority within this team)
 - **Coordinator Members**:
   - @u5678:example.org — can assign tasks and make decisions within the team
+- **Team Roster**:
+  - Tower Lead (@t-8a3f2c-leader:example.org, team_leader) — Decomposes incoming tasks and assigns sub-tasks to team workers
+  - Frontend Dev (@t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8:example.org, worker) — Builds and reviews web UI components
+  - QA Tester (@t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7:example.org, worker)
+  - u5678 (@u5678:example.org, coordinator)
+  - u1234 (@u1234:example.org, coordinator)
 - Report task completion, blockers, and questions to your coordinator
 - Respond to @mentions from your coordinator, Team Admin, coordinator members, and global Admin
 - Do NOT @mention Manager directly — all communication goes through your Team Leader

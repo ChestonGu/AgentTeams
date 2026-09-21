@@ -160,6 +160,21 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(cfg["coordinators"], ["@u5678:example.org"])
         self.assertTrue(cfg["team"])
         self.assertEqual(cfg["storage_prefix"], "teams/t-8a3f2c/shared")
+        # Team Roster projection: every member entry with the fields the
+        # controller's RuntimeConfigTeamMember writes
+        self.assertEqual(len(cfg["roster"]), 6)
+        self.assertEqual(cfg["roster"][0], {
+            "name": "t-8a3f2c-leader",
+            "matrix_user_id": "@t-8a3f2c-leader:example.org",
+            "role": "team_leader",
+            "display_name": "Tower Lead",
+            "description": "Decomposes incoming tasks and assigns "
+                           "sub-tasks to team workers",
+        })
+        # members without displayName/description degrade to empty strings
+        qa = cfg["roster"][3]
+        self.assertEqual((qa["display_name"], qa["description"]),
+                         ("QA Tester", ""))
 
     def test_standalone_fixture_fields(self):
         cfg = cfg_standalone()
@@ -306,6 +321,15 @@ class CoordinationTest(unittest.TestCase):
             "- **Coordinator Members**:",
             "  - @u5678:example.org — can assign tasks and make decisions "
             "within the team",
+            "- **Team Roster**:",
+            "  - Tower Lead (@t-8a3f2c-leader:example.org, team_leader) — "
+            "Decomposes incoming tasks and assigns sub-tasks to team workers",
+            "  - Frontend Dev (@t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8:"
+            "example.org, worker) — Builds and reviews web UI components",
+            "  - QA Tester (@t-8a3f2c-c3e91f7a5d20b8e6f4a2c9d1b3e5f7:"
+            "example.org, worker)",
+            "  - u5678 (@u5678:example.org, coordinator)",
+            "  - u1234 (@u1234:example.org, coordinator)",
             "- Report task completion, blockers, and questions to your "
             "coordinator",
             "- Respond to @mentions from your coordinator, Team Admin, "
@@ -314,15 +338,43 @@ class CoordinationTest(unittest.TestCase):
             "through your Team Leader",
         ])
 
-    def _worker_cfg(self, admin_id="", coordinators=None):
+    def _worker_cfg(self, admin_id="", coordinators=None, roster=None):
         return {
             "worker_name": "w1", "matrix_id": "@w1:example.org",
             "domain": "example.org", "role": "worker",
             "team_name": "t1", "leader_id": "@l1:example.org",
             "admin_id": admin_id,
             "coordinators": coordinators or [],
+            "roster": roster or [],
             "team": True, "storage_prefix": "teams/t1/shared",
         }
+
+    def test_roster_self_excluded_and_forms(self):
+        # full form: displayName wins, description appends after " — "
+        # degraded form: no matrixUserId yet -> name + role only
+        # empty description: no dangling separator
+        block = gen.render_coordination(self._worker_cfg(roster=[
+            {"name": "w1", "matrix_user_id": "@w1:example.org", "role": "worker",
+             "display_name": "Self", "description": "never rendered"},
+            {"name": "l1", "matrix_user_id": "@l1:example.org", "role": "team_leader",
+             "display_name": "Lead", "description": "assigns sub-tasks"},
+            {"name": "w2", "matrix_user_id": "@w2:example.org", "role": "worker",
+             "display_name": "", "description": ""},
+            {"name": "w3", "matrix_user_id": "", "role": "worker",
+             "display_name": "", "description": ""},
+        ]))
+        roster_lines = [ln for ln in block.split("\n")
+                        if ln.startswith("  - ")]
+        self.assertEqual(roster_lines, [
+            "  - Lead (@l1:example.org, team_leader) — assigns sub-tasks",
+            "  - w2 (@w2:example.org, worker)",
+            "  - w3 (worker)",
+        ])
+        self.assertNotIn("Self", block)
+
+    def test_no_roster_no_section(self):
+        block = gen.render_coordination(self._worker_cfg())
+        self.assertNotIn("Team Roster", block)
 
     def test_respond_variants(self):
         neither = gen.render_coordination(self._worker_cfg())
@@ -350,6 +402,7 @@ class CoordinationTest(unittest.TestCase):
         block = gen.render_coordination(self._worker_cfg())
         self.assertNotIn("Team Admin", block)
         self.assertNotIn("Coordinator Members", block)
+        self.assertNotIn("Team Roster", block)
 
     def test_multiple_coordinator_members(self):
         block = gen.render_coordination(
