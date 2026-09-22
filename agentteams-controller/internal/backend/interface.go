@@ -316,6 +316,11 @@ type WorkerResult struct {
 	DeploymentMode  string       `json:"deployment_mode"`
 	Status          WorkerStatus `json:"status"`
 	ContainerID     string       `json:"container_id,omitempty"`
+	// PodName is the actual pod name backing this worker (k8s backend:
+	// includes the container prefix and runtime suffixes such as "-bridge";
+	// e.g. "agentteams-worker-dev-bridge"). Docker backend leaves it empty.
+	// Name above stays the logical worker name callers passed in.
+	PodName string `json:"pod_name,omitempty"`
 	AppID           string       `json:"app_id,omitempty"`
 	RawStatus       string       `json:"raw_status,omitempty"`
 	ConsoleHostPort string       `json:"console_host_port,omitempty"`

@@ -422,6 +422,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 
 	return &WorkerResult{
 		Name:      req.Name,
+		PodName:   podName,
 		Backend:   "k8s",
 		Status:    StatusStarting,
 		RawStatus: rawK8sPhase(created.Status.Phase),
@@ -512,6 +513,7 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 
 	return &WorkerResult{
 		Name:           name,
+		PodName:        pod.Name,
 		Backend:        "k8s",
 		DeploymentMode: DeployCloud,
 		Status:         status,

@@ -131,6 +131,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		} else {
 			worker.Status.Phase = computeWorkerPhase(&worker, state.ContainerState, reterr)
 		}
+		worker.Status.PodName = state.PodName
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
 			worker.Status.Message = state.Message
@@ -210,6 +211,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
+	// Surface the resolved team on status (printer column); reconciled every
+	// pass, so membership changes propagate without any spec touch. w points
+	// at the caller's worker object, so the unified status patch picks it up.
+	w.Status.TeamName = mctx.TeamName
 	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
 	if err != nil {
 		return reconcile.Result{}, err

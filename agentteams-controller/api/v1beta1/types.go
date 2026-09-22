@@ -169,6 +169,8 @@ const (
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
 // +kubebuilder:printcolumn:name="Runtime",type=string,JSONPath=`.spec.runtime`
 // +kubebuilder:printcolumn:name="Adapter",type=string,JSONPath=`.spec.adapterMode`
+// +kubebuilder:printcolumn:name="Team",type=string,JSONPath=`.status.teamName`
+// +kubebuilder:printcolumn:name="Pod",type=string,JSONPath=`.status.podName`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -410,7 +412,17 @@ type WorkerStatus struct {
 	Phase              string              `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
 	MatrixUserID       string              `json:"matrixUserID,omitempty"`
 	RoomID             string              `json:"roomID,omitempty"`
-	ContainerState     string              `json:"containerState,omitempty"`
+	// TeamName is the effective Team identity this worker belongs to
+	// (controller-resolved from Team workerMembers; empty for standalone
+	// workers). Surfaced for display; not a scheduling or config input.
+	TeamName string `json:"teamName,omitempty"`
+	// PodName is the controller-managed pod serving this worker (e.g. the
+	// bridge pod "agentteams-worker-<name>-bridge" for worker-bridge
+	// runtimes). Empty while no pod exists. Pods provisioned outside the
+	// controller (e.g. the operator-managed cimicode runtime pod) are not
+	// listed here — their names follow the fixed "<name>-cimicode" rule.
+	PodName        string              `json:"podName,omitempty"`
+	ContainerState string              `json:"containerState,omitempty"`
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
 	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
 	Message            string              `json:"message,omitempty"`

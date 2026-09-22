@@ -185,6 +185,11 @@ type MemberState struct {
 	// Config and Container phases for idempotent reuse within one reconcile.
 	ProvResult *service.WorkerProvisionResult
 
+	// PodName is the controller-managed pod name reported by the backend
+	// (empty when the backend reports no pod). Written back to
+	// Worker.Status.PodName by the owning reconciler for display.
+	PodName string
+
 	// BackendRuntime is set during reconcile when a backend switch occurs
 	// or on the first successful deployment. Written back to
 	// Worker.Status.BackendRuntime by the owning reconciler.
@@ -600,6 +605,7 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		}
 	}
 	state.Message = result.Message
+	state.PodName = result.PodName
 
 	// Spec-change decision is owned by the caller (see MemberContext.SpecChanged
 	// doc). Both Worker and Team paths fill this boolean with their own
@@ -903,12 +909,14 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		}
 	}
 
-	if _, err := wb.Create(ctx, createReq); err != nil {
+	created, err := wb.Create(ctx, createReq)
+	if err != nil {
 		if errors.Is(err, backend.ErrConflict) {
 			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("create container: %w", err)
 	}
+	state.PodName = created.PodName
 	return reconcile.Result{}, nil
 }
 

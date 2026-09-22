@@ -21,6 +21,12 @@ spec:
         - name: Adapter
           type: string
           jsonPath: .spec.adapterMode
+        - name: Team
+          type: string
+          jsonPath: .status.teamName
+        - name: Pod
+          type: string
+          jsonPath: .status.podName
         - name: Phase
           type: string
           jsonPath: .status.phase
@@ -371,6 +377,20 @@ spec:
                   type: string
                 roomID:
                   type: string
+                teamName:
+                  type: string
+                  description: >
+                    Effective Team identity this worker belongs to
+                    (controller-resolved from Team workerMembers; empty for
+                    standalone workers). Display only.
+                podName:
+                  type: string
+                  description: >
+                    Controller-managed pod serving this worker (e.g. the
+                    bridge pod for worker-bridge runtimes). Empty while no
+                    pod exists. Operator-provisioned runtime pods are not
+                    listed here — their names follow the fixed
+                    "<name>-cimicode" rule.
                 displayNameSyncedGeneration:
                   type: integer
                   format: int64
