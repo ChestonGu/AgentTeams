@@ -329,3 +329,90 @@ class TestBridgeSectionParsing:
         cfg = boot.load(retries=1)
         assert cfg.runtime_bridge_section == {}
         assert cfg.bridge_adapter_mode == ""
+
+
+class TestRuntimeParameterBag:
+    """bridge.runtimeParameter 绑定袋（契约 v1.3）：嵌套形态优先、旧平铺
+    bridge 段 fallback 收已知四键、未知键原样保留（chat 请求体透传）。"""
+
+    NESTED_YAML = """member:
+  runtime: worker-bridge
+bridge:
+  adapterMode: cimicode-stateless
+  runtimeParameter:
+    baseUrl: http://gw.example.com
+    sessionId: sess-2
+    region: cn-north-7
+"""
+
+    SNAKE_NESTED_YAML = """bridge:
+  adapterMode: cimicode-stateless
+  runtimeParameter:
+    base_url: http://gw2.example.com
+    session_id: sess-3
+"""
+
+    def _app_with_files(self, runtime_yaml: str) -> BridgeApp:
+        app = BridgeApp()
+        app.config = load_config("config/does-not-exist.yaml")
+        app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=runtime_yaml)
+        return app
+
+    def test_nested_bag_returned_verbatim(self, monkeypatch):
+        boot = _bootstrap({"agents/w1/runtime/runtime.yaml": self.NESTED_YAML}, monkeypatch)
+        cfg = boot.load(retries=1)
+        # 未知键（region）原样保留，不做任何归一化
+        assert cfg.runtime_parameter == {
+            "baseUrl": "http://gw.example.com",
+            "sessionId": "sess-2",
+            "region": "cn-north-7",
+        }
+
+    def test_flat_section_falls_back_to_known_keys(self, monkeypatch):
+        # 存量 MinIO runtime.yaml 是 v1.3 之前的平铺投影——不重写也要能绑定
+        boot = _bootstrap(
+            {"agents/w1/runtime/runtime.yaml": TestAdapterResolution.BRIDGE_YAML}, monkeypatch
+        )
+        cfg = boot.load(retries=1)
+        assert cfg.runtime_parameter == {
+            "baseUrl": "http://cimicode.internal:8080",
+            "sessionId": "sess-1",
+            "sandboxId": "sbx-1",
+            "templateId": "tpl-1",
+        }
+
+    def test_apply_fills_fixed_fields_and_keeps_bag(self, monkeypatch):
+        for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL"):
+            monkeypatch.delenv(key, raising=False)
+        app = self._app_with_files(self.NESTED_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.runtime.base_url == "http://gw.example.com"
+        assert app.config.runtime.session_id == "sess-2"
+        # 整袋（含未知键）存 runtime_parameters，供 chat 请求体平铺透传
+        assert app.config.runtime.runtime_parameters == {
+            "baseUrl": "http://gw.example.com",
+            "sessionId": "sess-2",
+            "region": "cn-north-7",
+        }
+
+    def test_snake_case_nested_keys_accepted(self, monkeypatch):
+        app = self._app_with_files(self.SNAKE_NESTED_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.runtime.base_url == "http://gw2.example.com"
+        assert app.config.runtime.session_id == "sess-3"
+
+    def test_no_bridge_section_empty_bag(self, monkeypatch):
+        boot = _bootstrap(
+            {"agents/w1/runtime/runtime.yaml": "member:\n  runtime: worker-bridge\n"}, monkeypatch
+        )
+        cfg = boot.load(retries=1)
+        assert cfg.runtime_parameter == {}
+
+    def test_flat_binding_still_applies_through_fallback(self, monkeypatch):
+        # 旧平铺 yaml 经 fallback 袋走同一条 _apply_bridge_section 路径
+        app = self._app_with_files(TestAdapterResolution.BRIDGE_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.runtime.base_url == "http://cimicode.internal:8080"
+        assert app.config.runtime.sandbox_id == "sbx-1"
+        assert app.config.runtime.template_id == "tpl-1"
+        assert app.config.runtime.runtime_parameters["templateId"] == "tpl-1"

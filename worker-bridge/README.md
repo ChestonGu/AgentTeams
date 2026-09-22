@@ -40,7 +40,8 @@ bun 编译单二进制），分 **stateless / pod 两种模式**（§2）；外�
 - **bridge pod**：controller 消化 Worker CR（`runtime: worker-bridge`）后创建，持有
   与 worker 相同的 Matrix 身份和 runtime.yaml 投影。会话循环不在它自己身上——它把
   每个 turn 转发给 runtime pod，等待并回传。adapter 裁决四态：**显式 env >
-  runtime.yaml 顶层 bridge 段 > pod 模式推导**（worker_files 在手且无 bridge 段 →
+  runtime.yaml bridge 段（v1.3：嵌套 `runtimeParameter` 袋，兼容旧平铺）> pod 模式
+  推导**（worker_files 在手且无 bridge 段 →
   `cimicode-pod`，base_url 从 svc 命名契约推导，`GET /session` 健康门禁通过才建
   client）**> 未定态**（不建 client，15s 轮询等接线）。
 - **operator**（`agentteams/worker-bridge-operator`）：runtime 无关供给器。watch 本
@@ -58,10 +59,10 @@ Worker CR `spec.adapterMode`（[types.go:270](../agentteams-controller/api/v1bet
 | adapterMode | 形态 | 供给物 |
 |---|---|---|
 | `cimicode-pod`（含空值默认） | operator 供给单 runtime pod，bridge 经 svc 直连 | Deployment `<w>-cimicode` + svc `<w>-cimicode-svc`（单端口 :4096）+ Secret `<w>-cimicode-fs`（FS 凭据 + model-config） |
-| `cimicode-stateless` | bridge 直调外部 cimicode 平台（绑定四字段 `cimicodeGatewayUrl`/`sessionId`/`sandboxId`/`templateId`，controller 投影进 runtime.yaml 顶层 bridge 段） | 零供给 |
+| `cimicode-stateless` | bridge 直调外部 cimicode 平台（绑定收拢为 `spec.runtimeParameter` 字符串 map：已知键 `baseUrl`/`sessionId`/`sandboxId`/`templateId` 填 bridge 固定字段，追加键透传 chat 请求体；controller 投影进 runtime.yaml `bridge.runtimeParameter`） | 零供给 |
 
 **同一形态的两个镜像实现**（对外契约完全同一，见
-[contract/adapter-contract.md](contract/adapter-contract.md) v1.2）：
+[contract/adapter-contract.md](contract/adapter-contract.md) v1.3）：
 
 | 目录 | 基础 | 角色 |
 |---|---|---|
@@ -141,7 +142,7 @@ HELPER 残留键新 bridge 不读。
 | `cli/taskflow/` | taskflow CLI（worker 侧 check/ack/submit）+ mc 同步后端 + 统一日志模块 |
 | `cli/sync/` | agentteams-sync CLI（pull/push/stat/list） |
 | `cli/projectflow/` | projectflow CLI（leader 侧，core=copaw task.py 全量 vendor） |
-| `contract/` | `interface-contract.md` v2.4（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.2（统一形态传输契约） |
+| `contract/` | `interface-contract.md` v2.4（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.3（统一形态传输契约） |
 | `cimicode-sandbox/` | stateless 形态 cimicode 自用沙箱的基础镜像 |
 | `docs/` | 设计与操作文档（见 §8 索引） |
 
@@ -204,6 +205,13 @@ spec:
   model: glm-5.3-flash          # 必填（无 omitempty）；空则 operator 推迟供给
   soul: |
     你是一名后端开发工程师，……
+  # stateless 形态（v1.3）：绑定走 runtimeParameter map，无本地供给——
+  # runtimeParameter:
+  #   baseUrl: https://cimicode-gw.example.com   # 已知键 → bridge 固定字段
+  #   sessionId: sess-1
+  #   sandboxId: sbx-1
+  #   templateId: tpl-1
+  #   region: cn-north-7                         # 追加键 → chat 请求体透传
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -276,7 +284,7 @@ python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
 
 | 文档 | 内容 |
 |---|---|
-| [contract/adapter-contract.md](contract/adapter-contract.md) | 统一形态传输契约 v1.2（REST 双标定、模型注入、接线推导与自愈三通道、已知限制）——**接口权威** |
+| [contract/adapter-contract.md](contract/adapter-contract.md) | 统一形态传输契约 v1.3（REST 双标定、模型注入、接线推导与自愈三通道、runtimeParameter 绑定袋、已知限制）——**接口权威** |
 | [contract/interface-contract.md](contract/interface-contract.md) | 协作契约 v2.4（env/镜像布局/消息/命令/统一日志/agent.md 生成契约） |
 | [docs/worker-bridge-pod模式与operator部署详解.md](docs/worker-bridge-pod模式与operator部署详解.md) | pod 模式实测形态 + operator 部署使用全流程 + 105 实测坑——**部署权威** |
 | [docs/worker-bridge运行时替换与协作流转详解.md](docs/worker-bridge运行时替换与协作流转详解.md) | 运行时替换设计与协作流转 |

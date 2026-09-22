@@ -120,10 +120,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			ChannelPolicy:    req.ChannelPolicy,
 			Resources:        req.Resources,
 			AdapterMode:      req.AdapterMode,
-			CimicodeGatewayUrl: req.CimicodeGatewayUrl,
-			SessionId:        req.SessionId,
-			SandboxId:        req.SandboxId,
-			TemplateId:       req.TemplateId,
+			RuntimeParameter: req.RuntimeParameter,
 			ContainerManaged: &containerManaged,
 			State:            req.State,
 		},
@@ -243,24 +240,16 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.Image != "" {
 			worker.Spec.Image = req.Image
 		}
-		// worker-bridge binding re-point: non-empty overwrites, empty leaves
-		// the CR field untouched (binding updates flow to runtime.yaml via the
+		// worker-bridge binding re-point: non-empty adapterMode overwrites;
+		// runtimeParameter is nil=untouched, non-nil (incl. empty map)=
+		// wholesale replace (binding updates flow to runtime.yaml via the
 		// bridge-section projection and are picked up by the running bridge,
 		// never a pod rebuild).
 		if req.AdapterMode != "" {
 			worker.Spec.AdapterMode = req.AdapterMode
 		}
-		if req.CimicodeGatewayUrl != "" {
-			worker.Spec.CimicodeGatewayUrl = req.CimicodeGatewayUrl
-		}
-		if req.SessionId != "" {
-			worker.Spec.SessionId = req.SessionId
-		}
-		if req.SandboxId != "" {
-			worker.Spec.SandboxId = req.SandboxId
-		}
-		if req.TemplateId != "" {
-			worker.Spec.TemplateId = req.TemplateId
+		if req.RuntimeParameter != nil {
+			worker.Spec.RuntimeParameter = *req.RuntimeParameter
 		}
 		if req.Identity != "" {
 			worker.Spec.Identity = req.Identity
@@ -1106,10 +1095,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		McpServers:       w.Spec.McpServers,
 		Package:          w.Spec.Package,
 		AdapterMode:      w.Spec.AdapterMode,
-		CimicodeGatewayUrl: w.Spec.CimicodeGatewayUrl,
-		SessionId:        w.Spec.SessionId,
-		SandboxId:        w.Spec.SandboxId,
-		TemplateId:       w.Spec.TemplateId,
+		RuntimeParameter: w.Spec.RuntimeParameter,
 		BackendRuntime:   w.Spec.GetBackendRuntime(),
 		ContainerManaged: w.Spec.DesiredContainerMan(),
 		ChannelPolicy:    w.Spec.ChannelPolicy,

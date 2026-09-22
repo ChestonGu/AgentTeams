@@ -51,6 +51,10 @@ class RuntimeConfig(BaseModel):
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox
     auth_type: str = "none"                            # gateway 当前不鉴权
+    # 追加键透传袋：runtime.yaml bridge.runtimeParameter 整袋存这里，chat
+    # 请求体在固定字段之后平铺 merge（未知键平台侧忽略，新增平台参数
+    # 无需改 bridge 代码）。已知键已被抽到上面的固定字段，重复无害。
+    runtime_parameters: dict[str, str] = Field(default_factory=dict)
     # 长 turn（整轮 agent 执行动辄超 10 分钟）的 bridge 侧等待上限。
     # 部署级可用 BRIDGE_RUNTIME_TURN_TIMEOUT 覆盖。
     turn_timeout_seconds: int = 3600                   # turn 超时

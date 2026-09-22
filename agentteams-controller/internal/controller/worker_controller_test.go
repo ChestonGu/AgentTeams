@@ -1768,10 +1768,12 @@ func TestHashAppliedWorkerSpec_ExcludesWorkerBridgeBindingFields(t *testing.T) {
 	t.Run("add full binding", func(t *testing.T) {
 		bound := base
 		bound.AdapterMode = "cimicode-stateless"
-		bound.CimicodeGatewayUrl = "http://cimicode.internal:8080"
-		bound.SessionId = "sess-1"
-		bound.SandboxId = "sbx-1"
-		bound.TemplateId = "tpl-1"
+		bound.RuntimeParameter = map[string]string{
+			"baseUrl":    "http://cimicode.internal:8080",
+			"sessionId":  "sess-1",
+			"sandboxId":  "sbx-1",
+			"templateId": "tpl-1",
+		}
 		if got := hashAppliedWorkerSpec(bound); got != baseHash {
 			t.Fatalf("bridge binding fields must not affect hash: got %q, want %q", got, baseHash)
 		}
@@ -1779,7 +1781,7 @@ func TestHashAppliedWorkerSpec_ExcludesWorkerBridgeBindingFields(t *testing.T) {
 
 	t.Run("re-point sessionId alone", func(t *testing.T) {
 		repointed := base
-		repointed.SessionId = "sess-2"
+		repointed.RuntimeParameter = map[string]string{"sessionId": "sess-2"}
 		if got := hashAppliedWorkerSpec(repointed); got != baseHash {
 			t.Fatalf("sessionId re-point must not affect hash: got %q, want %q", got, baseHash)
 		}
@@ -1797,9 +1799,9 @@ func TestHashAppliedWorkerSpec_ExcludesWorkerBridgeBindingFields(t *testing.T) {
 	t.Run("resources-aware variant", func(t *testing.T) {
 		resources := &v1beta1.AgentResourceRequirements{Limits: v1beta1.AgentResourceValues{CPU: "500m"}}
 		plain := base
-		plain.SessionId = "sess-1"
+		plain.RuntimeParameter = map[string]string{"sessionId": "sess-1"}
 		bound := base
-		bound.SessionId = "sess-999"
+		bound.RuntimeParameter = map[string]string{"sessionId": "sess-999"}
 		if got, want := hashAppliedWorkerSpecForRuntimeAndResources(bound, "worker-bridge", resources),
 			hashAppliedWorkerSpecForRuntimeAndResources(plain, "worker-bridge", resources); got != want {
 			t.Fatalf("binding change must not affect resources-aware hash: got %q, want %q", got, want)

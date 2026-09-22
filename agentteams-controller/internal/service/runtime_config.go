@@ -72,12 +72,14 @@ type memberRuntimeConfigMatrix struct {
 // runtime=worker-bridge workers — the sole binding channel between the
 // Worker CR and the bridge pod (consumed by the bridge's
 // runtime_bridge_section parsing; see bootstrap.WorkerBootstrapConfig).
+// RuntimeParameter carries the stateless platform bindings verbatim
+// (spec.runtimeParameter): known keys (baseUrl/sessionId/sandboxId/
+// templateId) map to the bridge's fixed fields, unknown keys pass through
+// to the stateless chat request body — adding a platform parameter needs no
+// change here.
 type memberRuntimeConfigBridge struct {
-	AdapterMode string `json:"adapterMode,omitempty"`
-	BaseURL     string `json:"baseUrl,omitempty"`
-	SessionID   string `json:"sessionId,omitempty"`
-	SandboxID   string `json:"sandboxId,omitempty"`
-	TemplateID  string `json:"templateId,omitempty"`
+	AdapterMode      string            `json:"adapterMode,omitempty"`
+	RuntimeParameter map[string]string `json:"runtimeParameter,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -376,18 +378,24 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	// when the CR carries at least one binding field. AdapterMode is always
 	// normalized to an explicit value (empty → cimicode-pod) so runtime.yaml
 	// never leaves the adapter shape implicit — bridge and operator both get a
-	// single deterministic dispatch key.
+	// single deterministic dispatch key. RuntimeParameter values are trimmed;
+	// blank values are dropped so an all-empty map projects no binding.
 	if runtime == backend.RuntimeWorkerBridge && workerBridgeHasBinding(req.Spec) {
 		adapterMode := strings.TrimSpace(req.Spec.AdapterMode)
 		if adapterMode == "" {
 			adapterMode = "cimicode-pod"
 		}
+		params := make(map[string]string, len(req.Spec.RuntimeParameter))
+		for key, value := range req.Spec.RuntimeParameter {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			params[key] = value
+		}
 		doc.Bridge = &memberRuntimeConfigBridge{
-			AdapterMode: adapterMode,
-			BaseURL:     strings.TrimSpace(req.Spec.CimicodeGatewayUrl),
-			SessionID:   strings.TrimSpace(req.Spec.SessionId),
-			SandboxID:   strings.TrimSpace(req.Spec.SandboxId),
-			TemplateID:  strings.TrimSpace(req.Spec.TemplateId),
+			AdapterMode:      adapterMode,
+			RuntimeParameter: params,
 		}
 	}
 
@@ -428,13 +436,19 @@ func isNativeConfigModel(model string) bool {
 // workerBridgeHasBinding reports whether the WorkerSpec carries any
 // worker-bridge binding field. When false, no bridge section is projected at
 // all — the bridge stays undetermined and waits for its own env-based
-// resolution (e.g. an operator-provisioned runtime pod).
+// resolution (e.g. an operator-provisioned runtime pod). A runtimeParameter
+// map of only blank values does not count (mirrors the old per-field
+// non-empty checks).
 func workerBridgeHasBinding(spec v1beta1.WorkerSpec) bool {
-	return strings.TrimSpace(spec.AdapterMode) != "" ||
-		strings.TrimSpace(spec.CimicodeGatewayUrl) != "" ||
-		strings.TrimSpace(spec.SessionId) != "" ||
-		strings.TrimSpace(spec.SandboxId) != "" ||
-		strings.TrimSpace(spec.TemplateId) != ""
+	if strings.TrimSpace(spec.AdapterMode) != "" {
+		return true
+	}
+	for _, value := range spec.RuntimeParameter {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {

@@ -80,6 +80,7 @@ class TurnRunner:
             agent_md=self.build_agent_md(worker_files, room_id),
             history=[],
             user_message=user_message,
+            extra_params=dict(self.config.runtime_parameters),  # 追加键平铺透传
         )
         return self.aggregate_reply(events)
 

@@ -105,12 +105,14 @@ class WorkerBootstrapConfig:
 
     @property
     def runtime_bridge_section(self) -> dict[str, str]:
-        """runtime.yaml 顶层 bridge 段（worker-bridge 统一绑定通道）。
+        """runtime.yaml 顶层 bridge 段（旧平铺形态解析，v1.3 兼容通道）。
 
-        controller 把 Worker CR 的 spec.adapterMode / cimicodeGatewayUrl /
-        sessionId / sandboxId / templateId 投影到这里（camelCase 为 Go 投影
-        形态，snake_case 兼容）；空值字段不出现。归一化为 snake_case 键返回；
-        无段或解析失败返回空 dict（bridge 据此保持未定态等待自愈）。
+        v1.3 之前 controller 把 Worker CR 的绑定四字段平铺投影到 bridge 段
+        顶层（camelCase 为 Go 投影形态，snake_case 兼容）；v1.3 起改嵌套
+        bridge.runtimeParameter 袋（见 runtime_parameter property）。本
+        property 归一化解析旧平铺键（含 adapterMode——分派键不进袋，仍由
+        这里透出）；空值字段不出现，归一化为 snake_case 键返回；无段或
+        解析失败返回空 dict（bridge 据此保持未定态等待自愈）。
         """
         if not self.runtime_yaml:
             return {}
@@ -136,6 +138,50 @@ class WorkerBootstrapConfig:
             return out
         except Exception as exc:
             logger.warning("failed to parse bridge section from runtime.yaml: %s", exc)
+            return {}
+
+    @property
+    def runtime_parameter(self) -> dict[str, str]:
+        """runtime.yaml bridge.runtimeParameter 绑定袋（契约 v1.3 嵌套形态）。
+
+        controller 把 Worker CR 的 spec.runtimeParameter 整 map 原样投影到
+        bridge.runtimeParameter 子段（camelCase 惯例）；未知键原样保留
+        （chat 请求体透传平台）。旧平铺 bridge 段（v1.3 之前的投影形态，
+        存量 MinIO runtime.yaml 不会自动重写）没有子段——fallback 从平铺
+        段收集已知四键。键保持原样不归一化：未知键一旦改写会破坏透传，
+        已知键的 camel/snake 双写法由消费方（app._apply_bridge_section）
+        兼容。无段或解析失败返回空 dict。
+        """
+        if not self.runtime_yaml:
+            return {}
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+            bridge = doc.get("bridge")
+            if not isinstance(bridge, dict):
+                return {}
+            nested = bridge.get("runtimeParameter")
+            if isinstance(nested, dict) and nested:
+                out: dict[str, str] = {}
+                for key, value in nested.items():
+                    if value:
+                        out[str(key)] = str(value)
+                return out
+            # 旧平铺 fallback：已知四键收进袋（平铺段本就只有这四个绑定键）
+            flat = self.runtime_bridge_section
+            return {
+                camel: flat[snake]
+                for camel, snake in (
+                    ("baseUrl", "base_url"),
+                    ("sessionId", "session_id"),
+                    ("sandboxId", "sandbox_id"),
+                    ("templateId", "template_id"),
+                )
+                if flat.get(snake)
+            }
+        except Exception as exc:
+            logger.warning("failed to parse runtimeParameter from runtime.yaml: %s", exc)
             return {}
 
     @property

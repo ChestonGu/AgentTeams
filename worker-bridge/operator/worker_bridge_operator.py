@@ -8,7 +8,9 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
     cimicode-stateless  → zero provisioning. The bridge calls an external
                           cimicode platform directly; its binding arrives via
                           the runtime.yaml bridge section (controller
-                          projection of spec.cimicodeGatewayUrl/sessionId/...).
+                          projection of spec.runtimeParameter:
+                          baseUrl/sessionId/sandboxId/templateId + any
+                          extra keys, passed through to the chat body).
                           This operator touches nothing.
     cimicode-pod        → own a single runtime Deployment + Service:
                               Service     <worker>-cimicode-svc  (runtime :4096)

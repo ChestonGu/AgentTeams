@@ -109,6 +109,39 @@ def test_s3_bootstrap_reads_precreated_gateway_session():
     assert bootstrap.gateway_sandbox_id == "sandbox-from-s3"
 
 
+def test_stateless_chat_body_merges_extra_params():
+    """契约 v1.3：runtimeParameter 袋在固定字段之后平铺 merge 进 chat 请求体。
+
+    已知键与固定字段同源同值（覆盖无害），追加键透传平台（未知字段
+    平台侧忽略——新增平台参数无需改 bridge）。
+    """
+    adapter = CimicodeAdapter(base_url="http://gw.example.com")
+    captured: dict = {}
+
+    async def fake_stream_sse(method, path, *, json_body=None):
+        captured.update(json_body or {})
+        return
+        yield  # pragma: no cover - 使其成为 async generator（chat 用 async for 消费）
+
+    adapter.stream_sse = fake_stream_sse
+    events = asyncio.run(adapter.chat(
+        session_id="sess-1",
+        sandbox_id="sbx-1",
+        turn_id="$event-1",
+        agent_md="md",
+        history=[],
+        user_message="hi",
+        extra_params={"sessionId": "sess-1", "region": "cn-north-7"},
+    ))
+    # 空流：chat 补一条 turn_interrupted 断流兜底（不视为失败）
+    assert [e.kind for e in events] == [RuntimeEventKind.TURN_INTERRUPTED]
+    assert captured["sessionId"] == "sess-1"
+    assert captured["sandboxId"] == "sbx-1"
+    assert captured["turnId"] == "$event-1"
+    assert captured["userMessage"] == "hi"
+    assert captured["region"] == "cn-north-7"
+
+
 def test_cimicode_dialect_translates_runtime_event():
     raw = {"kind": "text_delta", "text": "hello", "seq": 7}
     events = CimicodeDialect().translate(raw)

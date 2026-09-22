@@ -1,7 +1,8 @@
 """cimicode-stateless adapter：外部无状态 cimicode 平台的对接形态。
 
-绑定来源（全部来自 runtime.yaml 顶层 bridge 段，controller 从 Worker CR
-spec.cimicodeGatewayUrl/sessionId/sandboxId/templateId 投影）：
+绑定来源（全部来自 runtime.yaml bridge 段，controller 从 Worker CR
+spec.runtimeParameter 整 map 投影——契约 v1.3；已知键 baseUrl/sessionId/
+sandboxId/templateId 填固定字段，追加键经 chat 请求体透传平台）：
 - base_url   外部 cimicode 接口地址
 - session_id / sandbox_id   平台预建的会话/沙箱绑定
 - template_id    agent 模板追溯

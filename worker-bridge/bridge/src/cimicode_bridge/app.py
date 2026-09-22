@@ -43,6 +43,15 @@ logger = logging.getLogger(__name__)
 ADAPTER_POD_DEFAULT = "cimicode-pod"
 RUNTIME_SVC_PORT = 4096
 
+# runtimeParameter 袋中会被抽到 RuntimeConfig 固定字段的已知键
+# （snake_case 字段名 → camelCase 袋键名）；袋内其余键原样透传平台。
+KNOWN_RUNTIME_PARAMETER_KEYS = {
+    "base_url": "baseUrl",
+    "session_id": "sessionId",
+    "sandbox_id": "sandboxId",
+    "template_id": "templateId",
+}
+
 
 @dataclass
 class BridgeApp:
@@ -172,30 +181,42 @@ class BridgeApp:
             self._explicit_base_url = True
 
     def _apply_bridge_section(self, files: WorkerBootstrapConfig) -> None:
-        """把 runtime.yaml 顶层 bridge 段应用到 runtime 配置（不遮蔽显式 env）。
+        """把 runtime.yaml bridge 段应用到 runtime 配置（不遮蔽显式 env）。
 
         绑定优先级：显式 env（BRIDGE_RUNTIME_*，排障/覆盖用）> runtime.yaml
-        bridge 段（controller 从 Worker CR spec 投影）> legacy openclaw.json
-        bridge.runtime 段（兼容兜底）> 无。
+        bridge.runtimeParameter 袋（controller 从 Worker CR spec.runtimeParameter
+        投影，契约 v1.3）> 旧平铺 bridge 段（v1.3 之前的投影，兼容存量
+        MinIO yaml）> legacy openclaw.json bridge.runtime 段（兼容兜底）> 无。
+
+        已知键（baseUrl/sessionId/sandboxId/templateId，camel/snake 双认）
+        抽到 RuntimeConfig 固定字段；整袋另存 runtime_parameters，由 chat
+        请求体平铺透传（追加键进平台）。
         """
         section = files.runtime_bridge_section
+        params = files.runtime_parameter
         legacy = files.bridge_runtime_config
+
+        def binding(field_name: str) -> str:
+            camel = KNOWN_RUNTIME_PARAMETER_KEYS[field_name]
+            return str(params.get(camel) or params.get(field_name) or section.get(field_name) or "")
+
         if not self._explicit_base_url:
             self.config.runtime.base_url = (
-                section.get("base_url")
+                binding("base_url")
                 or str(legacy.get("baseUrl") or legacy.get("base_url") or "")
                 or self.config.runtime.base_url
             )
         self.config.runtime.template_id = (
-            section.get("template_id")
+            binding("template_id")
             or str(legacy.get("templateId") or legacy.get("template_id") or "")
         )
         self.config.runtime.session_id = (
-            section.get("session_id") or files.gateway_session_id
+            binding("session_id") or files.gateway_session_id
         )
         self.config.runtime.sandbox_id = (
-            section.get("sandbox_id") or files.gateway_sandbox_id
+            binding("sandbox_id") or files.gateway_sandbox_id
         )
+        self.config.runtime.runtime_parameters = dict(params)
 
     def _resolve_adapter_mode(self) -> str:
         """adapter 形态判定（唯一权威顺序，bootstrap 与自愈轮询共用）。
@@ -640,6 +661,7 @@ class BridgeApp:
                 agent_md=agent_md,
                 history=[],
                 user_message=user_message,
+                extra_params=dict(self.config.runtime.runtime_parameters),  # 追加键平铺透传
             )
             response_text = ""
             progress_texts: list[str] = []

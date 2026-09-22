@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,7 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 		wantModel     string
 		wantRuntime   string
 		wantAdapter   string
+		wantParams    map[string]string
 	}{
 		{
 			name:        "empty zip, no manifest",
@@ -66,6 +68,28 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 			wantAdapter: "cimicode-stateless",
 		},
 		{
+			name:        "runtimeParameter flows from top level",
+			manifest:    `{"runtime":"worker-bridge","runtimeParameter":{"baseUrl":"https://gw.example.com","region":"cn-north-7"}}`,
+			wantModel:   "",
+			wantRuntime: "worker-bridge",
+			wantParams:  map[string]string{"baseUrl": "https://gw.example.com", "region": "cn-north-7"},
+		},
+		{
+			name:        "worker block runtimeParameter overrides top level",
+			manifest:    `{"runtime":"worker-bridge","runtimeParameter":{"baseUrl":"top"},"worker":{"adapterMode":"cimicode-stateless","runtimeParameter":{"sessionId":"sess-1","sandboxId":"sbx-1"}}}`,
+			wantModel:   "",
+			wantRuntime: "worker-bridge",
+			wantAdapter: "cimicode-stateless",
+			wantParams:  map[string]string{"sessionId": "sess-1", "sandboxId": "sbx-1"},
+		},
+		{
+			name:        "non-string or empty runtimeParameter values are dropped",
+			manifest:    `{"runtimeParameter":{"sessionId":"keep","sandboxId":"","count":3}}`,
+			wantModel:   "",
+			wantRuntime: "",
+			wantParams:  map[string]string{"sessionId": "keep"},
+		},
+		{
 			name:        "missing fields stay empty so caller defaults can apply",
 			manifest:    `{"worker":{"suggested_name":"alice"}}`,
 			wantModel:   "",
@@ -86,7 +110,7 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 				files["manifest.json"] = tc.manifest
 			}
 			data := buildZip(t, files)
-			gotModel, gotRuntime, gotAdapter := extractWorkerFieldsFromZip(data)
+			gotModel, gotRuntime, gotAdapter, gotParams := extractWorkerFieldsFromZip(data)
 			if gotModel != tc.wantModel {
 				t.Errorf("model: got %q, want %q", gotModel, tc.wantModel)
 			}
@@ -96,14 +120,17 @@ func TestExtractWorkerFieldsFromZip(t *testing.T) {
 			if gotAdapter != tc.wantAdapter {
 				t.Errorf("adapterMode: got %q, want %q", gotAdapter, tc.wantAdapter)
 			}
+			if fmt.Sprint(gotParams) != fmt.Sprint(tc.wantParams) {
+				t.Errorf("runtimeParameter: got %v, want %v", gotParams, tc.wantParams)
+			}
 		})
 	}
 }
 
 func TestExtractWorkerFieldsFromZip_NotAZip(t *testing.T) {
-	gotModel, gotRuntime, gotAdapter := extractWorkerFieldsFromZip([]byte("not a zip"))
-	if gotModel != "" || gotRuntime != "" || gotAdapter != "" {
-		t.Errorf("expected empty fields for non-zip input, got model=%q runtime=%q adapterMode=%q", gotModel, gotRuntime, gotAdapter)
+	gotModel, gotRuntime, gotAdapter, gotParams := extractWorkerFieldsFromZip([]byte("not a zip"))
+	if gotModel != "" || gotRuntime != "" || gotAdapter != "" || gotParams != nil {
+		t.Errorf("expected empty fields for non-zip input, got model=%q runtime=%q adapterMode=%q params=%v", gotModel, gotRuntime, gotAdapter, gotParams)
 	}
 }
 

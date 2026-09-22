@@ -119,7 +119,11 @@ def test_turn_runner_aggregates_events():
                 RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, data={"code": "LLM_ERROR"}),
             ]
 
-    runner = TurnRunner(config=RuntimeConfig(session_id="sess-1", sandbox_id="sandbox-1"))
+    runner = TurnRunner(config=RuntimeConfig(
+        session_id="sess-1",
+        sandbox_id="sandbox-1",
+        runtime_parameters={"region": "cn-north-7"},  # CR spec.runtimeParameter 追加键
+    ))
 
     # 正常聚合：delta 追加 + turn_completed 覆盖为权威全文
     ok = runner.aggregate_reply(
@@ -159,6 +163,8 @@ def test_turn_runner_aggregates_events():
     assert client.request["sandbox_id"] == "sandbox-1"
     assert client.request["turn_id"] == "$event-1"
     assert client.request["history"] == []
+    # 追加键袋原样传给 chat（adapter 侧在固定字段之后平铺 merge 进请求体）
+    assert client.request["extra_params"] == {"region": "cn-north-7"}
     assert result.text == "ok"
 
     # ErroringRuntime 路径：run_turn 返回 failed 结果

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -302,6 +303,8 @@ type workerResp struct {
 	Identity         string                   `json:"identity,omitempty"`
 	Skills           []string                 `json:"skills,omitempty"`
 	McpServers       []map[string]interface{} `json:"mcpServers,omitempty"`
+	AdapterMode      string                   `json:"adapterMode,omitempty"`
+	RuntimeParameter map[string]string        `json:"runtimeParameter,omitempty"`
 	ContainerState   string                   `json:"containerState,omitempty"`
 	MatrixUserID     string                   `json:"matrixUserID,omitempty"`
 	RoomID           string                   `json:"roomID,omitempty"`
@@ -412,6 +415,8 @@ func workerDetail(w workerResp) []KeyValue {
 		{"Phase", or(w.Phase, "Pending")},
 		{"Model", w.Model},
 		{"Runtime", or(w.Runtime, "openclaw")},
+		{"AdapterMode", w.AdapterMode},
+		{"RuntimeParameter", formatStringMap(w.RuntimeParameter)},
 		{"ContainerState", w.ContainerState},
 		{"Image", w.Image},
 		{"Team", w.Team},
@@ -461,6 +466,24 @@ func formatWorkerList(names []string, refs []map[string]string, details []struct
 		return strings.Join(parts, ", ")
 	}
 	return strings.Join(names, ", ")
+}
+
+// formatStringMap renders a string map as sorted "k=v" pairs joined by
+// commas — stable output for detail tables regardless of map iteration order.
+func formatStringMap(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 func teamHeartbeatText(hb *teamHeartbeatResp) string {

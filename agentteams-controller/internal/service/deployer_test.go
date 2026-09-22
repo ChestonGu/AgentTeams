@@ -1330,26 +1330,54 @@ func deployBridgeSection(t *testing.T, spec v1beta1.WorkerSpec) map[string]any {
 
 func TestDeployMemberRuntimeConfigProjectsBridgeSection(t *testing.T) {
 	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
-		Runtime:            "worker-bridge",
-		AdapterMode:        "cimicode-stateless",
-		CimicodeGatewayUrl: "http://cimicode.internal:8080",
-		SessionId:          "sess-1",
-		SandboxId:          "sbx-1",
-		TemplateId:         "tpl-1",
+		Runtime:     "worker-bridge",
+		AdapterMode: "cimicode-stateless",
+		RuntimeParameter: map[string]string{
+			"baseUrl":    "http://cimicode.internal:8080",
+			"sessionId":  "sess-1",
+			"sandboxId":  "sbx-1",
+			"templateId": "tpl-1",
+		},
 	})
 	if bridge == nil {
 		t.Fatal("bridge section missing for runtime=worker-bridge with full binding")
 	}
+	if got := fmt.Sprint(bridge["adapterMode"]); got != "cimicode-stateless" {
+		t.Fatalf("bridge.adapterMode = %q, want %q", got, "cimicode-stateless")
+	}
+	params, ok := bridge["runtimeParameter"].(map[string]any)
+	if !ok {
+		t.Fatalf("bridge.runtimeParameter missing or not a mapping: %#v", bridge["runtimeParameter"])
+	}
 	for key, want := range map[string]string{
-		"adapterMode": "cimicode-stateless",
-		"baseUrl":     "http://cimicode.internal:8080",
-		"sessionId":   "sess-1",
-		"sandboxId":   "sbx-1",
-		"templateId":  "tpl-1",
+		"baseUrl":    "http://cimicode.internal:8080",
+		"sessionId":  "sess-1",
+		"sandboxId":  "sbx-1",
+		"templateId": "tpl-1",
 	} {
-		if got := fmt.Sprint(bridge[key]); got != want {
-			t.Fatalf("bridge.%s = %q, want %q", key, got, want)
+		if got := fmt.Sprint(params[key]); got != want {
+			t.Fatalf("bridge.runtimeParameter.%s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestDeployMemberRuntimeConfigProjectsUnknownRuntimeParameterKeys(t *testing.T) {
+	// Unknown keys pass through verbatim — adding a platform parameter needs
+	// no CRD/controller change (contract v1.3 passthrough).
+	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
+		Runtime:     "worker-bridge",
+		AdapterMode: "cimicode-stateless",
+		RuntimeParameter: map[string]string{
+			"sessionId": "sess-1",
+			"region":    "cn-north-7",
+		},
+	})
+	if bridge == nil {
+		t.Fatal("bridge section missing")
+	}
+	params := bridge["runtimeParameter"].(map[string]any)
+	if got := fmt.Sprint(params["region"]); got != "cn-north-7" {
+		t.Fatalf("bridge.runtimeParameter.region = %q, want passthrough %q", got, "cn-north-7")
 	}
 }
 
@@ -1359,7 +1387,9 @@ func TestDeployMemberRuntimeConfigNormalizesEmptyAdapterMode(t *testing.T) {
 	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
 		Runtime: "worker-bridge",
 		// no AdapterMode
-		CimicodeGatewayUrl: "http://cimicode.internal:8080",
+		RuntimeParameter: map[string]string{
+			"baseUrl": "http://cimicode.internal:8080",
+		},
 	})
 	if bridge == nil {
 		t.Fatal("bridge section missing")
@@ -1372,8 +1402,13 @@ func TestDeployMemberRuntimeConfigNormalizesEmptyAdapterMode(t *testing.T) {
 func TestDeployMemberRuntimeConfigOmitsBridgeSectionWithoutBinding(t *testing.T) {
 	// runtime=worker-bridge but zero binding fields → no bridge section at
 	// all: the bridge stays undetermined and waits for env-based resolution.
+	// An all-blank runtimeParameter map counts as no binding (mirrors the old
+	// per-field non-empty checks).
 	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
-		Runtime: "worker-bridge",
+		Runtime:           "worker-bridge",
+		RuntimeParameter: map[string]string{
+			"sessionId": "  ",
+		},
 	})
 	if bridge != nil {
 		t.Fatalf("bridge section projected without binding fields: %#v", bridge)
@@ -1384,9 +1419,11 @@ func TestDeployMemberRuntimeConfigOmitsBridgeSectionForQwenPaw(t *testing.T) {
 	// Binding fields on a non-worker-bridge runtime are inert — qwenpaw must
 	// never see a bridge section even if the CR carries leftover bindings.
 	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
-		Runtime:            "qwenpaw",
-		CimicodeGatewayUrl: "http://cimicode.internal:8080",
-		SessionId:          "sess-1",
+		Runtime: "qwenpaw",
+		RuntimeParameter: map[string]string{
+			"baseUrl":   "http://cimicode.internal:8080",
+			"sessionId": "sess-1",
+		},
 	})
 	if bridge != nil {
 		t.Fatalf("bridge section projected for runtime=qwenpaw: %#v", bridge)

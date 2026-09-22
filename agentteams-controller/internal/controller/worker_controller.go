@@ -815,7 +815,7 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //	Model, DisplayName, Description, McpServers 鈥?config-only (consumed by ReconcileMemberConfig)
 //	AccessEntries 鈥?permission-only (resolved by credential issuance)
 //	AgentIdentity, CredentialBindings 鈥?runtime credential config
-//	AdapterMode, CimicodeGatewayUrl, SessionId, SandboxId, TemplateId 鈥?
+//	AdapterMode, RuntimeParameter
 //	  worker-bridge bindings: projected to the runtime.yaml bridge section
 //	  and picked up by the running bridge via self-heal, never a pod input
 //	State, IdleTimeout 鈥?lifecycle/policy
@@ -924,10 +924,7 @@ func workerSpecWithEffectiveBackendRuntimeForHash(spec v1beta1.WorkerSpec, backe
 // the bridge, never rebuild the pod.
 func zeroWorkerBridgeBindingFields(spec *v1beta1.WorkerSpec) {
 	spec.AdapterMode = ""
-	spec.CimicodeGatewayUrl = ""
-	spec.SessionId = ""
-	spec.SandboxId = ""
-	spec.TemplateId = ""
+	spec.RuntimeParameter = nil
 }
 
 func hashQwenPawPodSpec(spec v1beta1.WorkerSpec) string {

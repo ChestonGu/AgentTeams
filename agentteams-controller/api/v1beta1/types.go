@@ -275,21 +275,15 @@ type WorkerSpec struct {
 	// (BRIDGE_RUNTIME_* env, then the projected bridge section).
 	AdapterMode string `json:"adapterMode,omitempty"`
 
-	// CimicodeGatewayUrl is the external cimicode gateway base URL
-	// (cimicode-stateless binding). Projected as bridge.baseUrl.
-	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
-
-	// SessionId is the external cimicode session binding. Projected as
-	// bridge.sessionId.
-	SessionId string `json:"sessionId,omitempty"`
-
-	// SandboxId is the external cimicode sandbox binding. Projected as
-	// bridge.sandboxId.
-	SandboxId string `json:"sandboxId,omitempty"`
-
-	// TemplateId is the external cimicode template binding. Projected as
-	// bridge.templateId.
-	TemplateId string `json:"templateId,omitempty"`
+	// RuntimeParameter is the worker-bridge binding parameter bag
+	// (cimicode-stateless platform bindings). Free-form string map with a
+	// camelCase key convention — known keys: baseUrl, sessionId, sandboxId,
+	// templateId — projected verbatim into the runtime.yaml
+	// bridge.runtimeParameter section. Known keys map to the bridge's fixed
+	// binding fields; unrecognized keys are passed through to the stateless
+	// chat request body, so adding a new platform parameter requires no CRD
+	// change.
+	RuntimeParameter map[string]string `json:"runtimeParameter,omitempty"`
 }
 
 type WorkerVolumeSpec struct {

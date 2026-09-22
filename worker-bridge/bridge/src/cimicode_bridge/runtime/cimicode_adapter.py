@@ -83,24 +83,31 @@ class CimicodeAdapter:
         agent_md: str,
         history: list[dict[str, Any]],
         user_message: str,
+        extra_params: dict[str, str] | None = None,
     ) -> list[RuntimeEvent]:
         """提交 turn：POST chat → SSE → 方言翻译为 RuntimeEvent 列表。
+
+        extra_params 是 CR spec.runtimeParameter 的整袋快照，在固定字段
+        之后平铺 merge 进请求体：已知键与固定字段同源同值（覆盖无害），
+        追加键透传平台（平台侧忽略未知字段——新增平台参数无需改 bridge）。
 
         流结束仍未收到 turn_completed 时补一条 turn_interrupted（断流兜底）。
         """
         path = "/v1/gateway/session/chat"
         events: list[RuntimeEvent] = []
+        body: dict[str, Any] = {
+            "sessionId": session_id,
+            "sandboxId": sandbox_id,
+            "turnId": turn_id,
+            "agentMd": agent_md,
+            "history": history,
+            "userMessage": user_message,
+        }
+        body.update(extra_params or {})
         async for line in self.stream_sse(
             "POST",
             path,
-            json_body={
-                "sessionId": session_id,
-                "sandboxId": sandbox_id,
-                "turnId": turn_id,
-                "agentMd": agent_md,
-                "history": history,
-                "userMessage": user_message,
-            },
+            json_body=body,
         ):
             events.extend(CimicodeDialect().translate(line))
         if not any(event.kind == RuntimeEventKind.TURN_COMPLETED for event in events):

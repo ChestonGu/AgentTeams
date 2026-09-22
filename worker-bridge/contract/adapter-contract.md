@@ -1,8 +1,16 @@
 # Runtime Adapter 传输契约（cimicode-stateless / cimicode-pod 统一形态）
 
-**版本** v1.2（2026-09-18）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
+**版本** v1.3（2026-09-22）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
 （adapter 层）、`worker-bridge/cimicode-runtime/` + `worker-bridge/opencode-runtime/`
 （双 runtime 镜像）、`worker-bridge/operator/`（供给与模型注入）
+
+**v1.3 变更**（自 v1.2，2026-09-18）：stateless 绑定四字段（Worker CR
+`spec.cimicodeGatewayUrl/sessionId/sandboxId/templateId`）在 CR 侧收拢为
+`spec.runtimeParameter` 自由字符串 map（camelCase 键惯例，追加平台参数不再改
+CRD）；runtime.yaml bridge 段投影改嵌套形态 `bridge.runtimeParameter`；
+**追加键整袋平铺透传**进 stateless chat 请求体（固定字段之后 merge，平台侧
+忽略未知字段）。bridge 兼容读旧平铺 bridge 段（存量 MinIO runtime.yaml 不
+重写）。见下"stateless 绑定与透传"节。
 
 **v1.2 变更**（自 v1.1，2026-09-16）：接线改为 **bridge 自推导**——operator
 不再 patch Worker CR（ensure_worker_env 退役）；pod 模式 base_url 从 svc 命名
@@ -19,15 +27,48 @@ emptyDir 移除（/workspace=容器可写层）；模型改经 operator 注入
 ## 两种 adapter 形态（共享 Runtime SPI）
 
 两种 adapter 形态共享 Runtime SPI（`chat(*, session_id, sandbox_id, turn_id,
-agent_md, history, user_message) -> list[RuntimeEvent]`，base.py），传输层已分化：
+agent_md, history, user_message, extra_params) -> list[RuntimeEvent]`，base.py；
+`extra_params` 为 v1.3 新增的 runtimeParameter 追加键袋——pod 形态收下忽略，
+签名同构），传输层已分化：
 
 | | cimicode-stateless | cimicode-pod |
 |---|---|---|
 | 对端 | 外部 cimicode 平台 gateway | operator 供给的 runtime pod（cimicode 或 opencode） |
 | 传输 | HTTP + SSE（`POST /v1/gateway/session/chat`） | opencode REST + 轮询（单端口） |
 | agent.md | 请求字段（agentMd） | 消息体 `system` 字段（每 turn 原生注入） |
-| 会话 | 预建绑定（runtime.yaml bridge 段 sessionId/sandboxId） | adapter 自持（404 自愈重建） |
+| 会话 | 预建绑定（runtime.yaml `bridge.runtimeParameter` sessionId/sandboxId） | adapter 自持（404 自愈重建） |
 | 流式 | SSE 事件流 | 否（turn 结束出全文 + progress_texts） |
+
+## stateless 绑定与透传（v1.3）
+
+Worker CR `spec.runtimeParameter` 是自由字符串 map（camelCase 键惯例），
+controller 逐值 TrimSpace（blank 丢弃）后整袋投影到 runtime.yaml：
+
+```yaml
+bridge:
+  adapterMode: cimicode-stateless
+  runtimeParameter:
+    baseUrl: https://gw.example.com     # 已知键 → bridge 固定字段 base_url
+    sessionId: sess-1                   # → session_id
+    sandboxId: sbx-1                    # → sandbox_id
+    templateId: tpl-1                   # → template_id
+    region: cn-north-7                  # 追加键 → chat 请求体平铺透传
+```
+
+bridge 侧语义（`bootstrap.runtime_parameter` → `app._apply_bridge_section` →
+adapter `chat(extra_params=...)`）：
+
+- **已知键**（baseUrl/sessionId/sandboxId/templateId，camel/snake 双认）抽到
+  RuntimeConfig 固定字段，绑定优先级不变（显式 env > 袋 > 旧平铺段 >
+  legacy openclaw.json）；
+- **追加键**：整袋存 `runtime.runtime_parameters`，chat 请求体在固定字段
+  （sessionId/sandboxId/turnId/agentMd/history/userMessage）之后 `update`
+  平铺 merge——已知键与固定字段同源同值（覆盖无害），追加键透传平台
+  （平台 JSON 忽略未知字段），**新增平台参数无需改 bridge**；
+- **旧形态兼容**：v1.3 之前投影的平铺 bridge 段（顶层 baseUrl/sessionId/
+  sandboxId/templateId）由 fallback 收进袋——存量 MinIO runtime.yaml 不重写
+  也能完成绑定（自愈重投影后自然升级为嵌套形态）；
+- `adapterMode` 保持强类型独立字段（分派键，不进袋）。
 
 ## 双 runtime 镜像（差异全部封装在镜像目录内）
 

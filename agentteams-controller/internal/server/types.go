@@ -25,11 +25,8 @@ type CreateWorkerRequest struct {
 
 	// worker-bridge runtime binding (projected to the runtime.yaml bridge
 	// section). Ignored for other runtimes.
-	AdapterMode        string `json:"adapterMode,omitempty"`
-	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
-	SessionId          string `json:"sessionId,omitempty"`
-	SandboxId          string `json:"sandboxId,omitempty"`
-	TemplateId         string `json:"templateId,omitempty"`
+	AdapterMode      string            `json:"adapterMode,omitempty"`
+	RuntimeParameter map[string]string `json:"runtimeParameter,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -57,14 +54,13 @@ type UpdateWorkerRequest struct {
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
 
-	// worker-bridge runtime binding. Update semantics: non-empty values
-	// overwrite the CR fields; empty values leave them untouched (bindings
-	// can be re-pointed but not cleared through the update path).
-	AdapterMode        string `json:"adapterMode,omitempty"`
-	CimicodeGatewayUrl string `json:"cimicodeGatewayUrl,omitempty"`
-	SessionId          string `json:"sessionId,omitempty"`
-	SandboxId          string `json:"sandboxId,omitempty"`
-	TemplateId         string `json:"templateId,omitempty"`
+	// worker-bridge runtime binding. AdapterMode update semantics: non-empty
+	// overwrites, empty leaves untouched. RuntimeParameter is a pointer to
+	// make "replace whole map" expressible: nil leaves the CR map untouched;
+	// non-nil (including an empty map) replaces it wholesale — merge
+	// individual keys client-side or GET-then-PUT the full desired map.
+	AdapterMode      string             `json:"adapterMode,omitempty"`
+	RuntimeParameter *map[string]string `json:"runtimeParameter,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -92,10 +88,7 @@ type WorkerResponse struct {
 	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
 	Package          string                     `json:"package,omitempty"`
 	AdapterMode      string                     `json:"adapterMode,omitempty"`
-	CimicodeGatewayUrl string                  `json:"cimicodeGatewayUrl,omitempty"`
-	SessionId        string                     `json:"sessionId,omitempty"`
-	SandboxId        string                     `json:"sandboxId,omitempty"`
-	TemplateId       string                     `json:"templateId,omitempty"`
+	RuntimeParameter map[string]string          `json:"runtimeParameter,omitempty"`
 	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
 	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 	ContainerState   string                     `json:"containerState,omitempty"`

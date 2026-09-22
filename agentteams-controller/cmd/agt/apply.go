@@ -217,7 +217,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 		return fmt.Errorf("read ZIP %s: %w", zipPath, err)
 	}
 
-	model, manifestRuntime, manifestAdapterMode := extractWorkerFieldsFromZip(zipData)
+	model, manifestRuntime, manifestAdapterMode, manifestRuntimeParameter := extractWorkerFieldsFromZip(zipData)
 	if model == "" {
 		model = defaultWorkerModel()
 	}
@@ -251,6 +251,9 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 		}
 		setIfNotEmpty(updateBody, "runtime", runtime)
 		setIfNotEmpty(updateBody, "adapterMode", manifestAdapterMode)
+		if manifestRuntimeParameter != nil {
+			updateBody["runtimeParameter"] = manifestRuntimeParameter
+		}
 		if err := client.DoJSON("PUT", "/api/v1/workers/"+name, updateBody, &resp); err != nil {
 			return fmt.Errorf("update worker/%s: %w", name, err)
 		}
@@ -263,6 +266,9 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 		}
 		setIfNotEmpty(createBody, "runtime", runtime)
 		setIfNotEmpty(createBody, "adapterMode", manifestAdapterMode)
+		if manifestRuntimeParameter != nil {
+			createBody["runtimeParameter"] = manifestRuntimeParameter
+		}
 		if err := client.DoJSON("POST", "/api/v1/workers", createBody, &resp); err != nil {
 			return fmt.Errorf("create worker/%s: %w", name, err)
 		}
@@ -356,10 +362,10 @@ func applyWorkerParams(name, model, description, runtime, image, identity, soul,
 // their own defaults (model → defaultWorkerModel(), which prefers
 // $AGENTTEAMS_DEFAULT_MODEL; runtime → server-side default; adapterMode →
 // controller-side empty normalization, see the Worker CR adapterMode field).
-func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode string) {
+func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode string, runtimeParameter map[string]string) {
 	r, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
 	if err != nil {
-		return "", "", ""
+		return "", "", "", nil
 	}
 
 	for _, f := range r.File {
@@ -368,13 +374,13 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode str
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return "", "", ""
+			return "", "", "", nil
 		}
 		defer rc.Close()
 
 		var manifest map[string]interface{}
 		if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
-			return "", "", ""
+			return "", "", "", nil
 		}
 
 		if m, ok := manifest["model"].(string); ok && m != "" {
@@ -386,6 +392,9 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode str
 		if am, ok := manifest["adapterMode"].(string); ok && am != "" {
 			adapterMode = am
 		}
+		if rp := extractRuntimeParameter(manifest["runtimeParameter"]); len(rp) > 0 {
+			runtimeParameter = rp
+		}
 		if w, ok := manifest["worker"].(map[string]interface{}); ok {
 			if m, ok := w["model"].(string); ok && m != "" {
 				model = m
@@ -396,8 +405,31 @@ func extractWorkerFieldsFromZip(zipData []byte) (model, runtime, adapterMode str
 			if am, ok := w["adapterMode"].(string); ok && am != "" {
 				adapterMode = am
 			}
+			if rp := extractRuntimeParameter(w["runtimeParameter"]); len(rp) > 0 {
+				runtimeParameter = rp
+			}
 		}
-		return model, runtime, adapterMode
+		return model, runtime, adapterMode, runtimeParameter
 	}
-	return "", "", ""
+	return "", "", "", nil
+}
+
+// extractRuntimeParameter decodes a manifest runtimeParameter value into a
+// clean string map. Non-string or empty values are dropped; a nil/empty
+// result leaves the API body untouched (no binding).
+func extractRuntimeParameter(v interface{}) map[string]string {
+	raw, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for key, value := range raw {
+		if s, ok := value.(string); ok && s != "" {
+			out[key] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

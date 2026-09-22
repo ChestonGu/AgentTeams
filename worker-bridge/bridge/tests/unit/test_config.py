@@ -19,3 +19,5 @@ def test_runtime_fields_have_no_hardcoded_defaults():
     cfg = BridgeConfig()
     assert cfg.runtime.base_url == ""
     assert cfg.runtime.template_id == ""
+    # 透传袋空默认：未投影 runtimeParameter 时 chat 请求体零追加键
+    assert cfg.runtime.runtime_parameters == {}
