@@ -8,6 +8,25 @@ spec:
     - name: v1beta1
       served: true
       storage: true
+      additionalPrinterColumns:
+        - name: Display Name
+          type: string
+          jsonPath: .spec.displayName
+        - name: Leader Ready
+          type: boolean
+          jsonPath: .status.leaderReady
+        - name: Workers
+          type: integer
+          jsonPath: .status.totalWorkers
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyWorkers
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
       schema:
         openAPIV3Schema:
           type: object
@@ -202,22 +221,6 @@ spec:
                               type: string
       subresources:
         status: {}
-      additionalPrinterColumns:
-        - name: Leader Ready
-          type: boolean
-          jsonPath: .status.leaderReady
-        - name: Workers
-          type: integer
-          jsonPath: .status.totalWorkers
-        - name: Ready
-          type: integer
-          jsonPath: .status.readyWorkers
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
   scope: Namespaced
   names:
     plural: teams

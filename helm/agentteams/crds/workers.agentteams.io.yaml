@@ -8,6 +8,25 @@ spec:
     - name: v1beta1
       served: true
       storage: true
+      additionalPrinterColumns:
+        - name: Display Name
+          type: string
+          jsonPath: .spec.displayName
+        - name: Model
+          type: string
+          jsonPath: .spec.model
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: Adapter
+          type: string
+          jsonPath: .spec.adapterMode
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
       schema:
         openAPIV3Schema:
           type: object
@@ -385,19 +404,6 @@ spec:
                     Set by the controller after successful creation or backend switch.
       subresources:
         status: {}
-      additionalPrinterColumns:
-        - name: Model
-          type: string
-          jsonPath: .spec.model
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
-        - name: Runtime
-          type: string
-          jsonPath: .spec.runtime
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
   scope: Namespaced
   names:
     plural: workers

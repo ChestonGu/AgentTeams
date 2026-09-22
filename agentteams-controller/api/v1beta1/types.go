@@ -165,6 +165,12 @@ const (
 
 // +genclient
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Display Name",type=string,JSONPath=`.spec.displayName`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
+// +kubebuilder:printcolumn:name="Runtime",type=string,JSONPath=`.spec.runtime`
+// +kubebuilder:printcolumn:name="Adapter",type=string,JSONPath=`.spec.adapterMode`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Worker represents an AI agent worker in AgentTeams.
@@ -443,6 +449,12 @@ type WorkerList struct {
 
 // +genclient
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Display Name",type=string,JSONPath=`.spec.displayName`
+// +kubebuilder:printcolumn:name="Leader Ready",type=boolean,JSONPath=`.status.leaderReady`
+// +kubebuilder:printcolumn:name="Workers",type=integer,JSONPath=`.status.totalWorkers`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyWorkers`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Team represents a group of workers led by a Team Leader.
