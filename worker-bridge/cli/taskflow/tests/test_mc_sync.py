@@ -262,5 +262,81 @@ class FromEnvTests(unittest.TestCase):
         self.assertEqual(backend._fs.bucket, "agentteams-storage")  # default bucket
 
 
+class RuntimeConfigFileTests(unittest.TestCase):
+    """The /opt/teams/config/runtime.json env fallback (stateless sandboxes)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "runtime.json"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def write(self, payload: str) -> Path:
+        self.path.write_text(payload, encoding="utf-8")
+        return self.path
+
+    def test_fills_missing_env_keys(self) -> None:
+        path = self.write('{"AGENTTEAMS_WORKER_NAME": "dev-01", "AGENTTEAMS_TEAM": "t1"}')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            applied = mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(applied, 2)
+            self.assertEqual(os.environ["AGENTTEAMS_WORKER_NAME"], "dev-01")
+            self.assertEqual(os.environ["AGENTTEAMS_TEAM"], "t1")
+
+    def test_explicit_env_wins(self) -> None:
+        path = self.write('{"AGENTTEAMS_WORKER_NAME": "from-file"}')
+        with mock.patch.dict(os.environ, {"AGENTTEAMS_WORKER_NAME": "from-env"}, clear=True):
+            applied = mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(applied, 0)
+            self.assertEqual(os.environ["AGENTTEAMS_WORKER_NAME"], "from-env")
+
+    def test_pod_mode_composition_env_over_file(self) -> None:
+        # Both channels present: env-injected keys stay, file fills only the gap.
+        path = self.write(
+            '{"AGENTTEAMS_WORKER_NAME": "dev-01", "AGENTTEAMS_FS_BUCKET": "from-file"}'
+        )
+        with mock.patch.dict(os.environ, {"AGENTTEAMS_FS_BUCKET": "from-env"}, clear=True):
+            mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(os.environ["AGENTTEAMS_WORKER_NAME"], "dev-01")
+            self.assertEqual(os.environ["AGENTTEAMS_FS_BUCKET"], "from-env")
+
+    def test_missing_file_is_silent_zero(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("sys.stderr") as err:
+                applied = mc_sync.load_runtime_config_file(str(self.path))
+            self.assertEqual(applied, 0)
+            err.write.assert_not_called()
+
+    def test_malformed_json_warns_and_skips(self) -> None:
+        path = self.write("{not json")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("sys.stderr") as err:
+                applied = mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(applied, 0)
+            self.assertTrue(err.write.called)
+
+    def test_non_object_payload_warns_and_skips(self) -> None:
+        path = self.write('["AGENTTEAMS_WORKER_NAME"]')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("sys.stderr") as err:
+                applied = mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(applied, 0)
+            self.assertTrue(err.write.called)
+
+    def test_non_prefixed_and_non_string_entries_skipped(self) -> None:
+        path = self.write(
+            '{"PATH": "/x", "AGENTTEAMS_TEAM_COUNT": 3, "AGENTTEAMS_TEAM": "t1"}'
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("sys.stderr") as err:
+                applied = mc_sync.load_runtime_config_file(str(path))
+            self.assertEqual(applied, 1)
+            self.assertEqual(os.environ["AGENTTEAMS_TEAM"], "t1")
+            self.assertNotIn("PATH", os.environ)
+            self.assertNotIn("AGENTTEAMS_TEAM_COUNT", os.environ)
+            self.assertTrue(err.write.called)
+
+
 if __name__ == "__main__":
     unittest.main()

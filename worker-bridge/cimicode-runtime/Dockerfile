@@ -50,6 +50,10 @@
 #   OPENCODE_CONFIG_CONTENT      模型/provider 配置（secretKeyRef，operator 渲染）
 #   注意：不得设置 AGENTTEAMS_RUNTIME（mc 同步会误走 k8s 模式，local 三元组
 #   才是本 pod 的契约——见 worker-bridge/cimicode-sandbox 同款说明）
+#   配置文件回退：工具链同时认 /opt/teams/config/runtime.json（平铺 JSON，
+#   键=env 名，仅 AGENTTEAMS_ 前缀生效；env 恒优先——interface-contract.md
+#   §1.1）。pod 模式 env 注入齐全，不写该文件（缺席是正常态）；通道留给
+#   env 缺键的场合补缺。
 # =============================================================================
 ARG CIMICODE_BASE_IMAGE
 FROM ${CIMICODE_BASE_IMAGE}

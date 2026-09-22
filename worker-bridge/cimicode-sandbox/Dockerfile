@@ -21,13 +21,19 @@
 # 构建上下文 = 仓库根：
 #   docker build -f worker-bridge/cimicode-sandbox/Dockerfile -t <registry>/cimicode-sandbox:<tag> .
 #
-# 运行时 env 契约（cimicode 建沙箱时注入，镜像内不含任何凭据）：
+# 运行时配置契约（镜像内不含任何凭据；两个通道，显式 env 恒优先）：
+#   ① 沙箱 env 注入（平台支持时）
+#   ② /opt/teams/config/runtime.json 配置文件（平台侧服务动态追加；键 = env
+#      名原样平铺 JSON，仅 AGENTTEAMS_ 前缀生效——见 interface-contract.md §1.1。
+#      工具链 CLI import mc_sync 时装载，文件更新后下一条命令即生效）
+# 键清单（两通道同构）：
 #   AGENTTEAMS_FS_ENDPOINT      MinIO/OSS 端点（如 http://minio.ns.svc:9000）
 #   AGENTTEAMS_FS_BUCKET        协作存储桶（agentteams-storage）
 #   AGENTTEAMS_FS_ACCESS_KEY / AGENTTEAMS_FS_SECRET_KEY   该 worker 的存储凭据
 #   AGENTTEAMS_TEAM             Team CR 名（团队共享根解析；无 agt CLI 时必需）
 #   AGENTTEAMS_MATRIX_USER_ID   worker 的 Matrix MXID（taskflow --actor/所有权）
 #   AGENTTEAMS_WORKER_NAME      worker 名（agents/<w>/ 前缀解析）
+#   AGENTTEAMS_FS_ROOT          workspace 根（缺省 /root/agentteams-fs）
 #   （可选）AGENTTEAMS_STORAGE_PREFIX   alias/bucket 前缀（默认 agentteams/agentteams-storage）
 # =============================================================================
 FROM python:3.12-slim

@@ -26,6 +26,12 @@ those are Leader-owned and must never be overwritten by a worker push.
 
 T3 (agentteams-sync CLI) reuses ``McFileSync`` directly as the filesync
 pull/push/stat engine.
+
+Runtime config file fallback (stateless sandboxes): environments that cannot
+inject env vars at sandbox creation seed the same ``AGENTTEAMS_*`` contract
+from a flat JSON file at ``/opt/teams/config/runtime.json`` (see
+``load_runtime_config_file`` below). Explicit env vars always win; the file
+only fills missing keys.
 """
 
 from __future__ import annotations
@@ -35,11 +41,70 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# runtime config file (env fallback)
+# ---------------------------------------------------------------------------
+
+# File-based fallback for the AGENTTEAMS_* environment contract: stateless
+# sandboxes are provisioned by the platform, which cannot inject env vars at
+# sandbox creation but can append config files. The platform-side service
+# writes the same keys as a flat JSON object here (values assembled the same
+# way the operator assembles the cimicode-pod runtime env). Pod mode never
+# writes this file — its absence is the normal state there.
+RUNTIME_CONFIG_FILE = "/opt/teams/config/runtime.json"
+
+
+def load_runtime_config_file(path: str = RUNTIME_CONFIG_FILE) -> int:
+    """Seed missing AGENTTEAMS_* env vars from a flat JSON config file.
+
+    File format: a single JSON object whose keys are environment variable
+    names verbatim, e.g. {"AGENTTEAMS_WORKER_NAME": "dev-01", ...}. Only
+    AGENTTEAMS_-prefixed string values are applied, and only into env vars
+    that are not already set — an explicit env var always wins, so pod mode
+    (env-injected) and file mode compose. A missing file is silent; an
+    unreadable/malformed file warns on stderr and is skipped so a bad file
+    degrades to the plain missing-env error instead of crashing the CLI.
+    Returns the number of env vars applied.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"mc_sync: ignoring unreadable runtime config file {path}: {exc}", file=sys.stderr)
+        return 0
+    if not isinstance(data, dict):
+        print(f"mc_sync: runtime config file {path} is not a JSON object, ignoring", file=sys.stderr)
+        return 0
+    skipped: list[str] = []
+    applied = 0
+    for key, value in data.items():
+        if not key.startswith("AGENTTEAMS_"):
+            skipped.append(key)
+            continue
+        if not isinstance(value, str):
+            skipped.append(key)
+            continue
+        if key not in os.environ:
+            os.environ[key] = value
+            applied += 1
+    if skipped:
+        print(f"mc_sync: non-applicable entries in {path} skipped: {', '.join(sorted(skipped))}", file=sys.stderr)
+    return applied
+
+
+# Seed before any module-level env reads below (the _MC_ALIAS lookup reads
+# AGENTTEAMS_STORAGE_ALIAS / AGENTTEAMS_STORAGE_PREFIX at import time).
+load_runtime_config_file()
 
 
 class McSyncError(ValueError):

@@ -59,6 +59,16 @@
 > env 三元组（ENDPOINT/AK/SK）与 MC_HOST 二选一：local 模式注入三元组，
 > k8s/cloud 模式注入 MC_HOST。同时存在时三元组优先用于 `mc alias set`。
 
+### 1.1 配置文件回退（stateless 沙箱，v2.5）
+
+上表 env 键**全部**可通过配置文件补齐：`/opt/teams/config/runtime.json`。
+
+- **格式**：平铺一层 JSON 对象，键 = 环境变量名原样（`{"AGENTTEAMS_WORKER_NAME": "dev-01", ...}`）；仅 `AGENTTEAMS_` 前缀的字符串值生效，其余条目跳过并 stderr 警告。
+- **优先级**：显式 env 恒优先（`setdefault` 语义）——文件只补缺失键。两通道可并存：pod 模式（env 注入）不受影响，stateless 靠文件。
+- **谁写**：stateless 沙箱由平台侧服务注入（值拼装同 operator 组 runtime env 的三源：bridge pod env 五键 + Worker CR `status.matrixUserID` + Team CR 反查 `AGENTTEAMS_TEAM`）；pod 模式不写该文件，**文件缺席是正常态，静默**。
+- **装载时点**：工具链 CLI 进程 import `mc_sync` 时执行（`mc_sync.load_runtime_config_file()`，早于 argparse default 求值与 `_MC_ALIAS` 模块级读取）。文件存在但坏（非 JSON/非对象）= stderr 警告后跳过，退化为普通缺 env 报错，不崩 CLI。
+- **生效粒度**：每次命令执行都是新进程——平台追加/更新文件后，下一条命令即读到新值，无需重启沙箱。
+
 ## §2 沙箱布局契约（v2：镜像预装 + 运行时仅 shared/）
 
 **worker 沙箱镜像预装**（部署侧构建时固化，所有 opencode worker 相同）：
@@ -380,3 +390,4 @@ soul_merged/profile_merged）。
 | v2.2 | 2026-09-02 | §6：`## Coordination`（controller 注入块）显式静默透传（fence 归属修正，替换段不再吞 fence）；新增 `--soul-file`/`--profile-file` persona 逐字合并（copaw 顺序，if-exists）；§6.3 persona 数据义务。新增 **§5.5 统一日志契约**（所有工具 → 一个 JSONL 文件：路径解析、字段、行为保证；§1 补 4 个 `AGENTTEAMS_LOG_*` env；§2 布局补 `agentteams_log.py` 副本与 `logs/` 目录）。模拟器新增部署副本漂移检查 |
 | v2.3 | 2026-09-02 | §6 数据源重构（需求方定夺）：**身份/团队信息不再经 CLI 参数**——删 `--worker-name/--matrix-id/--team/--storage-prefix/--members` 及 §9 团队表渲染（团队事实唯一来源 = 透传的 Coordination 块）；新增 `--runtime-config`（MinIO `agents/<name>/runtime/runtime.yaml`，MemberRuntimeConfig，copaw 同款逐行解析）渲染 Environment 段；**标记骨架保持**（copaw 整文件进 prompt，转换输出保留 builtin-start/DO NOT EDIT/builtin-end/team-context 完整围栏——修复了前导标记丢失与段尾空行吞 fence 两个 bug）；fixture 换成真实生产形态（desensitized）；§6.3 数据义务改为三件套全 MinIO 拉取，bridge 不再向 controller 查询名册 |
 | v2.4 | 2026-09-03 | §6 重写为**生成契约**（需求方定夺）：弃"转换 canonical AGENTS.md"，改 `bridge/generate_agent_md.py` = **源模板 + runtime.yaml 渲染**——模板占位符化（`{{COORDINATION}}`/`{{ENVIRONMENT}}`，标记骨架固化在模板）；Coordination 块改从 runtime.yaml team 段渲染（文案与 controller `coordination.go` 逐行对齐，等价信息换结构化源）；runtime.yaml 改 **PyYAML 结构化解析**（当场抓出 fixture 粘贴污染）；persona 追加前置 **`## Persona` 接缝段**（归因 + 不覆盖 Worker 角色声明）；**fail-loud 全硬错误**（缺身份/无 leader/leader 角色/占位符漂移/残留括号/坏 YAML 均退出码 1，bridge 拒开会话）；canonical AGENTS.md 退役为非输入（`spec.agents` 用户内容不传播，个性化走 PROFILE.md）；数据义务改两件套（runtime.yaml + persona）+ 镜像内模板，**前提 = Member 落 qwenpaw/edge 调谐分支**（生产同型部署已确认）；golden 改为审定渲染快照双份（team/standalone） |
+| v2.5 | 2026-09-22 | 新增 **§1.1 配置文件回退**：`/opt/teams/config/runtime.json`（平铺 JSON，键=env 名，仅 `AGENTTEAMS_` 前缀生效）作为 §1 全部 env 键的 fallback 通道——stateless 沙箱平台无法建时注入 env，改由平台侧服务按 operator 同款三源拼值写文件；env 显式恒优先，pod 模式不受影响（文件缺席=正常态）。装载实现在 `mc_sync.load_runtime_config_file()`，import 时执行（早于 `_MC_ALIAS` 模块级求值），CLI 三件（taskflow/agentteams-sync/projectflow）零入口改动全覆盖 |
