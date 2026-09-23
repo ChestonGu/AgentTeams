@@ -59,8 +59,10 @@ plain-text CIMICODE_MODEL_CONFIG_HASH env: Secret value changes alone do not
 restart pods; the hash change drifts the pod template and ensure_deployment
 replaces the spec → rolling restart.
 
-No sandbox pod, no hostPath, no emptyDir: /workspace is the container's
-writable layer. A pod recreation loses session state — covered by the bridge
+No sandbox pod, no hostPath, no emptyDir: /workspace/work is the container's
+writable layer (the runtime entrypoint mkdir-p's it and cd's there — the
+agent's working directory and the toolchain's shared/ both live under it).
+A pod recreation loses session state — covered by the bridge
 adapter's 404 self-heal, the per-turn system field and taskflow's mc pull
 (PVC is a known productionization step).
 
@@ -376,7 +378,7 @@ class StackOperator:
         # 同 worker-bridge/cimicode-sandbox：绝不设置 AGENTTEAMS_RUNTIME——
         # mc 同步只认 ("k8s","aliyun")，其余走 local 静态三元组模式。
         pod_env: dict[str, str] = {
-            "AGENTTEAMS_FS_ROOT": "/workspace",
+            "AGENTTEAMS_FS_ROOT": "/workspace/work",
             "AGENTTEAMS_WORKER_NAME": worker,
             "OPENCODE_PORT": str(self.cfg.cimicode_port),
         }
@@ -436,7 +438,7 @@ class StackOperator:
             ports=[
                 client.V1ContainerPort(name="runtime", container_port=self.cfg.cimicode_port),
             ],
-            # 无 emptyDir/hostPath：/workspace = 容器可写层。pod 重建丢会话由
+            # 无 emptyDir/hostPath：/workspace/work = 容器可写层。pod 重建丢会话由
             # bridge adapter 的 404 自愈 + 每 turn 重发 system 兜住（容器重启
             # 也丢——按部署决策接受，PVC 化仍是生产化步骤）。
         )
@@ -517,7 +519,7 @@ class StackOperator:
         )
         live_env, live_refs = self._env_fingerprint(lc)
         want_env, want_refs = self._env_fingerprint(dc)
-        # 无卷可比（/workspace = 容器可写层）：漂移面 = image + probe + env +
+        # 无卷可比（/workspace/work = 容器可写层）：漂移面 = image + probe + env +
         # secretKeyRef 引用 + nodeSelector。Secret 值变更不重启 pod——模型/
         # 网关/key 轮转靠 CIMICODE_MODEL_CONFIG_HASH 明文 env 变更入 env 指纹。
         return (

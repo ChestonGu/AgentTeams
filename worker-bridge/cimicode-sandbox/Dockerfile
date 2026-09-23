@@ -63,7 +63,9 @@ RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scrip
 
 # ── 3. 约定 ──────────────────────────────────────────────────────────────
 ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills
-# 协作工作区约定路径（cimicode 挂载任务工作区到这里； Skills 与任务文件同树可读）
-WORKDIR /workspace
+# 协作工作区约定路径（cimicode 挂载任务工作区到这里； Skills 与任务文件同树
+# 可读）。/workspace/work 与 pod 形态的 FS_ROOT 约定值对齐——本镜像无
+# entrypoint（启动命令由平台决定），FS_ROOT 经 env / runtime.json 供值。
+WORKDIR /workspace/work
 
 # 无 ENTRYPOINT：cimicode 自行决定沙箱启动命令（通常 sleep infinity / 长驻 shell）

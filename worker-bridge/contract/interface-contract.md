@@ -41,7 +41,7 @@
 |---|---|---|---|---|
 | `AGENTTEAMS_WORKER_NAME` | ✅ | — | `mc_sync.filesync_from_env` | worker 名；缺失时 mc 同步直接报错 |
 | `AGENTTEAMS_MATRIX_USER_ID` | ✅ | — | `taskflow --actor` | 身份护栏；取 localpart 与 `meta.json.assigned_to` 规范化比对 |
-| `AGENTTEAMS_FS_ROOT` | ✅ | `/root/agentteams-fs` | `taskflow --root` / `agentteams_sync --root` | workspace 根（含 `shared/`） |
+| `AGENTTEAMS_FS_ROOT` | ✅ | `/root/agentteams-fs` | `taskflow --root` / `agentteams_sync --root` | workspace 根（含 `shared/`）。**沙箱约定值 `/workspace/work`**（pod 模式 operator 注入；entrypoint 按它 mkdir+cd，cwd 与 shared/ 同根） |
 | `AGENTTEAMS_TEAM` | ✅ | 空 = 无团队 → global shared | `mc_sync._get_team_id` | **storage team name**（bridge 从 worker CR `.team` 剥 bucket 前缀后注入）。沙箱无 agt（D8），团队共享区 `teams/{team}/shared/` 的解析只认此变量 |
 | `AGENTTEAMS_FS_ENDPOINT` | local 模式 ✅ | — | `filesync_from_env` | MinIO endpoint（`http(s)://` 前缀可选） |
 | `AGENTTEAMS_FS_ACCESS_KEY` | local 模式 ✅ | — | 同上 | 静态 AK |
@@ -106,7 +106,7 @@ skill 文档已写明无 wrapper 时的 `python3 <全路径>` 兜底，两条路
 **运行时**（$AGENTTEAMS_FS_ROOT，唯一同步区）：
 
 ```
-/root/agentteams-fs/
+/workspace/work/                          ← $AGENTTEAMS_FS_ROOT（沙箱约定值；示例）
 ├── shared/                              ← 协作区（MinIO 权威态的本地投影）
 │   ├── tasks/{task-id}/{meta.json, spec.md, base/, workspace/, progress/, result.md}
 │   └── projects/{project-id}/
@@ -391,3 +391,4 @@ soul_merged/profile_merged）。
 | v2.3 | 2026-09-02 | §6 数据源重构（需求方定夺）：**身份/团队信息不再经 CLI 参数**——删 `--worker-name/--matrix-id/--team/--storage-prefix/--members` 及 §9 团队表渲染（团队事实唯一来源 = 透传的 Coordination 块）；新增 `--runtime-config`（MinIO `agents/<name>/runtime/runtime.yaml`，MemberRuntimeConfig，copaw 同款逐行解析）渲染 Environment 段；**标记骨架保持**（copaw 整文件进 prompt，转换输出保留 builtin-start/DO NOT EDIT/builtin-end/team-context 完整围栏——修复了前导标记丢失与段尾空行吞 fence 两个 bug）；fixture 换成真实生产形态（desensitized）；§6.3 数据义务改为三件套全 MinIO 拉取，bridge 不再向 controller 查询名册 |
 | v2.4 | 2026-09-03 | §6 重写为**生成契约**（需求方定夺）：弃"转换 canonical AGENTS.md"，改 `bridge/generate_agent_md.py` = **源模板 + runtime.yaml 渲染**——模板占位符化（`{{COORDINATION}}`/`{{ENVIRONMENT}}`，标记骨架固化在模板）；Coordination 块改从 runtime.yaml team 段渲染（文案与 controller `coordination.go` 逐行对齐，等价信息换结构化源）；runtime.yaml 改 **PyYAML 结构化解析**（当场抓出 fixture 粘贴污染）；persona 追加前置 **`## Persona` 接缝段**（归因 + 不覆盖 Worker 角色声明）；**fail-loud 全硬错误**（缺身份/无 leader/leader 角色/占位符漂移/残留括号/坏 YAML 均退出码 1，bridge 拒开会话）；canonical AGENTS.md 退役为非输入（`spec.agents` 用户内容不传播，个性化走 PROFILE.md）；数据义务改两件套（runtime.yaml + persona）+ 镜像内模板，**前提 = Member 落 qwenpaw/edge 调谐分支**（生产同型部署已确认）；golden 改为审定渲染快照双份（team/standalone） |
 | v2.5 | 2026-09-22 | 新增 **§1.1 配置文件回退**：`/opt/teams/config/runtime.json`（平铺 JSON，键=env 名，仅 `AGENTTEAMS_` 前缀生效）作为 §1 全部 env 键的 fallback 通道——stateless 沙箱平台无法建时注入 env，改由平台侧服务按 operator 同款三源拼值写文件；env 显式恒优先，pod 模式不受影响（文件缺席=正常态）。装载实现在 `mc_sync.load_runtime_config_file()`，import 时执行（早于 `_MC_ALIAS` 模块级求值），CLI 三件（taskflow/agentteams-sync/projectflow）零入口改动全覆盖 |
+| v2.6 | 2026-09-23 | §1 `AGENTTEAMS_FS_ROOT` 行补**沙箱约定值 `/workspace/work`**（pod 模式 operator 注入；runtime entrypoint 按 env `mkdir -p` + `cd`，cwd 与 `shared/` 同根——单旋钮）。工具链缺席缺省 `/root/agentteams-fs` 不变（沙箱内恒被 env/runtime.json 覆盖）；cimicode-runtime / opencode-runtime / cimicode-sandbox 三镜像的 WORKDIR 与 entrypoint 兜底同步迁移；stateless 平台侧改 runtime.json 供值即可，沙箱 cwd 仍归平台管（cimicode-sandbox 无 entrypoint） |

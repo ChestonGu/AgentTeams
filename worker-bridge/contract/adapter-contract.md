@@ -1,8 +1,15 @@
 # Runtime Adapter 传输契约（cimicode-stateless / cimicode-pod 统一形态）
 
-**版本** v1.3（2026-09-22）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
+**版本** v1.4（2026-09-23）· 对应实现：`worker-bridge/bridge/src/cimicode_bridge/runtime/`
 （adapter 层）、`worker-bridge/cimicode-runtime/` + `worker-bridge/opencode-runtime/`
 （双 runtime 镜像）、`worker-bridge/operator/`（供给与模型注入）
+
+**v1.4 变更**（自 v1.3，2026-09-23）两件事：① runtimeParameter 已知键补
+`eid`（stateless 平台用户身份参数）——升为 chat 请求体固定字段（与
+sessionId/sandboxId 同待遇），pod 形态收下忽略；② 沙箱工作目录约定值
+`/workspace` → `/workspace/work`——operator 注入的 `AGENTTEAMS_FS_ROOT`
+与三个 runtime/sandbox 镜像的 WORKDIR/entrypoint 兜底同步迁移；entrypoint
+按 env mkdir+cd，cwd 与 `shared/` 同根，镜像与工具链代码零逻辑改动。
 
 **v1.3 变更**（自 v1.2，2026-09-18）：stateless 绑定四字段（Worker CR
 `spec.cimicodeGatewayUrl/sessionId/sandboxId/templateId`）在 CR 侧收拢为
@@ -21,7 +28,7 @@ CRD）；runtime.yaml bridge 段投影改嵌套形态 `bridge.runtimeParameter`�
 
 **v1.1 变更**（自 v1.0，2026-09-13）：helper 通道（:4097 `/agents-md` `/exec`）
 整体退役——agent.md 改走消息体 `system` 字段原生通道；端口收敛为单 4096；
-emptyDir 移除（/workspace=容器可写层）；模型改经 operator 注入
+emptyDir 移除（/workspace=容器可写层，v1.4 起约定值迁至 /workspace/work）；模型改经 operator 注入
 `OPENCODE_CONFIG_CONTENT`（镜像零凭据）；Worker env patch 收敛为两键。
 
 ## 两种 adapter 形态（共享 Runtime SPI）
@@ -52,17 +59,18 @@ bridge:
     sessionId: sess-1                   # → session_id
     sandboxId: sbx-1                    # → sandbox_id
     templateId: tpl-1                   # → template_id
+    eid: user-123                       # → eid（v1.4，平台用户身份）
     region: cn-north-7                  # 追加键 → chat 请求体平铺透传
 ```
 
 bridge 侧语义（`bootstrap.runtime_parameter` → `app._apply_bridge_section` →
 adapter `chat(extra_params=...)`）：
 
-- **已知键**（baseUrl/sessionId/sandboxId/templateId，camel/snake 双认）抽到
-  RuntimeConfig 固定字段，绑定优先级不变（显式 env > 袋 > 旧平铺段 >
+- **已知键**（baseUrl/sessionId/sandboxId/templateId/eid，camel/snake 双认）
+  抽到 RuntimeConfig 固定字段，绑定优先级不变（显式 env > 袋 > 旧平铺段 >
   legacy openclaw.json）；
 - **追加键**：整袋存 `runtime.runtime_parameters`，chat 请求体在固定字段
-  （sessionId/sandboxId/turnId/agentMd/history/userMessage）之后 `update`
+  （sessionId/sandboxId/eid/turnId/agentMd/history/userMessage）之后 `update`
   平铺 merge——已知键与固定字段同源同值（覆盖无害），追加键透传平台
   （平台 JSON 忽略未知字段），**新增平台参数无需改 bridge**；
 - **旧形态兼容**：v1.3 之前投影的平铺 bridge 段（顶层 baseUrl/sessionId/
@@ -198,7 +206,8 @@ operator 同窗口升级**——旧 bridge + 新 operator 会回归竞态（无�
 
 ## 已知限制（生产化备忘）
 
-- **无卷**：/workspace=容器可写层，pod 重建即丢（会话目录 + 任务状态）。
+- **无卷**：/workspace/work=容器可写层（v1.4 起 FS_ROOT 约定值，entrypoint
+  按 env mkdir + cd，cwd 与 shared/ 同根），pod 重建即丢（会话目录 + 任务状态）。
   会话由 404 自愈重建兜底；任务状态经 taskflow `mc pull` 恢复。PVC 化是
   生产化步骤。
 - **接线未就绪窗口内的 mention 不重放**：自愈完成前的 accepted mention

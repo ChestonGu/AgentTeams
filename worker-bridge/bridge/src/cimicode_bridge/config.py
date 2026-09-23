@@ -50,6 +50,7 @@ class RuntimeConfig(BaseModel):
     template_id: str = ""                              # 仅来自 CR 投影，无假默认
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox
+    eid: str = ""                                      # stateless 平台用户身份参数（仅 CR 投影）
     auth_type: str = "none"                            # gateway 当前不鉴权
     # 追加键透传袋：runtime.yaml bridge.runtimeParameter 整袋存这里，chat
     # 请求体在固定字段之后平铺 merge（未知键平台侧忽略，新增平台参数

@@ -41,7 +41,7 @@
 #
 # 运行时 env 契约（operator 供给 Deployment 时注入；FS_* 与模型配置走
 # Secret）：
-#   AGENTTEAMS_FS_ROOT           工作目录（默认 /workspace，容器可写层）
+#   AGENTTEAMS_FS_ROOT           工作目录（默认 /workspace/work，容器可写层）
 #   AGENTTEAMS_WORKER_NAME       worker 名（agents/<w>/ 前缀解析）
 #   AGENTTEAMS_FS_ENDPOINT / AGENTTEAMS_FS_BUCKET        MinIO 端点/桶（明文）
 #   AGENTTEAMS_FS_ACCESS_KEY / AGENTTEAMS_FS_SECRET_KEY  存储凭据（secretKeyRef）
@@ -99,5 +99,7 @@ ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills \
     OPENCODE_PORT=4096 \
     OPENCODE_PERMISSION={"*":"allow"}
 EXPOSE 4096
-WORKDIR /workspace
+# WORKDIR 仅为镜像级兜底：entrypoint 会按 AGENTTEAMS_FS_ROOT（operator 注入
+# /workspace/work）mkdir + cd，实际 cwd 恒跟随 FS_ROOT——两者焊成单旋钮。
+WORKDIR /workspace/work
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agentteams/entrypoint.sh"]

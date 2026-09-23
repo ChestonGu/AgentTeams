@@ -175,7 +175,7 @@ def test_deployment_env_and_secret_ref():
     )
     container = deploy.spec.template.spec.containers[0]
     plain = {e.name: e.value for e in container.env if e.value is not None}
-    assert plain["AGENTTEAMS_FS_ROOT"] == "/workspace"
+    assert plain["AGENTTEAMS_FS_ROOT"] == "/workspace/work"
     assert plain["AGENTTEAMS_WORKER_NAME"] == "w1"
     assert plain["AGENTTEAMS_TEAM"] == "t1"
     assert plain["AGENTTEAMS_MATRIX_USER_ID"] == "@w1:matrix.local"
@@ -198,7 +198,7 @@ def test_deployment_env_and_secret_ref():
         "AGENTTEAMS_FS_SECRET_KEY": ("w1-cimicode-fs", "secretKey"),
         wbo.ENV_MODEL_CONFIG: ("w1-cimicode-fs", "model-config"),
     }
-    # 无卷：/workspace = 容器可写层（emptyDir 已按部署决策移除）
+    # 无卷：/workspace/work = 容器可写层（emptyDir 已按部署决策移除）
     assert deploy.spec.template.spec.volumes is None
     assert container.readiness_probe.http_get.path == "/session"
 

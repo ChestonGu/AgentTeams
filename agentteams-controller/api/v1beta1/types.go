@@ -286,11 +286,11 @@ type WorkerSpec struct {
 	// RuntimeParameter is the worker-bridge binding parameter bag
 	// (cimicode-stateless platform bindings). Free-form string map with a
 	// camelCase key convention — known keys: baseUrl, sessionId, sandboxId,
-	// templateId — projected verbatim into the runtime.yaml
-	// bridge.runtimeParameter section. Known keys map to the bridge's fixed
-	// binding fields; unrecognized keys are passed through to the stateless
-	// chat request body, so adding a new platform parameter requires no CRD
-	// change.
+	// templateId, eid (platform user identity) — projected verbatim into the
+	// runtime.yaml bridge.runtimeParameter section. Known keys map to the
+	// bridge's fixed binding fields; unrecognized keys are passed through to
+	// the stateless chat request body, so adding a new platform parameter
+	// requires no CRD change.
 	RuntimeParameter map[string]string `json:"runtimeParameter,omitempty"`
 }
 

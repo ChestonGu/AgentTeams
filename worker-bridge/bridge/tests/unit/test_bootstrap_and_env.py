@@ -342,6 +342,7 @@ bridge:
   runtimeParameter:
     baseUrl: http://gw.example.com
     sessionId: sess-2
+    eid: user-9
     region: cn-north-7
 """
 
@@ -361,10 +362,11 @@ bridge:
     def test_nested_bag_returned_verbatim(self, monkeypatch):
         boot = _bootstrap({"agents/w1/runtime/runtime.yaml": self.NESTED_YAML}, monkeypatch)
         cfg = boot.load(retries=1)
-        # 未知键（region）原样保留，不做任何归一化
+        # 未知键（region）原样保留，不做任何归一化；eid（v1.4 已知键）同属袋成员
         assert cfg.runtime_parameter == {
             "baseUrl": "http://gw.example.com",
             "sessionId": "sess-2",
+            "eid": "user-9",
             "region": "cn-north-7",
         }
 
@@ -388,10 +390,12 @@ bridge:
         app._apply_bridge_section(app.worker_files)
         assert app.config.runtime.base_url == "http://gw.example.com"
         assert app.config.runtime.session_id == "sess-2"
+        assert app.config.runtime.eid == "user-9"  # v1.4 已知键 → 固定字段
         # 整袋（含未知键）存 runtime_parameters，供 chat 请求体平铺透传
         assert app.config.runtime.runtime_parameters == {
             "baseUrl": "http://gw.example.com",
             "sessionId": "sess-2",
+            "eid": "user-9",
             "region": "cn-north-7",
         }
 

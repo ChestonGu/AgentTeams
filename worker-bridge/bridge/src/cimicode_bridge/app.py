@@ -50,6 +50,7 @@ KNOWN_RUNTIME_PARAMETER_KEYS = {
     "session_id": "sessionId",
     "sandbox_id": "sandboxId",
     "template_id": "templateId",
+    "eid": "eid",
 }
 
 
@@ -188,7 +189,7 @@ class BridgeApp:
         投影，契约 v1.3）> 旧平铺 bridge 段（v1.3 之前的投影，兼容存量
         MinIO yaml）> legacy openclaw.json bridge.runtime 段（兼容兜底）> 无。
 
-        已知键（baseUrl/sessionId/sandboxId/templateId，camel/snake 双认）
+        已知键（baseUrl/sessionId/sandboxId/templateId/eid，camel/snake 双认）
         抽到 RuntimeConfig 固定字段；整袋另存 runtime_parameters，由 chat
         请求体平铺透传（追加键进平台）。
         """
@@ -216,6 +217,7 @@ class BridgeApp:
         self.config.runtime.sandbox_id = (
             binding("sandbox_id") or files.gateway_sandbox_id
         )
+        self.config.runtime.eid = binding("eid")
         self.config.runtime.runtime_parameters = dict(params)
 
     def _resolve_adapter_mode(self) -> str:
@@ -661,6 +663,7 @@ class BridgeApp:
                 agent_md=agent_md,
                 history=[],
                 user_message=user_message,
+                eid=self.config.runtime.eid,  # stateless 平台用户身份（pod 形态忽略）
                 extra_params=dict(self.config.runtime.runtime_parameters),  # 追加键平铺透传
             )
             response_text = ""

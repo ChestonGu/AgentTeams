@@ -12,13 +12,14 @@
 # system 字段（opencode 原生通道，1.18.27 session/prompt.ts
 # PromptInput.system）随 POST /session/{id}/message 下发，当 turn 即生效
 # ——无 pod 内 helper、无 AGENTS.md 文件落盘。
-# 工作目录无 emptyDir：/workspace 即容器可写层；pod 重建丢会话由 bridge 的
+# 工作目录无 emptyDir：/workspace/work 即容器可写层（cwd 与 shared/ 同根，
+# 见 WORKDIR 推导行）；pod 重建丢会话由 bridge 的
 # 404 自愈 + taskflow mc pull 兜住。
 # 模型配置也不经本脚本：operator 以 OPENCODE_CONFIG_CONTENT env
 # （secretKeyRef，1.18.27 config/config.ts 直读、合并优先级最高）注入。
 set -eu
 
-WORKDIR="${AGENTTEAMS_FS_ROOT:-/workspace}"
+WORKDIR="${AGENTTEAMS_FS_ROOT:-/workspace/work}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
 
 mkdir -p "$WORKDIR"

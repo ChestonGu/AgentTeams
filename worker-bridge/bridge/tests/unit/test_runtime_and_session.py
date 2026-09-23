@@ -113,7 +113,8 @@ def test_stateless_chat_body_merges_extra_params():
     """契约 v1.3：runtimeParameter 袋在固定字段之后平铺 merge 进 chat 请求体。
 
     已知键与固定字段同源同值（覆盖无害），追加键透传平台（未知字段
-    平台侧忽略——新增平台参数无需改 bridge）。
+    平台侧忽略——新增平台参数无需改 bridge）。v1.4：eid 是已知键（平台
+    用户身份），作为固定字段进请求体。
     """
     adapter = CimicodeAdapter(base_url="http://gw.example.com")
     captured: dict = {}
@@ -131,12 +132,14 @@ def test_stateless_chat_body_merges_extra_params():
         agent_md="md",
         history=[],
         user_message="hi",
+        eid="user-123",
         extra_params={"sessionId": "sess-1", "region": "cn-north-7"},
     ))
     # 空流：chat 补一条 turn_interrupted 断流兜底（不视为失败）
     assert [e.kind for e in events] == [RuntimeEventKind.TURN_INTERRUPTED]
     assert captured["sessionId"] == "sess-1"
     assert captured["sandboxId"] == "sbx-1"
+    assert captured["eid"] == "user-123"
     assert captured["turnId"] == "$event-1"
     assert captured["userMessage"] == "hi"
     assert captured["region"] == "cn-north-7"

@@ -5,7 +5,7 @@
 # 与 worker-bridge/cimicode-runtime/（内部 coder-cimicode 基础镜像）是同契约
 # 姊妹目录。对外行为完全一致：单端口 :4096 REST、agent.md 走消息体 system
 # 字段、权限 OPENCODE_PERMISSION、skills.paths 直读、模型经
-# OPENCODE_CONFIG_CONTENT 由 operator 供给期注入、/workspace = 容器可写层无卷。
+# OPENCODE_CONFIG_CONTENT 由 operator 供给期注入、/workspace/work = 容器可写层无卷。
 # 两 runtime 差异全部封装在各自镜像目录内（基础镜像来源/配置路径/命令名），
 # bridge 与 operator 对两者零差异——内外网切换只换运行时镜像（CIMICODE_IMAGE
 # 指向谁就供谁）。契约见 worker-bridge/contract/adapter-contract.md。
@@ -81,5 +81,7 @@ ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills \
     OPENCODE_PORT=4096 \
     OPENCODE_PERMISSION={"*":"allow"}
 EXPOSE 4096
-WORKDIR /workspace
+# WORKDIR 仅为镜像级兜底：entrypoint 会按 AGENTTEAMS_FS_ROOT（operator 注入
+# /workspace/work）mkdir + cd，实际 cwd 恒跟随 FS_ROOT——两者焊成单旋钮。
+WORKDIR /workspace/work
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agentteams/entrypoint.sh"]
