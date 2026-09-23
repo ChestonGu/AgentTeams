@@ -14,6 +14,13 @@
 - POST /v1/gateway/session/chat：v1 旧接口保留（向后兼容，现版 bridge
   已不走）。
 
+故障注入（测试 C5~C7 用例）：submit 收到的 userMessage 含魔法标记时
+模拟异常分支，正常路径不受影响——
+- `[fault:submit500]`：受理直接回 500；
+- `[fault:drop]`：受理正常回 QUEUED，但 SSE 只发 delta 帧即关流
+  （无终态帧=断流）；
+- `[fault:failed]`：SSE 终态发 invocation.failed 而非 yielded。
+
 部署：worker-bridge/test/fake-platform/deploy.yaml（ConfigMap 挂载本文件，
 复用 agentteams/worker-bridge 镜像的 python3，零外网拉取）。
 """
@@ -25,6 +32,12 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LAST_CHAT_PATH = "/tmp/last-chat.json"
+# 魔法标记 → 故障模式（userMessage 前缀识别；空=正常路径）
+FAULT_MARKERS = {
+    "[fault:submit500]": "submit500",
+    "[fault:drop]": "drop",
+    "[fault:failed]": "failed",
+}
 # 最近一次 submit 的回复载荷（session 维度 events 回放用；单副本模拟件，
 # 每次受理覆盖——bridge 每 turn 都是 submit→订阅→终态，时序恒成立）
 _PENDING_TURN: dict[str, str] = {}
@@ -59,13 +72,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/agi/gateway/v1/session/") and self.path.endswith("/events"):
             sid = self.path[len("/agi/gateway/v1/session/") : -len("/events")]
             turn = _PENDING_TURN or {"content": "[fake-platform] no pending turn"}
-            frames = [
-                # 增量帧：delta 契约（无 part_id，走 payload.delta/text）
-                {"type": "session.next.text.delta", "data": {"delta": "[fake-platform] "}},
-                # 终态帧：互斥恰一次，content 全文；帧后关流=正常结束
-                {"type": "invocation.yielded", "data": {"content": turn["content"]}},
-            ]
-            print(f"[fake-platform] events replay sid={sid} frames={len(frames)}", flush=True)
+            fault = turn.get("fault", "")
+            # 增量帧：delta 契约（无 part_id，走 payload.delta/text）
+            frames = [{"type": "session.next.text.delta", "data": {"delta": "[fake-platform] "}}]
+            if fault == "drop":
+                pass  # 断流注入：只有 delta，无终态帧即关流
+            elif fault == "failed":
+                # 终态注入：invocation.failed 代替 yielded
+                frames.append({"type": "invocation.failed", "data": {"error": "[fake-platform] fault injection: failed"}})
+            else:
+                # 正常终态：互斥恰一次，content 全文；帧后关流=正常结束
+                frames.append({"type": "invocation.yielded", "data": {"content": turn["content"]}})
+            print(f"[fake-platform] events replay sid={sid} fault={fault or '-'} frames={len(frames)}", flush=True)
             self._sse(frames)
             return
         self._send_json(404, {"error": "not found"})
@@ -76,14 +94,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             eid = self.headers.get("eid", "")
             idem = self.headers.get("X-Idempotency-Key", "")
+            user_message = (body.get("data") or {}).get("userMessage", "")
+            fault = next((mode for marker, mode in FAULT_MARKERS.items() if marker in user_message), "")
             # 请求全量落双份：kubectl logs 可查 + exec cat 可查（eid 在 Header——
             # v2 参数面就是 runtime.yaml，信封严格三字段，绑定字段不上车）
             record = {
                 "eid": eid,
                 "idempotencyKey": idem,
                 "sessionId": (body.get("data") or {}).get("sessionId", ""),
-                "userMessage": (body.get("data") or {}).get("userMessage", ""),
+                "userMessage": user_message,
                 "agentPromptBytes": len((body.get("data") or {}).get("agentPrompt") or ""),
+                "fault": fault,
             }
             print(f"[fake-platform] v2 submit: {json.dumps(record, ensure_ascii=False)}", flush=True)
             try:
@@ -91,12 +112,15 @@ class Handler(BaseHTTPRequestHandler):
                     json.dump(record, fh, ensure_ascii=False, indent=2)
             except OSError:
                 pass
+            if fault == "submit500":
+                self._send_json(500, {"error": "[fake-platform] fault injection: submit500"})
+                return
             content = (
                 "[fake-platform] 收到 turn（Gateway v2 submit），"
                 f"绑定字段回显: {json.dumps(record, ensure_ascii=False)}"
             )
             _PENDING_TURN.clear()
-            _PENDING_TURN.update({"content": content, "ts": time.strftime("%FT%T")})
+            _PENDING_TURN.update({"content": content, "ts": time.strftime("%FT%T"), "fault": fault})
             turn_id = f"fake-turn-{uuid.uuid4().hex[:12]}"
             self._send_json(200, {"data": {"turnId": turn_id, "attemptId": turn_id, "queueStatus": "QUEUED"}})
             return
