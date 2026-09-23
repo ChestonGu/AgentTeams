@@ -9,9 +9,6 @@ spec:
       served: true
       storage: true
       additionalPrinterColumns:
-        - name: Display Name
-          type: string
-          jsonPath: .spec.displayName
         - name: Leader Ready
           type: boolean
           jsonPath: .status.leaderReady
@@ -27,6 +24,9 @@ spec:
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
+        - name: Display Name
+          type: string
+          jsonPath: .spec.displayName
       schema:
         openAPIV3Schema:
           type: object
