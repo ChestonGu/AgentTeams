@@ -50,12 +50,11 @@ class RuntimeConfig(BaseModel):
     template_id: str = ""                              # 仅来自 CR 投影，无假默认
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox
-    eid: str = ""                                      # stateless 平台用户身份参数（仅 CR 投影）
+    eid: str = ""                                      # 用户业务标识（runtimeParameter 已知键；Gateway v2 submit 必传 Header）
     auth_type: str = "none"                            # gateway 当前不鉴权
-    # 追加键透传袋：runtime.yaml bridge.runtimeParameter 整袋存这里，chat
-    # 请求体在固定字段之后平铺 merge（未知键平台侧忽略，新增平台参数
-    # 无需改 bridge 代码）。已知键已被抽到上面的固定字段，重复无害。
-    runtime_parameters: dict[str, str] = Field(default_factory=dict)
+    # 注：runtimeParameter 袋本体不在此存副本——参数面就是 runtime.yaml
+    # （bootstrap 每 turn 重拉，_apply_bridge_section 每轮重抽已知键；
+    # 追加键留袋，不上 submit 信封）。
     # 长 turn（整轮 agent 执行动辄超 10 分钟）的 bridge 侧等待上限。
     # 部署级可用 BRIDGE_RUNTIME_TURN_TIMEOUT 覆盖。
     turn_timeout_seconds: int = 3600                   # turn 超时

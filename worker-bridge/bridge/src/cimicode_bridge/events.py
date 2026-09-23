@@ -30,14 +30,6 @@ class RuntimeEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-class HistoryMessage(BaseModel):
-    """history 数组的单条消息（gateway 透传格式）。"""
-
-    role: str                  # user / assistant
-    content: str
-    event_id: str | None = None
-
-
 class MatrixMessage(BaseModel):
     """Matrix 入站消息的规范化表示（HTTP 测试通道 / 回放用途）。"""
 
@@ -48,17 +40,6 @@ class MatrixMessage(BaseModel):
     body: str                  # 纯文本正文
     timestamp: int | None = None             # 服务器时间戳（毫秒）
     mentions: list[str] = Field(default_factory=list)  # 正文/结构化 mention 列表
-
-
-class ChatRequest(BaseModel):
-    """gateway chat 请求四元组模型（契约 v0.2）。"""
-
-    session_id: str
-    sandbox_id: str | None = None
-    turn_id: str               # 幂等键（= Matrix event_id）
-    agent_md: str = ""         # 系统指令层（每轮全量重拼）
-    history: list[HistoryMessage] = Field(default_factory=list)  # 历史层（当前恒空）
-    user_message: str = ""     # 当前消息层（三段式群聊视野）
 
 
 class MatrixMessage(BaseModel):

@@ -190,8 +190,8 @@ class BridgeApp:
         MinIO yaml）> legacy openclaw.json bridge.runtime 段（兼容兜底）> 无。
 
         已知键（baseUrl/sessionId/sandboxId/templateId/eid，camel/snake 双认）
-        抽到 RuntimeConfig 固定字段；整袋另存 runtime_parameters，由 chat
-        请求体平铺透传（追加键进平台）。
+        抽到 RuntimeConfig 固定字段；追加键留袋不透传——参数面就是
+        runtime.yaml 本身（新约定），后续平台需要新参数时先升已知键。
         """
         section = files.runtime_bridge_section
         params = files.runtime_parameter
@@ -218,7 +218,6 @@ class BridgeApp:
             binding("sandbox_id") or files.gateway_sandbox_id
         )
         self.config.runtime.eid = binding("eid")
-        self.config.runtime.runtime_parameters = dict(params)
 
     def _resolve_adapter_mode(self) -> str:
         """adapter 形态判定（唯一权威顺序，bootstrap 与自愈轮询共用）。
@@ -305,11 +304,42 @@ class BridgeApp:
             return None
         try:
             client = build_runtime_adapter(self.config.runtime)
+            client._built_for_adapter = mode
             self._last_adapter_mode = mode
             return client
         except ValueError as exc:
             logger.warning("runtime adapter build failed: %s", exc)
             return None
+
+    def _rebuild_runtime_client_on_binding_drift(self) -> None:
+        """绑定漂移时进程内重建 runtime client（参数热生效，绝不重建 pod）。
+
+        runtime.yaml 袋内 baseUrl/eid/adapterMode 轮转后，已构建 adapter 仍
+        持旧构造值——duck-typing 取 client 侧现值（无该属性的 fake/异构
+        client 回落配置值，比较恒等，永不触发重建），漂移才重建。重建
+        失败保留旧 client 并告警（下一 turn 重试）。
+        """
+        cfg = self.config.runtime
+        if not cfg.adapter or not cfg.base_url or self.runtime_client is None:
+            return
+        client_adapter = getattr(self.runtime_client, "_built_for_adapter", cfg.adapter)
+        client_eid = getattr(self.runtime_client, "eid", cfg.eid)
+        client_base = str(getattr(self.runtime_client, "base_url", cfg.base_url)).rstrip("/")
+        if (
+            client_adapter == cfg.adapter
+            and client_eid == cfg.eid
+            and client_base == cfg.base_url.rstrip("/")
+        ):
+            return
+        try:
+            rebuilt = build_runtime_adapter(cfg)
+        except Exception as exc:
+            logger.warning("runtime client rebuild on binding drift failed: %s", exc)
+            return
+        self.runtime_client = rebuilt
+        logger.info(
+            "runtime client rebuilt (runtime.yaml binding drifted: base_url/eid rotated)"
+        )
 
     def _build_matrix_gateway(self) -> MatrixGateway | None:
         """按当前配置构建 Matrix 网关；接线不全时返回 None（交给自愈轮询）。
@@ -594,12 +624,51 @@ class BridgeApp:
             )
             self._kick_recovery()
             return
+        # ---- 参数走 runtime.yaml（新约定）：先取新鲜参数，再做门禁 ----
+        # controller 会在首次写入后继续 enrich runtime.yaml（member.matrixUserId
+        # 在 matrix 用户注册后落位，团队事实随成员变化更新），因此启动时的
+        # bootstrap 缓存绝不能遮蔽真相：每 turn 从 S3 重拉，仅拉取失败时
+        # 回退缓存。
+        turn_files = self.worker_files
+        if self.s3_bootstrap is not None:
+            fresh = self.s3_bootstrap.load(retries=1)
+            if fresh is not None and fresh.runtime_yaml:
+                turn_files = fresh
+                self.worker_files = fresh
+            else:
+                logger.warning("per-turn bootstrap pull failed; falling back to boot-time cache")
+        if turn_files is None or not turn_files.runtime_yaml:
+            logger.error(
+                "worker-bridge requires runtime/runtime.yaml in the "
+                "worker bootstrap (agents/<name>/runtime/runtime.yaml); refusing turn"
+            )
+            return
+        # 每 turn 重应用 bridge.runtimeParameter 袋——eid/baseUrl 等绑定轮转
+        # （如 eid rotate）下一 turn 即生效；adapterMode 同步重判；已构建
+        # adapter 持旧构造值时进程内重建（绝不重建 pod）。
+        self._apply_bridge_section(turn_files)
+        mode = self._resolve_adapter_mode()
+        if mode:
+            self.config.runtime.adapter = mode
+            self._last_adapter_mode = mode
+        self._rebuild_runtime_client_on_binding_drift()
+
         # session 绑定缺失（仅 cimicode-stateless 需要——外部平台预建绑定；
-        # cimicode-pod 的会话由 pod 内 cimicode 自管）→ 拒绝处理
+        # cimicode-pod 的会话由 pod 内 cimicode 自管）→ 拒绝处理。
+        # eid 同源门禁：Gateway v2 submit 必传 eid Header（runtime.yaml 袋
+        # 供给），缺失拒轮——与 session 绑定同款 fail-loud，避免带病提交。
         if self.config.runtime.adapter == "cimicode-stateless" and (
-            not self.config.runtime.session_id or not self.config.runtime.sandbox_id
+            not self.config.runtime.session_id
+            or not self.config.runtime.sandbox_id
+            or not self.config.runtime.eid
         ):
-            logger.error("Gateway session binding is missing from S3 configuration")
+            logger.error(
+                "Gateway binding is missing from S3 configuration "
+                "(sessionId=%s, sandboxId=%s, eid=%s)",
+                bool(self.config.runtime.session_id),
+                bool(self.config.runtime.sandbox_id),
+                bool(self.config.runtime.eid),
+            )
             return
 
         # CoPaw 三段式群聊视野（history buffer + 当前消息）
@@ -615,25 +684,6 @@ class BridgeApp:
             # 经 bridge 镜像内置的 generator 从 runtime.yaml + SOUL/PROFILE
             # 渲染 agent.md（fail-loud——渲染失败拒轮，绝不把半配置的
             # system prompt 发给运行时）。
-            #
-            # controller 会在首次写入后继续 enrich runtime.yaml
-            #（member.matrixUserId 在 matrix 用户注册后落位，团队事实随
-            # 成员变化更新），因此启动时的 bootstrap 缓存绝不能遮蔽真相：
-            # 每 turn 从 S3 重拉，仅拉取失败时回退缓存。
-            turn_files = self.worker_files
-            if self.s3_bootstrap is not None:
-                fresh = self.s3_bootstrap.load(retries=1)
-                if fresh is not None and fresh.runtime_yaml:
-                    turn_files = fresh
-                    self.worker_files = fresh
-                else:
-                    logger.warning("per-turn bootstrap pull failed; falling back to boot-time cache")
-            if turn_files is None or not turn_files.runtime_yaml:
-                logger.error(
-                    "worker-bridge requires runtime/runtime.yaml in the "
-                    "worker bootstrap (agents/<name>/runtime/runtime.yaml); refusing turn"
-                )
-                return
             try:
                 agent_md = build_agent_md_via_generator(
                     runtime_yaml=turn_files.runtime_yaml,
@@ -655,16 +705,11 @@ class BridgeApp:
             else:
                 logger.info("agent.md generated bytes=%d (no S3 bootstrap; not published)", len(agent_md.encode("utf-8")))
 
-            # ---- 调 adapter（SSE 流聚合 / REST 轮询，统一返回 RuntimeEvent 列表）----
+            # ---- 调 adapter（Gateway v2：submit 回执 + SSE 订阅；pod：REST 轮询，统一返回 RuntimeEvent 列表）----
             events = await self.runtime_client.chat(
                 session_id=self.config.runtime.session_id,
-                sandbox_id=self.config.runtime.sandbox_id,
-                turn_id=event_id,  # turnId = Matrix event_id（幂等键）
                 agent_md=agent_md,
-                history=[],
                 user_message=user_message,
-                eid=self.config.runtime.eid,  # stateless 平台用户身份（pod 形态忽略）
-                extra_params=dict(self.config.runtime.runtime_parameters),  # 追加键平铺透传
             )
             response_text = ""
             progress_texts: list[str] = []

@@ -234,27 +234,19 @@ class CimicodePodAdapter:
         self,
         *,
         session_id: str,
-        sandbox_id: str,
-        turn_id: str,
         agent_md: str,
-        history: list[dict[str, Any]],
         user_message: str,
-        eid: str = "",
-        extra_params: dict[str, str] | None = None,
+        turn_id: str = "",   # 可选日志关联（Matrix event_id；Gateway v2 下 turnId 由平台生成）
     ) -> list[RuntimeEvent]:
         """提交 turn：会话自愈 → 阻塞 POST（agent.md 走消息体 system 字段）→ 轮询完成。
 
-        history 已由调用方折进 user_message（三段式上下文，契约 §4）；
-        sandbox 绑定由 base_url 本身承载（单 pod 无独立沙箱）。eid /
-        extra_params 是 stateless 平台的参数（用户身份 / 追加键透传袋）——
-        pod 形态无对应通道，收下忽略（TurnRunner 统一传参，两种 adapter
-        签名同构）。
+        三段式上下文已由调用方折进 user_message（契约 §4）；
+        sandbox 绑定由 base_url 本身承载（单 pod 无独立沙箱）。
         agent_md 经 POST body 的 ``system`` 字段随消息下发——opencode/cimicode
         原生通道，当前 turn 即生效（历史消息转换不含该字段，无重复注入）。
         正常完成返回 [TEXT_DELTA(全文), TURN_COMPLETED]——与 stateless 的
         事件形态同构（聚合器按 turn_completed 收口，全文发一次）。
         """
-        del history, sandbox_id, eid, extra_params
         turn_started = time.monotonic()
         try:
             resolved = await self._ensure_session(session_id)

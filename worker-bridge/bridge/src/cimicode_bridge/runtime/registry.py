@@ -28,6 +28,7 @@ def build_runtime_adapter(runtime: RuntimeConfig):
         return CimicodeStatelessAdapter(
             runtime.base_url,
             timeout_seconds=runtime.turn_timeout_seconds,
+            eid=runtime.eid,
         )
     if runtime.adapter == "cimicode-pod":
         return CimicodePodAdapter(

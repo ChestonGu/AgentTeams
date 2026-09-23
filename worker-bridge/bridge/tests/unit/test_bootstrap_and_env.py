@@ -383,7 +383,7 @@ bridge:
             "templateId": "tpl-1",
         }
 
-    def test_apply_fills_fixed_fields_and_keeps_bag(self, monkeypatch):
+    def test_apply_fills_fixed_fields(self, monkeypatch):
         for key in ("BRIDGE_RUNTIME_ADAPTER", "BRIDGE_RUNTIME_BASE_URL"):
             monkeypatch.delenv(key, raising=False)
         app = self._app_with_files(self.NESTED_YAML)
@@ -391,13 +391,6 @@ bridge:
         assert app.config.runtime.base_url == "http://gw.example.com"
         assert app.config.runtime.session_id == "sess-2"
         assert app.config.runtime.eid == "user-9"  # v1.4 已知键 → 固定字段
-        # 整袋（含未知键）存 runtime_parameters，供 chat 请求体平铺透传
-        assert app.config.runtime.runtime_parameters == {
-            "baseUrl": "http://gw.example.com",
-            "sessionId": "sess-2",
-            "eid": "user-9",
-            "region": "cn-north-7",
-        }
 
     def test_snake_case_nested_keys_accepted(self, monkeypatch):
         app = self._app_with_files(self.SNAKE_NESTED_YAML)
@@ -419,4 +412,3 @@ bridge:
         assert app.config.runtime.base_url == "http://cimicode.internal:8080"
         assert app.config.runtime.sandbox_id == "sbx-1"
         assert app.config.runtime.template_id == "tpl-1"
-        assert app.config.runtime.runtime_parameters["templateId"] == "tpl-1"

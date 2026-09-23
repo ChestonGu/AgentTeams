@@ -82,10 +82,17 @@ def test_matrix_event_calls_gateway_and_sends_reply(monkeypatch):
     )
     bridge = BridgeApp()
     bridge.start()
-    bridge.config.runtime.session_id = "sess-1"
-    bridge.config.runtime.sandbox_id = "sandbox-1"
+    # 参数走 runtime.yaml（新约定）：绑定三件套全部由 bridge.runtimeParameter 袋供给
     bridge.worker_files = WorkerBootstrapConfig(
-        openclaw={}, runtime_yaml="member:\n  runtime: worker-bridge\n"
+        openclaw={},
+        runtime_yaml=(
+            "member:\n  runtime: worker-bridge\n"
+            "bridge:\n  adapterMode: cimicode-stateless\n"
+            "  runtimeParameter:\n"
+            "    sessionId: sess-1\n"
+            "    sandboxId: sandbox-1\n"
+            "    eid: emp-001\n"
+        ),
     )
     bridge.runtime_client = FakeRuntime()
     bridge.matrix_gateway = FakeMatrix()
@@ -100,86 +107,62 @@ def test_matrix_event_calls_gateway_and_sends_reply(monkeypatch):
     )
 
     assert bridge.runtime_client.request["session_id"] == "sess-1"
-    assert bridge.runtime_client.request["sandbox_id"] == "sandbox-1"
-    assert bridge.runtime_client.request["turn_id"] == "$event-1"
+    assert bridge.runtime_client.request["agent_md"] == "# generated agent.md"
     assert "[Current message - respond to this]" in bridge.runtime_client.request["user_message"]
     assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
     assert bridge.matrix_gateway.typing_started == "!room:matrix.local"
     assert bridge.matrix_gateway.typing_stopped == "!room:matrix.local"
 
 
-def test_turn_runner_aggregates_events():
-    from cimicode_bridge.config import RuntimeConfig
-    from cimicode_bridge.runtime.turn import TurnRunner
 
-    class ErroringRuntime:
-        async def chat(self, **kwargs):
-            return [
-                RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="partial "),
-                RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, data={"code": "LLM_ERROR"}),
-            ]
+def test_runtime_yaml_binding_rotation_applies_per_turn(monkeypatch):
+    """runtime.yaml 新约定：袋内绑定（eid）轮转后，下一 turn 即生效。
 
-    runner = TurnRunner(config=RuntimeConfig(
-        session_id="sess-1",
-        sandbox_id="sandbox-1",
-        runtime_parameters={"region": "cn-north-7"},  # CR spec.runtimeParameter 追加键
+    每 turn 重应用 _apply_bridge_section；无 eid/base_url 属性的 fake client
+    不触发漂移重建（duck-typing 守卫），仍是原对象。
+    """
+    from cimicode_bridge.app import BridgeApp
+    from cimicode_bridge.bootstrap import WorkerBootstrapConfig
+
+    def make_yaml(eid: str) -> str:
+        return (
+            "member:\n"
+            "  runtime: worker-bridge\n"
+            "bridge:\n"
+            "  adapterMode: cimicode-stateless\n"
+            "  runtimeParameter:\n"
+            f"    sessionId: sess-1\n"
+            f"    sandboxId: sbx-1\n"
+            f"    eid: {eid}\n"
+        )
+
+    app = BridgeApp(config_path="nonexistent.yaml")
+    monkeypatch.setattr(
+        "cimicode_bridge.app.build_agent_md_via_generator",
+        lambda **kwargs: "# generated agent.md",
+    )
+    app.start()
+    app.config.runtime.adapter = "cimicode-stateless"
+    app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=make_yaml("user-1"))
+    app._apply_bridge_section(app.worker_files)
+    fake = FakeRuntime()
+    app.runtime_client = fake
+    app.matrix_gateway = FakeMatrix()
+
+    asyncio.run(app.handle_matrix_message(
+        "!room:matrix.local", "@leader:matrix.local", "$event-1",
+        {"body": "@leader hi"},
     ))
+    assert app.config.runtime.eid == "user-1"
 
-    # 正常聚合：delta 追加 + turn_completed 覆盖为权威全文
-    ok = runner.aggregate_reply(
-        [
-            RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="Hel"),
-            RuntimeEvent(kind=RuntimeEventKind.TEXT_DELTA, text="lo"),
-            RuntimeEvent(kind=RuntimeEventKind.TURN_COMPLETED, text="Hello world"),
-        ]
-    )
-    assert ok.failed is False
-    assert ok.text == "Hello world"
-
-    # 失败聚合：failed=True 且保留已聚合文本
-    failed = runner.aggregate_reply(
-        [RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, data={"code": "LLM_ERROR"})]
-    )
-    assert failed.failed is True
-    assert "LLM_ERROR" in failed.error
-
-    # run_turn 透传 session/sandbox 并走同一聚合（用 fake client 验证请求体）
-    class FakeClient:
-        async def chat(self, **kwargs):
-            self.request = kwargs
-            return [RuntimeEvent(kind=RuntimeEventKind.TURN_COMPLETED, text="ok")]
-
-    client = FakeClient()
-    result = asyncio.run(
-        runner.run_turn(
-            client,
-            worker_files=WorkerBootstrapConfig(openclaw={}, agents_md="agent rules"),
-            room_id="!room:matrix.local",
-            event_id="$event-1",
-            user_message="hi",
-        )
-    )
-    assert client.request["session_id"] == "sess-1"
-    assert client.request["sandbox_id"] == "sandbox-1"
-    assert client.request["turn_id"] == "$event-1"
-    assert client.request["history"] == []
-    # 追加键袋原样传给 chat（adapter 侧在固定字段之后平铺 merge 进请求体）
-    assert client.request["extra_params"] == {"region": "cn-north-7"}
-    assert result.text == "ok"
-
-    # ErroringRuntime 路径：run_turn 返回 failed 结果
-    error_result = asyncio.run(
-        runner.run_turn(
-            ErroringRuntime(),
-            worker_files=None,
-            room_id="!room:matrix.local",
-            event_id="$event-2",
-            user_message="hi",
-        )
-    )
-    assert error_result.failed is True
-    assert error_result.text == "partial "
-
+    # 轮转 eid（runtime.yaml generation+1）：下一 turn 生效，client 不重建
+    app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=make_yaml("user-2-rotated"))
+    asyncio.run(app.handle_matrix_message(
+        "!room:matrix.local", "@leader:matrix.local", "$event-2",
+        {"body": "@leader hi again"},
+    ))
+    assert app.config.runtime.eid == "user-2-rotated"
+    assert app.runtime_client is fake  # duck-typing 守卫：fake 无 eid 属性不触发重建
 
 def test_history_manager_room_scoping():
     from cimicode_bridge.session import CURRENT_MESSAGE_MARKER, HistoryManager

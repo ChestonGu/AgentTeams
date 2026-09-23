@@ -1,7 +1,7 @@
 """cimicode adapter：HTTP/SSE 传输层 + SSE 事件方言翻译（一个 runtime 一个文件）。
 
 CimicodeAdapter（传输层）：gateway 通用客户端，JSON 请求 + SSE 流消费。
-CimicodeDialect（翻译层）：cimicode SSE 事件 → RuntimeEvent（含 part 缓冲聚合）。
+GatewayV2Dialect（翻译层）：Gateway v2 turn/1 envelope → RuntimeEvent（含 part 缓冲聚合）。
 """
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ from cimicode_bridge.events import RuntimeEvent, RuntimeEventKind
 class CimicodeAdapter:
     """cimicode gateway 客户端（HTTP/SSE 传输）+ 方言翻译。
 
-    对应 spec §3.1 Runtime SPI 的 cimicode 实现：chat() 提交 turn →
-    SSE 流式读取 → CimicodeDialect 翻译为 RuntimeEvent 列表。
+    对应 spec §3.1 Runtime SPI 的 cimicode 实现：request_json/stream_sse
+    传输基座 + GatewayV2Dialect 翻译；两步化编排（submit 回执 + SSE 订阅）
+    在 CimicodeStatelessAdapter 子类。
     """
 
     name = "cimicode"
@@ -34,24 +35,38 @@ class CimicodeAdapter:
         self.timeout_seconds = timeout_seconds  # 流读超时 = turn 超时
         self.auth = auth                        # AuthProvider（当前 None）
 
-    async def request_json(self, method: str, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """普通 JSON 请求（非流式接口用）。"""
-        headers = {}
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """普通 JSON 请求（非流式接口用；headers 供 eid / 幂等键等透传）。"""
+        merged = dict(headers or {})
         if self.auth is not None:
-            headers = await self.auth.attach(headers)
+            merged = await self.auth.attach(merged)
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.request(method=method, url=f"{self.base_url}{path}", json=json_body, headers=headers)
+            response = await client.request(method=method, url=f"{self.base_url}{path}", json=json_body, headers=merged)
             response.raise_for_status()
             return response.json() if response.content else {}
 
-    async def stream_sse(self, method: str, path: str, *, json_body: dict[str, Any] | None = None):
+    async def stream_sse(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         """标准 SSE 读取：httpx-sse 的 ``aconnect_sse``。
 
         依赖 ``httpx<0.28``（httpx 0.28 把 ``AsyncClient.stream`` 改成了异步
         迭代器，不再满足 httpx-sse 0.4.3 的 context-manager 协议——见
         spec §8.3）。事件名/内容一律从 ``data`` 里的 JSON 取（网关契约：
-        事件名内嵌于 ``data.event``，而非 SSE 顶层 ``event:`` 行）。
+        事件名内嵌于 envelope 的 ``type`` 字段，而非 SSE 顶层 ``event:`` 行）。
         """
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             async with aconnect_sse(
@@ -59,6 +74,7 @@ class CimicodeAdapter:
                 method,
                 f"{self.base_url}{path}",
                 json=json_body,
+                headers=headers,
             ) as events:
                 # 非 2xx：先让响应抛出来（httpx-sse 的 EventSource.response
                 # 持有原始响应，不会自动 raise）。
@@ -74,121 +90,106 @@ class CimicodeAdapter:
                     # 事件名取 data.event（网关契约），SSE 顶层 event 行仅透传兼容
                     yield {"event": "", "data": payload}
 
-    async def chat(
-        self,
-        *,
-        session_id: str,
-        sandbox_id: str,
-        turn_id: str,
-        agent_md: str,
-        history: list[dict[str, Any]],
-        user_message: str,
-        eid: str = "",
-        extra_params: dict[str, str] | None = None,
-    ) -> list[RuntimeEvent]:
-        """提交 turn：POST chat → SSE → 方言翻译为 RuntimeEvent 列表。
-
-        eid 是 stateless 平台用户身份参数（runtimeParameter 已知键，v1.4），
-        与 sessionId/sandboxId 同为请求体固定字段。extra_params 是 CR
-        spec.runtimeParameter 的整袋快照，在固定字段之后平铺 merge 进请求
-        体：已知键与固定字段同源同值（覆盖无害），追加键透传平台（平台侧
-        忽略未知字段——新增平台参数无需改 bridge）。
-
-        流结束仍未收到 turn_completed 时补一条 turn_interrupted（断流兜底）。
-        """
-        path = "/v1/gateway/session/chat"
-        events: list[RuntimeEvent] = []
-        body: dict[str, Any] = {
-            "sessionId": session_id,
-            "sandboxId": sandbox_id,
-            "eid": eid,
-            "turnId": turn_id,
-            "agentMd": agent_md,
-            "history": history,
-            "userMessage": user_message,
-        }
-        body.update(extra_params or {})
-        async for line in self.stream_sse(
-            "POST",
-            path,
-            json_body=body,
-        ):
-            events.extend(CimicodeDialect().translate(line))
-        if not any(event.kind == RuntimeEventKind.TURN_COMPLETED for event in events):
-            events.append(RuntimeEvent(kind=RuntimeEventKind.TURN_INTERRUPTED, text="Gateway stream ended before done"))
-        return events
-
-    async def submit_turn(self, *, session_id: str, turn_id: str, payload: dict[str, Any]) -> list[RuntimeEvent]:
-        """chat 的向后兼容包装（旧调用方使用）。"""
-        return await self.chat(
-            session_id=session_id,
-            sandbox_id=str(payload.get("sandboxId", payload.get("sandbox_id", ""))),
-            turn_id=turn_id,
-            agent_md=str(payload.get("agentMd", payload.get("agent_md", ""))),
-            history=list(payload.get("history", [])),
-            user_message=str(payload.get("userMessage", payload.get("user_message", ""))),
-        )
 
 
-class CimicodeDialect:
-    """cimicode 方言翻译器：message/done/error + part_id 缓冲聚合。
+class GatewayV2Dialect:
+    """Gateway v2 方言翻译器：turn/1 envelope（``type`` 字段）→ RuntimeEvent。
 
-    事件名兼容两种位置：SSE 顶层 event 字段（httpx-sse 风格）
-    或内嵌于 data.event（手写解析 / gateway 契约格式）。
+    envelope 契约（Gateway SseEventForwarder 原样转发 cimicode turn/1 帧）：
+    ``{kind, sid, inv, epoch, seq, type, data, rev?, eventID?}``。
+    事件名取 envelope 的 ``type``（如 ``session.next.text.delta@`` 带版本
+    命名）；终态 = ``invocation.idle / yielded / failed``（互斥且恰一次，
+    终态帧后服务端主动关闭连接——这是正常结束，不是断流）。
     """
 
-    name = "cimicode"
+    name = "gateway-v2"
+
+    # 终态 type 集合（turn/1 契约 §7）
+    TERMINAL_TYPES = {"invocation.idle", "invocation.yielded", "invocation.failed"}
 
     def __init__(self) -> None:
         self.parts: dict[str, str] = {}      # part_id → 已累积文本
-        self.part_order: list[str] = []      # part 首次出现顺序（done 按此拼接）
+        self.part_order: list[str] = []      # part 首次出现顺序（终态按此拼接）
+        self._closed_parts: set[str] = set() # 已收口（ended）的 part，后续 delta 不再追加
+        self.terminal_seen = False          # 是否已见终态帧
+
+    def is_terminal(self, event_type: str) -> bool:
+        """终态判定（含 v0.1 遗留 done/error 兼容）。"""
+        return event_type in self.TERMINAL_TYPES or event_type in {"done", "error"}
 
     def translate(self, raw_event: dict[str, Any]) -> list[RuntimeEvent]:
-        """翻译单个 SSE 事件为 RuntimeEvent（列表包装保持接口统一）。"""
-        data = raw_event.get("data", raw_event)
-        if not isinstance(data, dict):
-            data = {"value": data}
-        # event 名可能在顶层（httpx-sse 风格）或内嵌于 data.event（手写解析/gateway 契约）
-        event_name = str(
-            raw_event.get("event")
-            or data.get("event")
-            or data.get("kind")
+        """翻译单个 envelope 为 RuntimeEvent（列表包装保持接口统一）。"""
+        envelope = raw_event.get("data", raw_event)
+        if not isinstance(envelope, dict):
+            envelope = {"value": envelope}
+        event_type = str(envelope.get("type") or "")
+        payload = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+
+        if event_type in {
+            "session.next.text.delta",
+            "session.next.reasoning.delta",
+            "message.part.delta",
+            "message",
+        }:
+            text = str(payload.get("delta") or payload.get("text") or "")
+            kind = RuntimeEventKind.TEXT_DELTA
+        elif event_type in {"session.next.text.ended@1", "message.part.updated"}:
+            # durable 全文收口帧：part 全量替换
+            part = payload.get("part") if isinstance(payload.get("part"), dict) else {}
+            text = str(part.get("text") or payload.get("text") or "")
+            kind = RuntimeEventKind.TEXT_DONE
+        elif event_type in {"invocation.idle", "invocation.yielded", "done"}:
+            # 正常终态：done.content / idle 无正文时按 part 首现顺序拼接
+            text = str(payload.get("content") or payload.get("text") or "")
+            kind = RuntimeEventKind.TURN_COMPLETED
+            self.terminal_seen = True
+        elif event_type in {"invocation.failed", "error", "session.error"}:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            text = str(error.get("message") or payload.get("message") or payload.get("reason") or "")
+            kind = RuntimeEventKind.RUNTIME_ERROR
+            self.terminal_seen = True
+        elif event_type == "session.next.tool.called@1":
+            text = str(payload.get("tool") or "")
+            kind = RuntimeEventKind.TOOL_STARTED
+        elif event_type in {"session.next.tool.success@1", "session.next.tool.failed@1"}:
+            text = str(payload.get("output") or payload.get("error") or "")
+            kind = RuntimeEventKind.TOOL_FINISHED
+        elif event_type == "invocation.started":
+            kind = RuntimeEventKind.TURN_STARTED
+            text = ""
+        else:
+            # 未识别事件（turn.accepted / status.changed / diagnostic / live 增量等）：
+            # 不产生 RuntimeEvent，原文已在 envelope 里可诊断，不丢失也不误报错
+            return []
+
+        # part 缓冲聚合：带 part_id 的事件按 delta 追加 / ended 全量替换；
+        # ended 后该 part 已收口（durable 全文），后续 delta 不再追加。
+        # part_id 位置两种：delta 帧在 payload 顶层；ended 帧在 part 对象内部。
+        part_obj = payload.get("part") if isinstance(payload.get("part"), dict) else {}
+        part_id = str(
+            payload.get("partID")
+            or payload.get("part_id")
+            or part_obj.get("partID")
+            or part_obj.get("part_id")
+            or part_obj.get("id")
             or ""
         )
-        # 事件映射：message* → 增量；done → 完成；error → 错误
-        if event_name in {"message", "message.part.delta", "message.updated"}:
-            text = data.get("delta", data.get("content", data.get("text", "")))
-            kind = RuntimeEventKind.TEXT_DELTA
-        elif event_name == "message.part.updated":
-            text = data.get("text", data.get("content", ""))
-            kind = RuntimeEventKind.TEXT_DONE
-        elif event_name == "done":
-            text = data.get("content", "")
-            kind = RuntimeEventKind.TURN_COMPLETED
-        elif event_name in {"error", "session.error"}:
-            text = data.get("message", "")
-            kind = RuntimeEventKind.RUNTIME_ERROR
-        else:
-            # 未识别事件：尝试按内部 kind 解析，否则包成 runtime_error（原文进 data 不丢弃）
-            kind = RuntimeEventKind(raw_event.get("kind", "text_done")) if raw_event.get("kind") in RuntimeEventKind._value2member_map_ else RuntimeEventKind.RUNTIME_ERROR
-            text = raw_event.get("text", "")
-        # part 缓冲聚合：带 part_id 的事件按 delta 追加 / updated 全量替换
-        part_id = str(data.get("part_id", ""))
-        if part_id:
+        if part_id and kind in {RuntimeEventKind.TEXT_DELTA, RuntimeEventKind.TEXT_DONE}:
             if part_id not in self.parts:
                 self.part_order.append(part_id)
-            if event_name == "message.part.updated":
+            if kind == RuntimeEventKind.TEXT_DONE:
                 self.parts[part_id] = str(text)
-            else:
+                self._closed_parts.add(part_id)
+            elif part_id not in self._closed_parts:
                 self.parts[part_id] = self.parts.get(part_id, "") + str(text)
-        # done 未带全文时：按 part 首现顺序拼接聚合文本
-        if event_name == "done" and not text:
+        # 终态未带全文时：按 part 首现顺序拼接聚合文本
+        if kind == RuntimeEventKind.TURN_COMPLETED and not text:
             text = "\n".join(self.parts[part_id] for part_id in self.part_order)
         return [
             RuntimeEvent(
-                seq=raw_event.get("seq", data.get("event_seq")),
+                seq=envelope.get("seq"),
                 kind=kind,
                 text=str(text),
-                data=data,
+                data=envelope,
             )
         ]

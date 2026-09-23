@@ -133,8 +133,8 @@ class FakeCimicodePod:
 
 
 async def _run_chat(adapter: CimicodePodAdapter, **overrides):
-    kwargs = dict(session_id="", sandbox_id="", turn_id="t1",
-                  agent_md="# agent md", history=[], user_message="hi")
+    kwargs = dict(session_id="", turn_id="t1",
+                  agent_md="# agent md", user_message="hi")
     kwargs.update(overrides)
     return await adapter.chat(**kwargs)
 
