@@ -1,0 +1,72 @@
+# fake-platform：stateless 模式外部平台模拟件（105 cimicode-test 专用）。
+#
+# 部署（app.py 经 --from-file 进 ConfigMap，与本文件同目录）：
+#   kubectl -n cimicode-test create configmap fake-platform-app \
+#     --from-file=app.py --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl apply -n cimicode-test -f deploy.yaml
+# 验证：bridge 的 runtimeParameter.baseUrl 指向
+#       http://fake-platform.cimicode-test.svc.cluster.local:4096
+# 请求体证据：kubectl logs deploy/fake-platform（stdout 全量）
+#             kubectl exec deploy/fake-platform -- cat /tmp/last-chat.json
+#
+# 镜像复用 agentteams/worker-bridge（本地 containerd 已有，python3 就绪，
+# imagePullPolicy=IfNotPresent 零外网拉取；tag 随现役 bridge 版本走）。
+# nodeName 钉主节点（105 双节点：镜像只导入主节点 containerd，k3s-103
+# 无镜像且内网 registry 403，漂过去必 ErrImagePull）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-platform
+  labels:
+    app: fake-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-platform
+  template:
+    metadata:
+      labels:
+        app: fake-platform
+    spec:
+      nodeName: extvdiadmin-vmware-virtual-platform
+      containers:
+        - name: platform
+          image: agentteams/worker-bridge:v1.2.3-cimi.4
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/app.py"]
+          volumeMounts:
+            - name: app
+              mountPath: /app
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /session
+              port: 4096
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: app
+          configMap:
+            name: fake-platform-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-platform
+  labels:
+    app: fake-platform
+spec:
+  selector:
+    app: fake-platform
+  ports:
+    - name: http
+      port: 4096
+      targetPort: 4096
