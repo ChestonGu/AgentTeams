@@ -543,6 +543,20 @@ type TeamStatus struct {
 	// or informer re-sync. Mirrors WorkerStatus.ObservedGeneration and
 	// ManagerStatus.ObservedGeneration.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// MemberGenerations fingerprints the member Worker spec Generations the
+	// last successful full pass projected — "name:generation" per member,
+	// sorted by name, comma-joined. The Active fast path compares live Worker
+	// Generations against it: editing a member Worker's spec bumps only that
+	// Worker's Generation (the Team's Generation/ObservedGeneration pair stays
+	// matched), so without this fingerprint the fast path would skip the
+	// member runtime.yaml re-projection the edit is waiting for. An empty
+	// value (pre-upgrade CR) never matches a non-empty team, so stale Teams
+	// self-heal through one extra full pass. Deliberately a Generation
+	// fingerprint, NOT TeamMemberStatus.SpecHash: that hash mirrors
+	// hashAppliedWorkerSpec, which excludes config-only fields
+	// (runtimeParameter, displayName, description, model...) — precisely the
+	// ones whose edits must reach the projection.
+	MemberGenerations string `json:"memberGenerations,omitempty"`
 	// ConsecutiveFailures tracks consecutive reconcile failures for
 	// exponential backoff. Reset to 0 on any successful pass.
 	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`

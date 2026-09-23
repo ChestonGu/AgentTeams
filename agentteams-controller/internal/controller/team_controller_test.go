@@ -1982,6 +1982,12 @@ func fastPathTeamFixture(t *testing.T) (*v1beta1.Team, *v1beta1.Worker, *v1beta1
 			ReadyWorkers:       1,
 			TotalWorkers:       1,
 			TeamRoomID:         "!team:matrix.local",
+			// Fingerprint a successful full pass would have recorded for this
+			// fixture: both Worker CRs carry fake-client default Generation 0,
+			// sorted "dev" < "lead". Without this the fingerprint gate treats
+			// the team as pre-upgrade (empty recorded value) and every fast
+			// path test would silently exercise the full pass instead.
+			MemberGenerations: "dev:0,lead:0",
 		},
 	}
 	leaderWorker := &v1beta1.Worker{
@@ -2146,5 +2152,107 @@ func TestReconcileTeamFastPath_KeepsFastPathOnProbeError(t *testing.T) {
 	}
 	if result.RequeueAfter <= 0 {
 		t.Fatalf("RequeueAfter=%v, want the periodic active requeue", result.RequeueAfter)
+	}
+}
+
+// TestReconcileTeamFastPath_RunsFullPassOnMemberSpecChange pins the member
+// fingerprint gate: editing a member Worker's spec bumps only that Worker's
+// metadata.generation — the Team's Generation/ObservedGeneration pair stays
+// matched and the room is fully staffed, so without the fingerprint check
+// the fast path would skip the runtime.yaml re-projection the edit is
+// waiting for (the 105 repro: patch runtimeParameter.eid → runtime.yaml
+// stays stale until the Team spec itself is bumped).
+func TestReconcileTeamFastPath_RunsFullPassOnMemberSpecChange(t *testing.T) {
+	team, leaderWorker, worker1 := fastPathTeamFixture(t)
+	// Simulate the spec edit: the API server bumps the dev Worker's
+	// Generation while everything else stays converged.
+	worker1.Generation = 2
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+	prov.MissingTeamRoomMembersFn = func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+		return nil, nil
+	}
+
+	r := &TeamReconciler{Client: c, Provisioner: prov, Deployer: deployer}
+	reconcileFastPathTeam(t, r, team)
+
+	if len(prov.Calls.ProvisionTeamRooms) == 0 {
+		t.Fatal("ProvisionTeamRooms calls=0, want ≥1 (member Generation bump must force the full pass)")
+	}
+	// The successful full pass re-records the fingerprint, so the next
+	// reconcile takes the fast path again instead of looping on full passes.
+	if got, want := team.Status.MemberGenerations, "dev:2,lead:0"; got != want {
+		t.Fatalf("team.Status.MemberGenerations=%q, want %q (recorded from live member Generations after the full pass)", got, want)
+	}
+}
+
+// TestReconcileTeamFastPath_FallsThroughOnMissingFingerprint pins the
+// upgrade path: a Team whose status predates the fingerprint field (empty
+// recorded value) never matches a non-empty live fingerprint, so the first
+// reconcile after the controller upgrade runs one extra full pass and
+// records the fingerprint — after which the fast path resumes.
+func TestReconcileTeamFastPath_FallsThroughOnMissingFingerprint(t *testing.T) {
+	team, leaderWorker, worker1 := fastPathTeamFixture(t)
+	team.Status.MemberGenerations = "" // pre-upgrade status
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+	prov.MissingTeamRoomMembersFn = func(ctx context.Context, roomID, leaderName string, workerNames []string) ([]string, error) {
+		return nil, nil
+	}
+
+	r := &TeamReconciler{Client: c, Provisioner: prov, Deployer: deployer}
+	reconcileFastPathTeam(t, r, team)
+
+	if len(prov.Calls.ProvisionTeamRooms) == 0 {
+		t.Fatal("ProvisionTeamRooms calls=0, want ≥1 (empty recorded fingerprint must force one full pass)")
+	}
+	if got, want := team.Status.MemberGenerations, "dev:0,lead:0"; got != want {
+		t.Fatalf("team.Status.MemberGenerations=%q, want %q", got, want)
+	}
+}
+
+// TestMemberGenerationsFingerprint pins the fingerprint format: name:generation
+// pairs, sorted by name, so the value is independent of member resolution
+// order and the fast-path comparison stays stable across passes.
+func TestMemberGenerationsFingerprint(t *testing.T) {
+	mk := func(name string, gen int64) teamWorkerMember {
+		return teamWorkerMember{
+			ref:    v1beta1.TeamWorkerRef{Name: name},
+			worker: v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Generation: gen}},
+		}
+	}
+	// Resolution order must not leak into the fingerprint.
+	if got, want := memberGenerationsFingerprint([]teamWorkerMember{mk("lead", 1), mk("dev", 3)}), "dev:3,lead:1"; got != want {
+		t.Fatalf("fingerprint=%q, want %q", got, want)
+	}
+	if got, want := memberGenerationsFingerprint([]teamWorkerMember{mk("dev", 3), mk("lead", 1)}), "dev:3,lead:1"; got != want {
+		t.Fatalf("fingerprint=%q, want %q (order-independent)", got, want)
+	}
+	// Empty team fingerprints to the empty string, which matches the
+	// zero-value status field — an empty team keeps short-circuiting.
+	if got, want := memberGenerationsFingerprint(nil), ""; got != want {
+		t.Fatalf("fingerprint=%q, want %q", got, want)
 	}
 }

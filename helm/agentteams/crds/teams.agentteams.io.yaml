@@ -147,6 +147,9 @@ spec:
                   type: integer
                   format: int64
                   description: "Most recent generation observed by the controller. Used to short-circuit unchanged Active teams on restart/informer re-sync."
+                memberGenerations:
+                  type: string
+                  description: "Fingerprint of the member Worker spec Generations the last successful full pass projected (\"name:generation\", sorted by name, comma-joined). The Active fast path compares live Worker Generations against it — a member spec edit bumps only that Worker's Generation, so a mismatch forces the full pass and the member runtime.yaml is re-projected. Empty (pre-upgrade) never matches a non-empty team."
                 consecutiveFailures:
                   type: integer
                   description: "Consecutive reconcile failures driving failTeam's exponential backoff. Reset to 0 on a successful pass."

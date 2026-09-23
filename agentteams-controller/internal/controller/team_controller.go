@@ -474,16 +474,37 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	logger := log.FromContext(ctx)
 	passStart := time.Now()
 
-	// --- Active + spec unchanged → fast path ---
+	// --- Active + spec unchanged (team + members) → fast path ---
 	// After a controller restart or informer re-sync every Team is enqueued
 	// again. Without this short-circuit an unchanged Active Team would run
 	// the full provisioning chain (rooms, storage, per-member credential
 	// refresh, config pushes) on every restart. Skipped when any member
-	// reports not-ready so the full pass can self-heal it. No status patch is
-	// issued here — a patch would bump the resourceVersion and re-enqueue the
-	// Team through the informer, defeating the purpose of the fast path.
+	// reports not-ready or a member Worker's spec Generation moved past the
+	// last recorded fingerprint, so the full pass can self-heal it. No status
+	// patch is issued here — a patch would bump the resourceVersion and
+	// re-enqueue the Team through the informer, defeating the purpose of the
+	// fast path.
 	if t.Status.Phase == "Active" && t.Generation == t.Status.ObservedGeneration {
-		if t.Status.LeaderReady && t.Status.ReadyWorkers == t.Status.TotalWorkers {
+		// Member spec fingerprint gate: editing a member Worker's spec bumps
+		// only that Worker's metadata.generation — the Team's Generation /
+		// ObservedGeneration pair above stays matched, so the fast path would
+		// otherwise skip the member runtime.yaml re-projection (runtimeParameter,
+		// displayName, description, skills, copaw model...) the edit is waiting
+		// for. Compare the live per-member Generation fingerprint against the one
+		// the last successful full pass recorded on status; a mismatch — or an
+		// empty recorded value (pre-upgrade CR), or an unresolvable member —
+		// falls through to the full pass, which re-projects every member and
+		// re-records the fingerprint. Fail-safe direction: extra work, never a
+		// skipped projection. Cost is one informer-cache Get per member (no API
+		// server round-trips, no external IO), bounded by team size.
+		liveFingerprint, resolved := r.currentMemberGenerations(ctx, t)
+		if !resolved || liveFingerprint != t.Status.MemberGenerations {
+			logger.Info("member worker spec fingerprint mismatch; running full reconcile",
+				"team", t.Name, "uid", t.UID,
+				"resolved", resolved,
+				"recorded", t.Status.MemberGenerations,
+				"live", liveFingerprint)
+		} else if t.Status.LeaderReady && t.Status.ReadyWorkers == t.Status.TotalWorkers {
 			// Container readiness cannot see room membership drift (a lost
 			// invite leaves the team room silently understaffed forever, and
 			// nothing re-enters the provisioning path). Probe the room before
@@ -518,7 +539,8 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				// full pass owns both; fall through.
 			}
 		}
-		// A member is not ready — fall through to the full pass to recover it.
+		// A member is not ready, or a member spec Generation moved — fall
+		// through to the full pass to recover / re-project it.
 	}
 
 	// 1. Validate workerMembers
@@ -734,8 +756,12 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 
 	// Successful full pass: record the observed generation (so a restart /
 	// informer re-sync can short-circuit unchanged Active teams) and reset
-	// the failure counter failTeam's exponential backoff uses.
+	// the failure counter failTeam's exponential backoff uses. Also record
+	// the member spec fingerprint this pass projected — the fast path
+	// compares live Worker Generations against it, because a member spec
+	// edit bumps only that Worker's Generation, never the Team's.
 	t.Status.ObservedGeneration = t.Generation
+	t.Status.MemberGenerations = memberGenerationsFingerprint(members)
 	t.Status.ConsecutiveFailures = 0
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
@@ -750,6 +776,44 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		"totalWorkers", t.Status.TotalWorkers,
 		"passDuration", time.Since(passStart).Truncate(time.Millisecond).String())
 	return reconcile.Result{RequeueAfter: r.activeRequeue()}, nil
+}
+
+// memberGenerationsFingerprint renders the member spec fingerprint for a
+// resolved member snapshot: "name:generation" per member, sorted by member
+// name, comma-joined. Sorting makes the value independent of the order
+// members were resolved in, so fast-path comparisons are stable across
+// passes. Recorded on Team.Status.MemberGenerations by a successful full
+// pass and compared against live Worker Generations by the Active fast path.
+func memberGenerationsFingerprint(members []teamWorkerMember) string {
+	entries := make([]string, 0, len(members))
+	for _, m := range members {
+		entries = append(entries, fmt.Sprintf("%s:%d", m.ref.Name, m.worker.Generation))
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ",")
+}
+
+// currentMemberGenerations renders the same fingerprint from the live Worker
+// CRs referenced by spec.workerMembers. The bool return is false when any
+// member Worker cannot be resolved (e.g. dangling reference) — callers treat
+// that as "must run the full pass", whose degraded path reports the problem.
+// Reads are served by the informer cache: memory-local map lookups, no API
+// server or etcd round-trips, so the steady-state cost is N cheap Gets.
+func (r *TeamReconciler) currentMemberGenerations(ctx context.Context, t *v1beta1.Team) (string, bool) {
+	names := make([]string, 0, len(t.Spec.WorkerMembers))
+	for _, ref := range t.Spec.WorkerMembers {
+		names = append(names, ref.Name)
+	}
+	sort.Strings(names)
+	entries := make([]string, 0, len(names))
+	for _, name := range names {
+		var w v1beta1.Worker
+		if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, &w); err != nil {
+			return "", false
+		}
+		entries = append(entries, fmt.Sprintf("%s:%d", name, w.Generation))
+	}
+	return strings.Join(entries, ","), true
 }
 
 // activeRequeue returns the periodic requeue for a fully converged Active
