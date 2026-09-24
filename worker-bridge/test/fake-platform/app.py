@@ -38,9 +38,11 @@ FAULT_MARKERS = {
     "[fault:drop]": "drop",
     "[fault:failed]": "failed",
 }
-# 最近一次 submit 的回复载荷（session 维度 events 回放用；单副本模拟件，
-# 每次受理覆盖——bridge 每 turn 都是 submit→订阅→终态，时序恒成立）
-_PENDING_TURN: dict[str, str] = {}
+# 各 session 最近一次 submit 的回复载荷（events 回放按 URL sid 精确取）。
+# 修复：此前为全局单槽，多 worker 并发 submit 时后到者覆盖前者，先到者的
+# SSE 订阅串读到别人的 turn 回显（105 回归实测：两 stateless worker 相隔
+# 175ms 并发 submit，w1 的回复回显成 w2 的 eid/幂等键，且同键双发）
+_PENDING_TURN: dict[str, dict] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -71,7 +73,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/agi/gateway/v1/session/") and self.path.endswith("/events"):
             sid = self.path[len("/agi/gateway/v1/session/") : -len("/events")]
-            turn = _PENDING_TURN or {"content": "[fake-platform] no pending turn"}
+            turn = _PENDING_TURN.get(sid) or {
+                "content": f"[fake-platform] no pending turn for session {sid}"
+            }
             fault = turn.get("fault", "")
             # 增量帧：delta 契约（无 part_id，走 payload.delta/text）
             frames = [{"type": "session.next.text.delta", "data": {"delta": "[fake-platform] "}}]
@@ -119,8 +123,11 @@ class Handler(BaseHTTPRequestHandler):
                 "[fake-platform] 收到 turn（Gateway v2 submit），"
                 f"绑定字段回显: {json.dumps(record, ensure_ascii=False)}"
             )
-            _PENDING_TURN.clear()
-            _PENDING_TURN.update({"content": content, "ts": time.strftime("%FT%T"), "fault": fault})
+            _PENDING_TURN[record["sessionId"]] = {
+                "content": content,
+                "ts": time.strftime("%FT%T"),
+                "fault": fault,
+            }
             turn_id = f"fake-turn-{uuid.uuid4().hex[:12]}"
             self._send_json(200, {"data": {"turnId": turn_id, "attemptId": turn_id, "queueStatus": "QUEUED"}})
             return
