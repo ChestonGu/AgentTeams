@@ -97,7 +97,7 @@ RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scrip
 # 权限 patcher 之后），是权限面的唯一权威——种子配置里不写 permission。
 ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills \
     OPENCODE_PORT=4096 \
-    OPENCODE_PERMISSION={"*":"allow"}
+    OPENCODE_PERMISSION='{"*":"allow"}'
 EXPOSE 4096
 # WORKDIR 仅为镜像级兜底：entrypoint 会按 AGENTTEAMS_FS_ROOT（operator 注入
 # /workspace/work）mkdir + cd，实际 cwd 恒跟随 FS_ROOT——两者焊成单旋钮。
