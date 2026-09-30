@@ -948,7 +948,12 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if teamAdminID != adminMatrixID {
 			if present, _, err := p.observedRoomMembershipWithToken(ctx, teamRoom.RoomID, adminMatrixID, req.TeamAdminActorToken); err != nil {
 				return nil, fmt.Errorf("check global admin team room membership: %w", err)
-			} else if present {
+			} else if present && !containsString(teamDesired, adminMatrixID) {
+				// Bootstrap cleanup, not an eviction: with a dedicated team
+				// admin the global admin no longer belongs in the room —
+				// unless the Team explicitly lists it as a human member
+				// (humanMembers referencing the global admin's Matrix ID),
+				// in which case it is a desired occupant and must stay.
 				if err := p.matrixOps.LeaveRoom(ctx, teamRoom.RoomID, matrix.MemberSpec{}); err != nil {
 					return nil, fmt.Errorf("global admin leave team room: %w", err)
 				}

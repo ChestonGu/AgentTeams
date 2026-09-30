@@ -727,6 +727,71 @@ func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) 
 	}
 }
 
+// TestProvisionTeamRoomsCleansUnlistedGlobalAdminFromTeamRoom pins the
+// bootstrap-cleanup semantics for teams with a dedicated admin: a global
+// admin sitting in the team room (e.g. it joined to observe the team) is
+// cleaned out on the next full pass when the spec does not list it as a
+// member. Room ownership belongs to the team admin.
+func TestProvisionTeamRoomsCleansUnlistedGlobalAdminFromTeamRoom(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	matrixClient.members["!team:localhost"] = []matrix.RoomMember{
+		{UserID: "@admin:localhost", Membership: "join"},
+	}
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost", AdminUser: "admin"}),
+		AdminUser: "admin",
+	})
+
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName:            "alpha",
+		LeaderName:          "lead",
+		AdminSpec:           &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:example.com"},
+		TeamAdminActorToken: "team-admin-token",
+		TeamAdminActorName:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("ProvisionTeamRooms: %v", err)
+	}
+	if got, want := matrixClient.leaves, []string{"!team:localhost"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unlisted global admin should leave the team room exactly once, got %v, want %v", got, want)
+	}
+}
+
+// TestProvisionTeamRoomsKeepsGlobalAdminListedAsHumanMember: a Team that
+// explicitly references the global admin in humanMembers (by Matrix ID)
+// wants it in the room — the bootstrap cleanup must not evict it, and the
+// membership convergence treats it like any other coordinator (invited).
+func TestProvisionTeamRoomsKeepsGlobalAdminListedAsHumanMember(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	matrixClient.members["!team:localhost"] = []matrix.RoomMember{
+		{UserID: "@admin:localhost", Membership: "join"},
+	}
+	p := NewProvisioner(ProvisionerConfig{
+		MatrixOps: matrix.NewLegacyClientOps(matrixClient, matrix.Config{Domain: "localhost", AdminUser: "admin"}),
+		AdminUser: "admin",
+	})
+
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName:   "alpha",
+		LeaderName: "lead",
+		AdminSpec:  &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:example.com"},
+		HumanMembers: []v1beta1.TeamMemberSpec{
+			{Name: "admin", MatrixUserID: "@admin:localhost", Role: "coordinator"},
+		},
+		TeamAdminActorToken: "team-admin-token",
+		TeamAdminActorName:  "alice",
+	})
+	if err != nil {
+		t.Fatalf("ProvisionTeamRooms: %v", err)
+	}
+	if len(matrixClient.leaves) != 0 {
+		t.Fatalf("global admin listed in humanMembers must stay in the team room, got leaves=%v", matrixClient.leaves)
+	}
+	if got, want := matrixClient.createRooms[0].Invite, []string{"@lead:localhost", "@admin:localhost"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("team room invites=%v, want %v (global admin invited like any coordinator)", got, want)
+	}
+}
+
 // TestMissingTeamRoomMembers pins the read-only drift probe semantics: only
 // membership "join" counts as present — a pending invite still means the
 // member is missing (the invite may never be accepted), and a kicked member
