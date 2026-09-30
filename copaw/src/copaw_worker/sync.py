@@ -688,6 +688,14 @@ class FileSync:
         logger.info("openclaw.json raw content (%d chars): %r", len(text), text[:500])
         return json.loads(text)
 
+    def get_soul(self) -> Optional[str]:
+        """Pull SOUL.md from MinIO (fallback when local copy is absent)."""
+        return self._cat(f"{self._prefix}/SOUL.md")
+
+    def get_agents_md(self) -> Optional[str]:
+        """Pull AGENTS.md from MinIO (fallback when local copy is absent)."""
+        return self._cat(f"{self._prefix}/AGENTS.md")
+
     def list_skills(self) -> list[str]:
         """Return list of skill names available in MinIO for this worker."""
         prefix = f"{self._prefix}/skills/"

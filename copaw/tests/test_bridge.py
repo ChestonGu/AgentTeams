@@ -513,6 +513,55 @@ def test_refresh_standard_to_runtime_uses_legacy_prompt_fallbacks(tmp_path):
     assert (workspace_dir / "agent.json").exists()
 
 
+def test_file_sync_provides_rebridge_fallback_callbacks(tmp_path, monkeypatch):
+    """FileSync (the real sync layer) exposes get_soul/get_agents_md.
+
+    Regression guard for worker.py's re-bridge call site, which passes
+    ``get_soul=self.sync.get_soul`` — kwargs evaluation itself raised
+    AttributeError when FileSync lacked these methods, silently killing
+    every re-bridge (config changes never reached the CoPaw runtime).
+    """
+    from copaw_worker.sync import FileSync
+
+    sync = FileSync(
+        endpoint="http://minio:9000",
+        access_key="ak",
+        secret_key="sk",
+        bucket="bucket",
+        worker_name="worker-1",
+        local_dir=tmp_path / "standard",
+    )
+    assert hasattr(sync, "get_soul") and hasattr(sync, "get_agents_md")
+
+    def fake_cat(key):
+        return {
+            "agents/worker-1/SOUL.md": "minio soul",
+            "agents/worker-1/AGENTS.md": "minio agents",
+        }.get(key)
+
+    monkeypatch.setattr(sync, "_cat", fake_cat)
+    assert sync.get_soul() == "minio soul"
+    assert sync.get_agents_md() == "minio agents"
+    # Missing objects surface as None (fallback stays optional downstream).
+    monkeypatch.setattr(sync, "_cat", lambda key: None)
+    assert sync.get_soul() is None
+    assert sync.get_agents_md() is None
+    monkeypatch.setattr(sync, "_cat", fake_cat)
+
+    # Full refresh through the real call shape used by worker.py.
+    runtime_dir = tmp_path / "standard" / ".copaw"
+    refresh_standard_to_runtime(
+        sync.local_dir,
+        runtime_dir,
+        _make_openclaw_cfg(),
+        get_soul=sync.get_soul,
+        get_agents_md=sync.get_agents_md,
+    )
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    assert (workspace_dir / "SOUL.md").read_text() == "minio soul"
+    assert (workspace_dir / "AGENTS.md").read_text() == "minio agents"
+
+
 def test_sync_mcporter_config_to_runtime_prefers_config_path(tmp_path):
     """config/mcporter.json wins over legacy mcporter-servers.json."""
     standard_dir = tmp_path / "standard"
