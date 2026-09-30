@@ -308,20 +308,21 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	state := "Running"
 
 	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
-		Name:              "worker-cr-a",
-		RuntimeName:       "worker-a",
-		Runtime:           "qwenpaw",
-		Role:              "worker",
-		Generation:        12,
-		MatrixUserID:      "@worker-a:matrix.local",
-		PersonalRoomID:    "!worker-dm:matrix.local",
-		TeamName:          "demo-team",
-		TeamRoomID:        "!team:matrix.local",
-		LeaderName:        "leader",
-		LeaderRuntimeName: "leader-runtime",
-		LeaderDMRoomID:    "!leader-dm:matrix.local",
-		TeamAdminName:     "admin",
-		TeamAdminMatrixID: "@admin:matrix.local",
+		Name:                 "worker-cr-a",
+		RuntimeName:          "worker-a",
+		Runtime:              "qwenpaw",
+		Role:                 "worker",
+		Generation:           12,
+		MatrixUserID:         "@worker-a:matrix.local",
+		PersonalRoomID:       "!worker-dm:matrix.local",
+		TeamName:             "demo-team",
+		TeamRoomID:           "!team:matrix.local",
+		LeaderName:           "leader",
+		LeaderRuntimeName:    "leader-runtime",
+		LeaderDMRoomID:       "!leader-dm:matrix.local",
+		TeamAdminName:        "admin",
+		TeamAdminMatrixID:    "@admin:matrix.local",
+		TeamAdminDisplayName: "Alice",
 		TeamMembers: []RuntimeConfigTeamMember{{
 			Name:           "leader",
 			RuntimeName:    "leader-runtime",
@@ -408,6 +409,13 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 		t.Fatalf("member.runtimeName=%q", got)
 	}
 	team := doc["team"].(map[string]any)
+	admin := team["admin"].(map[string]any)
+	if got := fmt.Sprint(admin["matrixUserId"]); got != "@admin:matrix.local" {
+		t.Fatalf("team.admin.matrixUserId=%q", got)
+	}
+	if got := fmt.Sprint(admin["displayName"]); got != "Alice" {
+		t.Fatalf("team.admin.displayName=%q, want Alice", got)
+	}
 	members := team["members"].([]any)
 	if len(members) != 4 {
 		t.Fatalf("team.members len=%d, want 4: %#v", len(members), members)
@@ -1405,7 +1413,7 @@ func TestDeployMemberRuntimeConfigOmitsBridgeSectionWithoutBinding(t *testing.T)
 	// An all-blank runtimeParameter map counts as no binding (mirrors the old
 	// per-field non-empty checks).
 	bridge := deployBridgeSection(t, v1beta1.WorkerSpec{
-		Runtime:           "worker-bridge",
+		Runtime: "worker-bridge",
 		RuntimeParameter: map[string]string{
 			"sessionId": "  ",
 		},

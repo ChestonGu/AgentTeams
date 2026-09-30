@@ -7,18 +7,29 @@ import (
 
 // CoordinationContext describes the team/coordination context to inject into AGENTS.md.
 type CoordinationContext struct {
-	WorkerName         string
-	Role               string // "worker", "team_leader", "standalone"
-	MatrixDomain       string
-	TeamName           string
-	TeamLeaderName     string
-	TeamAdminID        string // full Matrix ID of team admin
-	TeamCoordinatorIDs []string
-	TeamRoomID         string
-	LeaderDMRoomID     string
-	HeartbeatEvery     string
-	WorkerIdleTimeout  string
-	TeamWorkers        []TeamWorkerInfo // for leaders: list of team workers
+	WorkerName     string
+	Role           string // "worker", "team_leader", "standalone"
+	MatrixDomain   string
+	TeamName       string
+	TeamLeaderName string
+	TeamAdminID    string // full Matrix ID of team admin
+	// TeamAdminDisplayName is the admin's friendly name; empty renders the
+	// bare admin Matrix ID (legacy behavior).
+	TeamAdminDisplayName string
+	TeamCoordinators     []TeamCoordinatorInfo
+	TeamRoomID           string
+	LeaderDMRoomID       string
+	HeartbeatEvery       string
+	WorkerIdleTimeout    string
+	TeamWorkers          []TeamWorkerInfo // for leaders: list of team workers
+}
+
+// TeamCoordinatorInfo describes one human coordinator member for the
+// coordination block, keeping the display name next to the Matrix ID so
+// rendering can prefer the friendly name.
+type TeamCoordinatorInfo struct {
+	MatrixUserID string
+	DisplayName  string // can be empty
 }
 
 // TeamWorkerInfo describes a team worker for leader context injection.
@@ -66,9 +77,9 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 	case "team_leader":
 		fmt.Fprintf(&b, "- **Upstream coordinator**: @manager:%s (Manager) — you receive tasks from Manager\n", ctx.MatrixDomain)
 		if ctx.TeamAdminID != "" {
-			fmt.Fprintf(&b, "- **Team Admin**: %s — can assign tasks and make decisions within the team\n", ctx.TeamAdminID)
+			writeTeamAdmin(&b, ctx.TeamAdminID, ctx.TeamAdminDisplayName)
 		}
-		writeTeamCoordinators(&b, ctx.TeamCoordinatorIDs, ctx.TeamAdminID)
+		writeTeamCoordinators(&b, ctx.TeamCoordinators, ctx.TeamAdminID)
 		fmt.Fprintf(&b, "- **Team**: %s\n", ctx.TeamName)
 		if ctx.TeamRoomID != "" {
 			fmt.Fprintf(&b, "- **Team Room**: %s — @mention workers here for task assignment\n", ctx.TeamRoomID)
@@ -113,16 +124,16 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 	case "worker":
 		fmt.Fprintf(&b, "- **Coordinator**: @%s:%s (Team Leader of %s)\n", ctx.TeamLeaderName, ctx.MatrixDomain, ctx.TeamName)
 		if ctx.TeamAdminID != "" {
-			fmt.Fprintf(&b, "- **Team Admin**: %s (has admin authority within this team)\n", ctx.TeamAdminID)
+			writeTeamAdminWorkerView(&b, ctx.TeamAdminID, ctx.TeamAdminDisplayName)
 		}
-		writeTeamCoordinators(&b, ctx.TeamCoordinatorIDs, ctx.TeamAdminID)
+		writeTeamCoordinators(&b, ctx.TeamCoordinators, ctx.TeamAdminID)
 		b.WriteString("- Report task completion, blockers, and questions to your coordinator\n")
 		switch {
-		case ctx.TeamAdminID != "" && len(ctx.TeamCoordinatorIDs) > 0:
+		case ctx.TeamAdminID != "" && len(ctx.TeamCoordinators) > 0:
 			b.WriteString("- Respond to @mentions from your coordinator, Team Admin, coordinator members, and global Admin\n")
 		case ctx.TeamAdminID != "":
 			b.WriteString("- Respond to @mentions from your coordinator, Team Admin, and global Admin\n")
-		case len(ctx.TeamCoordinatorIDs) > 0:
+		case len(ctx.TeamCoordinators) > 0:
 			b.WriteString("- Respond to @mentions from your coordinator, coordinator members, and global Admin\n")
 		default:
 			b.WriteString("- Respond to @mentions from your coordinator and global Admin\n")
@@ -140,29 +151,54 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 	return b.String()
 }
 
-func writeTeamCoordinators(b *strings.Builder, ids []string, adminID string) {
-	ids = uniqueCoordinationIDs(ids, adminID)
-	if len(ids) == 0 {
+// writeTeamAdmin renders the leader-view Team Admin line, preferring the
+// friendly display name with the Matrix ID in parentheses (mirrors the
+// TeamWorkers rendering); a bare ID keeps the legacy format.
+func writeTeamAdmin(b *strings.Builder, id, displayName string) {
+	if displayName != "" && displayName != id {
+		fmt.Fprintf(b, "- **Team Admin**: %s (%s) — can assign tasks and make decisions within the team\n", displayName, id)
+		return
+	}
+	fmt.Fprintf(b, "- **Team Admin**: %s — can assign tasks and make decisions within the team\n", id)
+}
+
+// writeTeamAdminWorkerView renders the worker-view Team Admin line (same
+// name-first policy as writeTeamAdmin).
+func writeTeamAdminWorkerView(b *strings.Builder, id, displayName string) {
+	if displayName != "" && displayName != id {
+		fmt.Fprintf(b, "- **Team Admin**: %s (%s) (has admin authority within this team)\n", displayName, id)
+		return
+	}
+	fmt.Fprintf(b, "- **Team Admin**: %s (has admin authority within this team)\n", id)
+}
+
+func writeTeamCoordinators(b *strings.Builder, members []TeamCoordinatorInfo, adminID string) {
+	members = uniqueCoordinationMembers(members, adminID)
+	if len(members) == 0 {
 		return
 	}
 	b.WriteString("- **Coordinator Members**:\n")
-	for _, id := range ids {
-		fmt.Fprintf(b, "  - %s — can assign tasks and make decisions within the team\n", id)
+	for _, m := range members {
+		if m.DisplayName != "" && m.DisplayName != m.MatrixUserID {
+			fmt.Fprintf(b, "  - %s (%s) — can assign tasks and make decisions within the team\n", m.DisplayName, m.MatrixUserID)
+		} else {
+			fmt.Fprintf(b, "  - %s — can assign tasks and make decisions within the team\n", m.MatrixUserID)
+		}
 	}
 }
 
-func uniqueCoordinationIDs(ids []string, exclude string) []string {
-	seen := make(map[string]struct{}, len(ids))
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" || id == exclude {
+func uniqueCoordinationMembers(members []TeamCoordinatorInfo, exclude string) []TeamCoordinatorInfo {
+	seen := make(map[string]struct{}, len(members))
+	out := make([]TeamCoordinatorInfo, 0, len(members))
+	for _, m := range members {
+		if m.MatrixUserID == "" || m.MatrixUserID == exclude {
 			continue
 		}
-		if _, ok := seen[id]; ok {
+		if _, ok := seen[m.MatrixUserID]; ok {
 			continue
 		}
-		seen[id] = struct{}{}
-		out = append(out, id)
+		seen[m.MatrixUserID] = struct{}{}
+		out = append(out, m)
 	}
 	return out
 }

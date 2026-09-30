@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -107,6 +108,9 @@ type teamAdminActor struct {
 	MatrixUserID string
 	Token        string
 	Username     string
+	// DisplayName is the admin's friendly name (spec.displayName, falling
+	// back to the Human CR name) for coordination-context rendering.
+	DisplayName string
 }
 
 func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -285,10 +289,15 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 	if token == "" {
 		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no Matrix token", key.Namespace, key.Name)
 	}
+	displayName := human.Spec.DisplayName
+	if displayName == "" {
+		displayName = human.Name
+	}
 	return teamAdminActor{
 		MatrixUserID: matrixUserID,
 		Token:        token,
 		Username:     identity.MatrixLocalpart,
+		DisplayName:  displayName,
 	}, nil
 }
 
@@ -307,12 +316,35 @@ func (r *TeamReconciler) deriveTeamWithResolvedIdentities(ctx context.Context, t
 			derived.Spec.Admin = &v1beta1.TeamAdminSpec{}
 		}
 		derived.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
+		if derived.Spec.Admin.DisplayName == "" && adminActor.DisplayName != "" {
+			derived.Spec.Admin.DisplayName = adminActor.DisplayName
+		}
 	}
 	r.appendAccessibleTeamHumans(ctx, derived)
 	for i := range derived.Spec.HumanMembers {
 		derived.Spec.HumanMembers[i].MatrixUserID = r.resolveHumanMemberMatrixUserID(ctx, t.Namespace, derived.Spec.HumanMembers[i])
+		derived.Spec.HumanMembers[i].DisplayName = r.resolveHumanMemberDisplayName(ctx, t.Namespace, derived.Spec.HumanMembers[i])
 	}
 	return derived
+}
+
+// resolveHumanMemberDisplayName returns the member's display name, preferring
+// the explicit spec value and falling back to the referenced Human CR's
+// spec.displayName. Empty stays empty — rendering then falls back to the bare
+// Matrix ID. Served from the controller-runtime object cache (same pattern as
+// resolveHumanMemberMatrixUserID), so no extra API traffic.
+func (r *TeamReconciler) resolveHumanMemberDisplayName(ctx context.Context, namespace string, member v1beta1.TeamMemberSpec) string {
+	if strings.TrimSpace(member.DisplayName) != "" {
+		return member.DisplayName
+	}
+	if strings.TrimSpace(member.Name) != "" {
+		var human v1beta1.Human
+		key := client.ObjectKey{Name: member.Name, Namespace: namespace}
+		if err := r.Get(ctx, key, &human); err == nil && human.Spec.DisplayName != "" {
+			return human.Spec.DisplayName
+		}
+	}
+	return member.DisplayName
 }
 
 func (r *TeamReconciler) appendAccessibleTeamHumans(ctx context.Context, t *v1beta1.Team) {
@@ -352,6 +384,7 @@ func (r *TeamReconciler) appendAccessibleTeamHumans(ctx context.Context, t *v1be
 			Name:         human.Name,
 			Role:         "coordinator",
 			MatrixUserID: matrixUserID,
+			DisplayName:  human.Spec.DisplayName,
 		})
 		seen[human.Name] = struct{}{}
 		seen[matrixUserID] = struct{}{}
@@ -655,17 +688,18 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 
 		// Leader coordination context
 		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
-			LeaderName:         leaderRuntimeName,
-			Role:               RoleTeamLeader.String(),
-			TeamName:           teamRuntimeName,
-			TeamRoomID:         rooms.TeamRoomID,
-			LeaderDMRoomID:     rooms.LeaderDMRoomID,
-			HeartbeatEvery:     t.Spec.HeartbeatEvery,
-			WorkerIdleTimeout:  "",
-			TeamWorkers:        teamWorkerEntries,
-			TeamAdminID:        teamAdminMatrixID(derivedTeam),
-			TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
-			LeaderSoul:         leaderMember.worker.Spec.Soul,
+			LeaderName:           leaderRuntimeName,
+			Role:                 RoleTeamLeader.String(),
+			TeamName:             teamRuntimeName,
+			TeamRoomID:           rooms.TeamRoomID,
+			LeaderDMRoomID:       rooms.LeaderDMRoomID,
+			HeartbeatEvery:       t.Spec.HeartbeatEvery,
+			WorkerIdleTimeout:    "",
+			TeamWorkers:          teamWorkerEntries,
+			TeamAdminID:          teamAdminMatrixID(derivedTeam),
+			TeamAdminDisplayName: teamAdminDisplayName(derivedTeam),
+			TeamCoordinators:     teamCoordinators(derivedTeam),
+			LeaderSoul:           leaderMember.worker.Spec.Soul,
 		}); err != nil {
 			logger.Error(err, "leader coordination context injection failed (non-fatal)")
 		}
@@ -691,11 +725,12 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
-			WorkerName:         rm.runtimeName,
-			TeamName:           teamRuntimeName,
-			TeamLeaderName:     leaderRuntimeName,
-			TeamAdminID:        teamAdminMatrixID(derivedTeam),
-			TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
+			WorkerName:           rm.runtimeName,
+			TeamName:             teamRuntimeName,
+			TeamLeaderName:       leaderRuntimeName,
+			TeamAdminID:          teamAdminMatrixID(derivedTeam),
+			TeamAdminDisplayName: teamAdminDisplayName(derivedTeam),
+			TeamCoordinators:     teamCoordinators(derivedTeam),
 		}); err != nil {
 			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rm.runtimeName)
 		}
@@ -1000,23 +1035,24 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
 		}
 		req := service.MemberRuntimeConfigDeployRequest{
-			Name:              member.ref.Name,
-			RuntimeName:       member.runtimeName,
-			Runtime:           runtime,
-			Role:              role.String(),
-			Generation:        member.worker.Generation,
-			Spec:              spec,
-			AIGatewayURL:      aiGatewayURL,
-			MatrixUserID:      member.worker.Status.MatrixUserID,
-			PersonalRoomID:    member.worker.Status.RoomID,
-			TeamName:          teamRuntimeName,
-			TeamRoomID:        rooms.TeamRoomID,
-			LeaderName:        leaderNameFact,
-			LeaderRuntimeName: leaderRuntimeName,
-			LeaderDMRoomID:    rooms.LeaderDMRoomID,
-			TeamAdminName:     teamAdminName(t),
-			TeamAdminMatrixID: teamAdminMatrixID(t),
-			TeamMembers:       roster,
+			Name:                 member.ref.Name,
+			RuntimeName:          member.runtimeName,
+			Runtime:              runtime,
+			Role:                 role.String(),
+			Generation:           member.worker.Generation,
+			Spec:                 spec,
+			AIGatewayURL:         aiGatewayURL,
+			MatrixUserID:         member.worker.Status.MatrixUserID,
+			PersonalRoomID:       member.worker.Status.RoomID,
+			TeamName:             teamRuntimeName,
+			TeamRoomID:           rooms.TeamRoomID,
+			LeaderName:           leaderNameFact,
+			LeaderRuntimeName:    leaderRuntimeName,
+			LeaderDMRoomID:       rooms.LeaderDMRoomID,
+			TeamAdminName:        teamAdminName(t),
+			TeamAdminMatrixID:    teamAdminMatrixID(t),
+			TeamAdminDisplayName: teamAdminDisplayName(t),
+			TeamMembers:          roster,
 		}
 		if deployMode == v1beta1.DeployModeEdge {
 			req.Runtime = runtimeRemoteManagedLocal
@@ -1070,10 +1106,15 @@ func runtimeConfigTeamMembers(t *v1beta1.Team, members []teamWorkerMember, leade
 		if role == "" {
 			role = "coordinator"
 		}
+		humanDisp := human.DisplayName
+		if humanDisp == "" {
+			humanDisp = human.Name
+		}
 		roster = append(roster, service.RuntimeConfigTeamMember{
 			Name:         human.Name,
 			Role:         role,
 			MatrixUserID: human.MatrixUserID,
+			DisplayName:  humanDisp,
 		})
 	}
 	return roster
@@ -1138,11 +1179,12 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	}
 	if !backend.IsManagedRuntime(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
-			WorkerName:         runtimeName,
-			TeamName:           "",
-			TeamLeaderName:     "",
-			TeamAdminID:        "",
-			TeamCoordinatorIDs: nil,
+			WorkerName:           runtimeName,
+			TeamName:             "",
+			TeamLeaderName:       "",
+			TeamAdminID:          "",
+			TeamAdminDisplayName: "",
+			TeamCoordinators:     nil,
 		}); err != nil {
 			logger.Error(err, "failed to revert worker coordination to standalone (non-fatal)", "worker", runtimeName)
 		}
@@ -1213,7 +1255,7 @@ func (r *TeamReconciler) teamChannelPolicy(t *v1beta1.Team, members []teamWorker
 
 	leaderRuntimeName := teamLeaderMember(members, leaderName).runtimeName
 	managerMatrixID := resolve("manager")
-	coordinatorIDs := teamCoordinatorIDs(t)
+	coordinatorIDs := teamCoordinatorIDs(teamCoordinators(t))
 
 	// Always include the system admin so the operator retains visibility.
 	var systemAdminID string
@@ -1674,10 +1716,15 @@ func (r *TeamReconciler) runtimeConfigTeamMembers(t *v1beta1.Team, desiredMember
 		if role == "" {
 			role = "coordinator"
 		}
+		humanDisp := human.DisplayName
+		if humanDisp == "" {
+			humanDisp = human.Name
+		}
 		roster = append(roster, service.RuntimeConfigTeamMember{
 			Name:         human.Name,
 			Role:         role,
 			MatrixUserID: human.MatrixUserID,
+			DisplayName:  humanDisp,
 		})
 	}
 	return roster
@@ -1697,10 +1744,25 @@ func teamAdminName(t *v1beta1.Team) string {
 	return t.Spec.Admin.Name
 }
 
-func teamCoordinatorIDs(t *v1beta1.Team) []string {
-	ids := make([]string, 0, 1+len(t.Spec.HumanMembers))
+// teamAdminDisplayName returns the admin's friendly name for coordination
+// rendering: spec.displayName first, then the admin spec name (Human CR name).
+func teamAdminDisplayName(t *v1beta1.Team) string {
+	if t.Spec.Admin == nil {
+		return ""
+	}
+	if t.Spec.Admin.DisplayName != "" {
+		return t.Spec.Admin.DisplayName
+	}
+	return t.Spec.Admin.Name
+}
+
+func teamCoordinators(t *v1beta1.Team) []agentconfig.TeamCoordinatorInfo {
+	members := make([]agentconfig.TeamCoordinatorInfo, 0, 1+len(t.Spec.HumanMembers))
 	if adminID := teamAdminMatrixID(t); adminID != "" {
-		ids = append(ids, adminID)
+		members = append(members, agentconfig.TeamCoordinatorInfo{
+			MatrixUserID: adminID,
+			DisplayName:  teamAdminDisplayName(t),
+		})
 	}
 	for _, member := range t.Spec.HumanMembers {
 		if !teamMemberIsCoordinator(member) {
@@ -1708,12 +1770,43 @@ func teamCoordinatorIDs(t *v1beta1.Team) []string {
 		}
 		switch {
 		case member.MatrixUserID != "":
-			ids = append(ids, member.MatrixUserID)
+			members = append(members, agentconfig.TeamCoordinatorInfo{
+				MatrixUserID: member.MatrixUserID,
+				DisplayName:  member.DisplayName,
+			})
 		case member.Name != "":
-			ids = append(ids, member.Name)
+			members = append(members, agentconfig.TeamCoordinatorInfo{
+				MatrixUserID: member.Name,
+			})
 		}
 	}
-	return uniqueTeamStrings(ids)
+	return uniqueTeamCoordinatorInfos(members)
+}
+
+// teamCoordinatorIDs extracts the bare Matrix IDs from coordinator infos
+// (channel-policy allow lists and similar ID-only consumers).
+func teamCoordinatorIDs(members []agentconfig.TeamCoordinatorInfo) []string {
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.MatrixUserID)
+	}
+	return ids
+}
+
+func uniqueTeamCoordinatorInfos(values []agentconfig.TeamCoordinatorInfo) []agentconfig.TeamCoordinatorInfo {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]agentconfig.TeamCoordinatorInfo, 0, len(values))
+	for _, v := range values {
+		if v.MatrixUserID == "" {
+			continue
+		}
+		if _, ok := seen[v.MatrixUserID]; ok {
+			continue
+		}
+		seen[v.MatrixUserID] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func teamMemberIsCoordinator(member v1beta1.TeamMemberSpec) bool {

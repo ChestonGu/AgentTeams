@@ -407,11 +407,11 @@ type DingTalkChannelSpec struct {
 }
 
 type WorkerStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	SpecHash           string              `json:"specHash,omitempty"`
-	Phase              string              `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
-	MatrixUserID       string              `json:"matrixUserID,omitempty"`
-	RoomID             string              `json:"roomID,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	SpecHash           string `json:"specHash,omitempty"`
+	Phase              string `json:"phase,omitempty"` // Pending/Running/Sleeping/Failed
+	MatrixUserID       string `json:"matrixUserID,omitempty"`
+	RoomID             string `json:"roomID,omitempty"`
 	// TeamName is the effective Team identity this worker belongs to
 	// (controller-resolved from Team workerMembers; empty for standalone
 	// workers). Surfaced for display; not a scheduling or config input.
@@ -423,10 +423,10 @@ type WorkerStatus struct {
 	// listed here — their names follow the fixed "<name>-cimicode" rule.
 	PodName        string              `json:"podName,omitempty"`
 	ContainerState string              `json:"containerState,omitempty"`
-	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
-	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	LastHeartbeat  string              `json:"lastHeartbeat,omitempty"`
+	LastActiveAt   string              `json:"lastActiveAt,omitempty"`
+	Message        string              `json:"message,omitempty"`
+	ExposedPorts   []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// DisplayNameSyncedGeneration records the Worker generation whose
 	// spec.displayName was last synced to the Matrix profile. Mirrors the
@@ -521,12 +521,18 @@ func (s TeamSpec) EffectiveTeamName(metadataName string) string {
 type TeamAdminSpec struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
+	// DisplayName is the friendly name shown in coordination context (falls
+	// back to the referenced Human CR's spec.displayName when unset here).
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type TeamMemberSpec struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
 	Role         string `json:"role,omitempty"` // coordinator (default)
+	// DisplayName is the friendly name shown in coordination context (falls
+	// back to the referenced Human CR's spec.displayName when unset here).
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type TeamStatus struct {

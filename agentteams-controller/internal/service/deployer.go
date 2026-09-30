@@ -48,8 +48,9 @@ type WorkerDeployRequest struct {
 	// config/mcporter.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
 
-	TeamAdminMatrixID  string
-	TeamCoordinatorIDs []string
+	TeamAdminMatrixID    string
+	TeamAdminDisplayName string
+	TeamCoordinatorIDs   []agentconfig.TeamCoordinatorInfo
 
 	// Heartbeat config from Team CR leader spec (nil for non-leader workers)
 	Heartbeat *agentconfig.HeartbeatConfig
@@ -103,14 +104,15 @@ type MemberRuntimeConfigDeployRequest struct {
 	SkillRegistryURL      string
 	SkillRegistryAuthType string
 
-	TeamName          string
-	TeamRoomID        string
-	LeaderName        string
-	LeaderRuntimeName string
-	LeaderDMRoomID    string
-	TeamAdminName     string
-	TeamAdminMatrixID string
-	TeamMembers       []RuntimeConfigTeamMember
+	TeamName             string
+	TeamRoomID           string
+	LeaderName           string
+	LeaderRuntimeName    string
+	LeaderDMRoomID       string
+	TeamAdminName        string
+	TeamAdminMatrixID    string
+	TeamAdminDisplayName string
+	TeamMembers          []RuntimeConfigTeamMember
 
 	// DropTeamContext forces a standalone runtime.yaml even when an older
 	// team-scoped runtime.yaml exists for the same runtime name.
@@ -135,17 +137,18 @@ type RuntimeConfigTeamMember struct {
 
 // CoordinationDeployRequest describes coordination context injection for a team leader.
 type CoordinationDeployRequest struct {
-	LeaderName         string
-	Role               string
-	TeamName           string
-	TeamRoomID         string
-	LeaderDMRoomID     string
-	HeartbeatEvery     string
-	WorkerIdleTimeout  string
-	TeamWorkers        []TeamWorkerEntry
-	TeamAdminID        string
-	TeamCoordinatorIDs []string
-	LeaderSoul         string // from the referenced leader Worker's spec.soul; used as seed if non-empty
+	LeaderName           string
+	Role                 string
+	TeamName             string
+	TeamRoomID           string
+	LeaderDMRoomID       string
+	HeartbeatEvery       string
+	WorkerIdleTimeout    string
+	TeamWorkers          []TeamWorkerEntry
+	TeamAdminID          string
+	TeamAdminDisplayName string
+	TeamCoordinators     []agentconfig.TeamCoordinatorInfo
+	LeaderSoul           string // from the referenced leader Worker's spec.soul; used as seed if non-empty
 }
 
 // TeamWorkerEntry carries worker name + room ID for coordination context rendering.
@@ -163,11 +166,12 @@ type TeamWorkerEntry struct {
 
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
 type WorkerCoordinationRequest struct {
-	WorkerName         string
-	TeamName           string
-	TeamLeaderName     string
-	TeamAdminID        string
-	TeamCoordinatorIDs []string
+	WorkerName           string
+	TeamName             string
+	TeamLeaderName       string
+	TeamAdminID          string
+	TeamAdminDisplayName string
+	TeamCoordinators     []agentconfig.TeamCoordinatorInfo
 }
 
 // InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
@@ -477,7 +481,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
 	phaseStart = time.Now()
-	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamAdminDisplayName, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
 	if req.Role == "team_leader" && req.TeamName != "" && req.TeamRoomID != "" {
@@ -495,16 +499,17 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 			})
 		}
 		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
-			LeaderName:         req.Name,
-			Role:               req.Role,
-			TeamName:           req.TeamName,
-			TeamRoomID:         req.TeamRoomID,
-			LeaderDMRoomID:     req.LeaderDMRoomID,
-			HeartbeatEvery:     heartbeatEvery(req.Heartbeat),
-			TeamWorkers:        teamWorkers,
-			TeamAdminID:        req.TeamAdminMatrixID,
-			TeamCoordinatorIDs: req.TeamCoordinatorIDs,
-			LeaderSoul:         req.Spec.Soul,
+			LeaderName:           req.Name,
+			Role:                 req.Role,
+			TeamName:             req.TeamName,
+			TeamRoomID:           req.TeamRoomID,
+			LeaderDMRoomID:       req.LeaderDMRoomID,
+			HeartbeatEvery:       heartbeatEvery(req.Heartbeat),
+			TeamWorkers:          teamWorkers,
+			TeamAdminID:          req.TeamAdminMatrixID,
+			TeamAdminDisplayName: req.TeamAdminDisplayName,
+			TeamCoordinators:     req.TeamCoordinatorIDs,
+			LeaderSoul:           req.Spec.Soul,
 		}); err != nil {
 			logger.Error(err, "leader coordination context inject failed (non-fatal)", "worker", req.Name)
 		}
@@ -667,17 +672,18 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
-		WorkerName:         req.LeaderName,
-		Role:               req.Role,
-		MatrixDomain:       d.matrixDomain,
-		TeamName:           req.TeamName,
-		TeamRoomID:         req.TeamRoomID,
-		LeaderDMRoomID:     req.LeaderDMRoomID,
-		HeartbeatEvery:     req.HeartbeatEvery,
-		WorkerIdleTimeout:  req.WorkerIdleTimeout,
-		TeamWorkers:        teamWorkers,
-		TeamAdminID:        req.TeamAdminID,
-		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+		WorkerName:           req.LeaderName,
+		Role:                 req.Role,
+		MatrixDomain:         d.matrixDomain,
+		TeamName:             req.TeamName,
+		TeamRoomID:           req.TeamRoomID,
+		LeaderDMRoomID:       req.LeaderDMRoomID,
+		HeartbeatEvery:       req.HeartbeatEvery,
+		WorkerIdleTimeout:    req.WorkerIdleTimeout,
+		TeamWorkers:          teamWorkers,
+		TeamAdminID:          req.TeamAdminID,
+		TeamAdminDisplayName: req.TeamAdminDisplayName,
+		TeamCoordinators:     req.TeamCoordinators,
 	}
 
 	existing, _ := d.oss.GetObject(ctx, leaderAgentPrefix+"/AGENTS.md")
@@ -739,13 +745,14 @@ func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoord
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 	coordCtx := agentconfig.CoordinationContext{
-		WorkerName:         req.WorkerName,
-		Role:               "worker",
-		MatrixDomain:       d.matrixDomain,
-		TeamName:           req.TeamName,
-		TeamLeaderName:     req.TeamLeaderName,
-		TeamAdminID:        req.TeamAdminID,
-		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+		WorkerName:           req.WorkerName,
+		Role:                 "worker",
+		MatrixDomain:         d.matrixDomain,
+		TeamName:             req.TeamName,
+		TeamLeaderName:       req.TeamLeaderName,
+		TeamAdminID:          req.TeamAdminID,
+		TeamAdminDisplayName: req.TeamAdminDisplayName,
+		TeamCoordinators:     req.TeamCoordinators,
 	}
 	injected := agentconfig.InjectCoordinationContext(string(existing), coordCtx)
 	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(injected))
@@ -787,7 +794,7 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	role := "team_leader"
-	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", nil, ""); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", "", nil, ""); err != nil {
 		return err
 	}
 	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
@@ -1335,7 +1342,7 @@ func redactPackageURI(raw string) string {
 
 // prepareAndPushAgentsMD merges the builtin AGENTS.md section and injects
 // coordination context in a single OSS read-write cycle.
-func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID string, teamCoordinatorIDs []string, inlineAgents string) error {
+func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string) error {
 	logger := log.FromContext(ctx)
 	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), "AGENTS.md")
 	builtinContent, err := os.ReadFile(builtinPath)
@@ -1388,12 +1395,13 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 			return nil
 		}
 		coordCtx := agentconfig.CoordinationContext{
-			WorkerName:         workerName,
-			MatrixDomain:       d.matrixDomain,
-			TeamName:           teamName,
-			TeamLeaderName:     teamLeaderName,
-			TeamAdminID:        teamAdminMatrixID,
-			TeamCoordinatorIDs: teamCoordinatorIDs,
+			WorkerName:           workerName,
+			MatrixDomain:         d.matrixDomain,
+			TeamName:             teamName,
+			TeamLeaderName:       teamLeaderName,
+			TeamAdminID:          teamAdminMatrixID,
+			TeamAdminDisplayName: teamAdminDisplayName,
+			TeamCoordinators:     teamCoordinators,
 		}
 		if teamLeaderName != "" {
 			coordCtx.Role = "worker"
@@ -1401,7 +1409,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 			coordCtx.Role = "standalone"
 		}
 		content = agentconfig.InjectCoordinationContext(content, coordCtx)
-		logger.Info("AGENTS.md coordination context injected", "worker", workerName, "role", coordCtx.Role, "team", teamName, "teamLeader", teamLeaderName, "coordinatorCount", len(teamCoordinatorIDs), "resultBytes", len(content))
+		logger.Info("AGENTS.md coordination context injected", "worker", workerName, "role", coordCtx.Role, "team", teamName, "teamLeader", teamLeaderName, "coordinatorCount", len(teamCoordinators), "resultBytes", len(content))
 	} else {
 		logger.Info("AGENTS.md coordination context skipped", "worker", workerName, "role", role, "reason", "team leader context is injected after room IDs are known")
 	}

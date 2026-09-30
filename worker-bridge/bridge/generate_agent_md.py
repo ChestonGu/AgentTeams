@@ -121,15 +121,16 @@ def parse_runtime_config(text):
     memberRuntimeConfigDocument), so it is loaded with yaml.safe_load and
     read as plain dicts/lists — no line matching. Fields consumed:
     member.name/runtimeName/matrixUserId/role, team.name,
-    team.admin.matrixUserId, team.members[].matrixUserId/role,
-    storage.sharedPrefix; everything else (credentials, desired, ...) is
-    ignored by simply not being read.
+    team.admin.matrixUserId/displayName, team.members[].matrixUserId/
+    role/displayName, storage.sharedPrefix; everything else (credentials,
+    desired, ...) is ignored by simply not being read.
 
     Returns:
       {
         'worker_name', 'matrix_id', 'domain', 'role',   # member.*
-        'team_name', 'leader_id', 'admin_id',            # team.*
-        'coordinators': [mxid, ...],                     # team.members[role=coordinator]
+        'team_name', 'leader_id', 'admin_id',           # team.*
+        'admin_display',                                # team.admin.displayName
+        'coordinators': [{matrix_user_id, display_name}, ...],  # members[role=coordinator]
         'roster': [{name, matrix_user_id, role,          # team.members[] (Team Roster)
                     display_name, description}, ...],
         'team': bool,                                    # team section present
@@ -189,6 +190,7 @@ def parse_runtime_config(text):
 
     admin = team.get("admin") or {}
     admin_id = admin.get("matrixUserId") or ""
+    admin_display = admin.get("displayName") or ""
 
     members = team.get("members") or []
     if not isinstance(members, list):
@@ -207,7 +209,10 @@ def parse_runtime_config(text):
         elif item_role == "coordinator" and mxid \
                 and mxid != admin_id and mxid not in seen:
             seen.add(mxid)
-            coordinators.append(mxid)
+            coordinators.append({
+                "matrix_user_id": mxid,
+                "display_name": item.get("displayName") or "",
+            })
         # Team Roster: every member entry (workers, leader, humans) with the
         # fields the controller projects (RuntimeConfigTeamMember). Members
         # whose Matrix identity has not landed yet keep name/role — the
@@ -233,6 +238,7 @@ def parse_runtime_config(text):
         "team_name": team.get("name") or "",
         "leader_id": leader_id,
         "admin_id": admin_id,
+        "admin_display": admin_display,
         "coordinators": coordinators,
         "roster": roster,
         "team": has_team,
@@ -272,6 +278,15 @@ def _roster_lines(cfg):
     return lines
 
 
+def _named_mxid(display, mxid):
+    """``名 (mxid)`` when a distinct display name is known, bare ``mxid``
+    otherwise — the same fallback semantics as coordination.go
+    (writeTeamAdmin/writeTeamCoordinators) and _roster_lines."""
+    if display and display != mxid:
+        return f"{display} ({mxid})"
+    return mxid
+
+
 def render_coordination(cfg):
     """The {{COORDINATION}} payload: a Coordination block equivalent to the
     controller's InjectCoordinationContext output for copaw AGENTS.md
@@ -288,12 +303,14 @@ def render_coordination(cfg):
     lines.append(f"- **Coordinator**: {cfg['leader_id']} "
                  f"(Team Leader of {cfg['team_name']})")
     if cfg["admin_id"]:
-        lines.append(f"- **Team Admin**: {cfg['admin_id']} "
+        lines.append(f"- **Team Admin**: "
+                     f"{_named_mxid(cfg['admin_display'], cfg['admin_id'])} "
                      "(has admin authority within this team)")
     if cfg["coordinators"]:
         lines.append("- **Coordinator Members**:")
-        for mxid in cfg["coordinators"]:
-            lines.append(f"  - {mxid} — can assign tasks and make "
+        for coord in cfg["coordinators"]:
+            lines.append(f"  - {_named_mxid(coord['display_name'], coord['matrix_user_id'])} "
+                         "— can assign tasks and make "
                          "decisions within the team")
     roster = _roster_lines(cfg)
     if roster:

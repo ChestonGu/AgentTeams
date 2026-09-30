@@ -104,6 +104,9 @@ spec:
                     matrixUserId:
                       type: string
                       description: "Matrix user ID (e.g. @john:domain)"
+                    displayName:
+                      type: string
+                      description: "Friendly name shown in coordination context (falls back to the referenced Human CR's spec.displayName)"
                 humanMembers:
                   type: array
                   description: "Additional human members of this Team. In this version, role=coordinator joins the Team Room and can assign work there like the Team admin."
@@ -121,6 +124,9 @@ spec:
                         type: string
                         enum: [coordinator]
                         description: "Human member role. coordinator can @mention the leader/workers in the Team Room; Leader DM remains limited to the Team admin and leader."
+                      displayName:
+                        type: string
+                        description: "Friendly name shown in coordination context (falls back to the referenced Human CR's spec.displayName)"
             status:
               type: object
               properties:

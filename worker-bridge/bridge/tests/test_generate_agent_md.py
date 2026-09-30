@@ -157,7 +157,10 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(cfg["team_name"], "t-8a3f2c")
         self.assertEqual(cfg["leader_id"], "@t-8a3f2c-leader:example.org")
         self.assertEqual(cfg["admin_id"], "@u1234:example.org")
-        self.assertEqual(cfg["coordinators"], ["@u5678:example.org"])
+        self.assertEqual(cfg["admin_display"], "")
+        self.assertEqual(cfg["coordinators"],
+                         [{"matrix_user_id": "@u5678:example.org",
+                           "display_name": ""}])
         self.assertTrue(cfg["team"])
         self.assertEqual(cfg["storage_prefix"], "teams/t-8a3f2c/shared")
         # Team Roster projection: every member entry with the fields the
@@ -288,8 +291,41 @@ class ParserTest(unittest.TestCase):
                 "    role: coordinator\n")
         cfg = gen.parse_runtime_config(text)
         self.assertEqual(cfg["coordinators"],
-                         ["@c1:example.org", "@c2:example.org"])
+                         [{"matrix_user_id": "@c1:example.org",
+                           "display_name": ""},
+                          {"matrix_user_id": "@c2:example.org",
+                           "display_name": ""}])
         self.assertEqual(cfg["admin_id"], "@adm:example.org")
+        self.assertEqual(cfg["admin_display"], "")
+
+    def test_admin_and_coordinator_display_names(self):
+        # displayName on team.admin and coordinator members renders as
+        # "名 (mxid)"; missing displayName keeps the legacy bare mxid
+        text = ("member:\n"
+                "  name: w1\n"
+                "  matrixUserId: '@w1:example.org'\n"
+                "team:\n"
+                "  name: t1\n"
+                "  admin:\n"
+                "    matrixUserId: '@adm:example.org'\n"
+                "    displayName: Alice\n"
+                "  members:\n"
+                "  - matrixUserId: '@l1:example.org'\n"
+                "    role: team_leader\n"
+                "  - matrixUserId: '@bob:example.org'\n"
+                "    role: coordinator\n"
+                "    displayName: Bob\n"
+                "  - matrixUserId: '@carol:example.org'\n"
+                "    role: coordinator\n")
+        cfg = gen.parse_runtime_config(text)
+        self.assertEqual(cfg["admin_display"], "Alice")
+        block = gen.render_coordination(cfg)
+        self.assertIn("- **Team Admin**: Alice (@adm:example.org) "
+                      "(has admin authority within this team)", block)
+        self.assertIn("  - Bob (@bob:example.org) — can assign tasks and "
+                      "make decisions within the team", block)
+        self.assertIn("  - @carol:example.org — can assign tasks and "
+                      "make decisions within the team", block)
 
     def test_non_dict_member_entries_ignored(self):
         cfg = gen.parse_runtime_config(
@@ -338,12 +374,14 @@ class CoordinationTest(unittest.TestCase):
             "through your Team Leader",
         ])
 
-    def _worker_cfg(self, admin_id="", coordinators=None, roster=None):
+    def _worker_cfg(self, admin_id="", admin_display="",
+                    coordinators=None, roster=None):
         return {
             "worker_name": "w1", "matrix_id": "@w1:example.org",
             "domain": "example.org", "role": "worker",
             "team_name": "t1", "leader_id": "@l1:example.org",
             "admin_id": admin_id,
+            "admin_display": admin_display,
             "coordinators": coordinators or [],
             "roster": roster or [],
             "team": True, "storage_prefix": "teams/t1/shared",
@@ -387,13 +425,13 @@ class CoordinationTest(unittest.TestCase):
             "- Respond to @mentions from your coordinator, Team Admin, "
             "and global Admin", admin_only)
         coords_only = gen.render_coordination(
-            self._worker_cfg(coordinators=["@c1:example.org"]))
+            self._worker_cfg(coordinators=[{"matrix_user_id": "@c1:example.org", "display_name": ""}]))
         self.assertIn(
             "- Respond to @mentions from your coordinator, coordinator "
             "members, and global Admin", coords_only)
         both = gen.render_coordination(
             self._worker_cfg(admin_id="@adm:example.org",
-                             coordinators=["@c1:example.org"]))
+                             coordinators=[{"matrix_user_id": "@c1:example.org", "display_name": ""}]))
         self.assertIn(
             "- Respond to @mentions from your coordinator, Team Admin, "
             "coordinator members, and global Admin", both)
@@ -406,8 +444,8 @@ class CoordinationTest(unittest.TestCase):
 
     def test_multiple_coordinator_members(self):
         block = gen.render_coordination(
-            self._worker_cfg(coordinators=["@c1:example.org",
-                                           "@c2:example.org"]))
+            self._worker_cfg(coordinators=[{"matrix_user_id": "@c1:example.org", "display_name": ""},
+                                           {"matrix_user_id": "@c2:example.org", "display_name": ""}]))
         self.assertEqual(
             [ln for ln in block.split("\n") if ln.startswith("  - ")],
             ["  - @c1:example.org — can assign tasks and make decisions "

@@ -53,6 +53,9 @@ type memberRuntimeConfigTeam struct {
 type memberRuntimeConfigTeamAdmin struct {
 	Name         string `json:"name,omitempty"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
+	// DisplayName lets roster consumers (bridge agent.md Team Admin line)
+	// render the admin by friendly name instead of a bare Matrix ID.
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type memberRuntimeConfigMember struct {
@@ -572,6 +575,7 @@ func applyRuntimeTeamContext(doc *memberRuntimeConfigDocument, req MemberRuntime
 		doc.Team.Admin = &memberRuntimeConfigTeamAdmin{
 			Name:         req.TeamAdminName,
 			MatrixUserID: req.TeamAdminMatrixID,
+			DisplayName:  req.TeamAdminDisplayName,
 		}
 	}
 	if req.TeamName != "" {
