@@ -1082,6 +1082,118 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 	}
 }
 
+// TestReconcileTeamManagerHygieneKickFailureIsNonFatal pins the parity with
+// WorkerReconciler.reconcileManagerAccess: removing the Manager from a team
+// worker's personal room is a hygiene operation, so a power-level 403 (worker
+// rooms created before the Manager/admin power-level split grant both 100 —
+// an equal cannot kick an equal) must degrade to the Manager self-leave
+// fallback instead of failing the whole Team pass. The pre-fix behavior
+// flashed Phase=Failed with "remove Manager from Worker ... personal room"
+// on first reconcile and relied on the Worker reconciler cleaning the room
+// during the backoff window for the Team to converge on retry (observed
+// in-cluster as "Failed for a while, then Active" on team creation).
+func TestReconcileTeamManagerHygieneKickFailureIsNonFatal(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name           string
+		selfLeaveErr   error
+		wantSelfLeaves []string
+	}{
+		{
+			name:           "kick 403 falls back to manager self-leave",
+			selfLeaveErr:   nil,
+			wantSelfLeaves: []string{"!room-dev:matrix.local"},
+		},
+		{
+			name:           "both kick and self-leave fail, still non-fatal",
+			selfLeaveErr:   errors.New("manager access token unavailable"),
+			wantSelfLeaves: []string{"!room-dev:matrix.local"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			managerConfig, _ := newTestManagerConfig(t)
+
+			leaderWorker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+				Spec:       v1beta1.WorkerSpec{Model: "qwen", Runtime: "copaw"},
+				Status: v1beta1.WorkerStatus{
+					Phase:        "Running",
+					MatrixUserID: "@lead:matrix.local",
+					RoomID:       "!room-lead:matrix.local",
+				},
+			}
+			// Stand-in for a pre-power-level-split worker room: Manager sits in
+			// the personal room at power 100 and the admin kick 403s.
+			devWorker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+				Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+				Status: v1beta1.WorkerStatus{
+					Phase:        "Running",
+					MatrixUserID: "@dev:matrix.local",
+					RoomID:       "!room-dev:matrix.local",
+				},
+			}
+			team := &v1beta1.Team{
+				ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+				Spec: v1beta1.TeamSpec{
+					WorkerMembers: []v1beta1.TeamWorkerRef{
+						{Name: "lead", Role: "team_leader"},
+						{Name: "dev"},
+					},
+				},
+			}
+
+			scheme := runtime.NewScheme()
+			if err := v1beta1.AddToScheme(scheme); err != nil {
+				t.Fatalf("register scheme: %v", err)
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), devWorker.DeepCopy()).
+				WithStatusSubresource(&v1beta1.Team{}).
+				Build()
+
+			deployer := mocks.NewMockDeployer()
+			provisioner := mocks.NewMockProvisioner()
+			provisioner.MatrixUserIDFn = func(name string) string {
+				return "@" + name + ":matrix.local"
+			}
+			provisioner.ForceLeaveRoomFn = func(_ context.Context, userID, roomID string) error {
+				return errors.New("kick @manager:matrix.local: HTTP 403 M_FORBIDDEN: You cannot kick user @manager")
+			}
+			provisioner.LeaveManagerRoomFn = func(_ context.Context, roomID string) error {
+				return tc.selfLeaveErr
+			}
+			r := &TeamReconciler{
+				Client:        c,
+				Provisioner:   provisioner,
+				Deployer:      deployer,
+				ManagerConfig: managerConfig,
+			}
+
+			patchBase := client.MergeFrom(team.DeepCopy())
+			if _, err := r.reconcileTeam(ctx, team, patchBase); err != nil {
+				t.Fatalf("reconcileTeam: %v (hygiene kick failure must be non-fatal)", err)
+			}
+			if team.Status.Phase == "Failed" {
+				t.Fatalf("Phase=Failed with message=%q, want the pass to succeed", team.Status.Message)
+			}
+			if team.Status.ConsecutiveFailures != 0 {
+				t.Fatalf("ConsecutiveFailures=%d, want 0", team.Status.ConsecutiveFailures)
+			}
+			if got := provisioner.Calls.LeaveManagerRoom; len(got) != len(tc.wantSelfLeaves) || (len(got) > 0 && got[0] != tc.wantSelfLeaves[0]) {
+				t.Fatalf("LeaveManagerRoom calls=%v, want %v", got, tc.wantSelfLeaves)
+			}
+			for _, call := range provisioner.Calls.ForceLeaveRoom {
+				if call.UserID != "@manager:matrix.local" {
+					t.Fatalf("ForceLeaveRoom userID=%q, want manager", call.UserID)
+				}
+			}
+		})
+	}
+}
+
 func TestDetachTeamMemberRevokesPersistedTeamStorageAccess(t *testing.T) {
 	ctx := context.Background()
 	worker := &v1beta1.Worker{

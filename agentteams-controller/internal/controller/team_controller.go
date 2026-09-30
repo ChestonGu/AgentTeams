@@ -756,8 +756,20 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 						managerMatrixID,
 						rm.worker.Status.RoomID,
 					); err != nil {
-						return r.failTeam(ctx, t, patchBase,
-							fmt.Sprintf("remove Manager from Worker %q personal room: %v", rm.ref.Name, err))
+						// Same semantics as WorkerReconciler.reconcileManagerAccess:
+						// a hygiene kick failing must not fail the whole Team
+						// pass. Worker rooms created before the Manager/admin
+						// power-level split grant both 100, so the admin kick
+						// (and the Synapse make_room_admin escalation) 403s —
+						// fall back to the Manager leaving with its own token,
+						// which has no power-level dependency. Retry on the
+						// next reconcile converges the room either way.
+						logger.Error(err, "failed to remove Manager from team worker personal room (non-fatal)",
+							"worker", rm.ref.Name, "roomID", rm.worker.Status.RoomID)
+						if leaveErr := r.Provisioner.LeaveManagerRoom(ctx, rm.worker.Status.RoomID); leaveErr != nil {
+							logger.Error(leaveErr, "manager self-leave fallback also failed (non-fatal)",
+								"worker", rm.ref.Name, "roomID", rm.worker.Status.RoomID)
+						}
 					}
 				}
 				if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(rm.runtimeName), false); err != nil {
