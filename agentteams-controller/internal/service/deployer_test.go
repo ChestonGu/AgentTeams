@@ -1437,3 +1437,91 @@ func TestDeployMemberRuntimeConfigOmitsBridgeSectionForQwenPaw(t *testing.T) {
 		t.Fatalf("bridge section projected for runtime=qwenpaw: %#v", bridge)
 	}
 }
+
+func TestInjectWorkerCoordinationDetachResetsStandalone(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	if err := os.MkdirAll(filepath.Join(agentFSDir, "w3"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	// Seed a team-scoped AGENTS.md as the attach path would have produced.
+	if err := store.PutObject(ctx, "agents/w3/AGENTS.md", []byte(
+		"# w3\n\n<!-- agentteams-team-context-start -->\n## Coordination\n\n"+
+			"- **Coordinator**: @lead:matrix.local (Team Leader of demo-team)\n"+
+			"<!-- agentteams-team-context-end -->\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig:  agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:          store,
+		AgentFSDir:   agentFSDir,
+		MatrixDomain: "matrix.local",
+	})
+
+	// Detach path: TeamReconciler calls this with empty TeamLeaderName/TeamName.
+	if err := deployer.InjectWorkerCoordination(ctx, WorkerCoordinationRequest{
+		WorkerName:      "w3",
+		SelfDisplayName: "钱审校",
+	}); err != nil {
+		t.Fatalf("InjectWorkerCoordination failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/w3/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "- **Coordinator**: @manager:matrix.local (Manager)") {
+		t.Fatalf("detach should render the standalone Manager coordinator line:\n%s", text)
+	}
+	for _, stale := range []string{"(Team Leader of )", "@:matrix.local", "Team Leader of demo-team"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("detach AGENTS.md still contains stale team context %q:\n%s", stale, text)
+		}
+	}
+	if !strings.Contains(text, "**Your display name**: 钱审校") {
+		t.Fatalf("detach should keep the self display name line:\n%s", text)
+	}
+}
+
+func TestInjectWorkerCoordinationAttachedKeepsTeamLeader(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	if err := os.MkdirAll(filepath.Join(agentFSDir, "w3"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig:  agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:          store,
+		AgentFSDir:   agentFSDir,
+		MatrixDomain: "matrix.local",
+	})
+
+	if err := deployer.InjectWorkerCoordination(ctx, WorkerCoordinationRequest{
+		WorkerName:      "w3",
+		SelfDisplayName: "钱审校",
+		TeamName:        "demo-team",
+		TeamLeaderName:  "lead",
+	}); err != nil {
+		t.Fatalf("InjectWorkerCoordination failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/w3/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "- **Coordinator**: @lead:matrix.local (Team Leader of demo-team)") {
+		t.Fatalf("attach should render the Team Leader coordinator line:\n%s", text)
+	}
+	if strings.Contains(text, "@manager:matrix.local (Manager)") {
+		t.Fatalf("attach must not fall back to standalone Manager line:\n%s", text)
+	}
+}

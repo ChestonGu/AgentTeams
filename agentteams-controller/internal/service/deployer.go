@@ -748,14 +748,21 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 
 // InjectWorkerCoordination writes team coordination context into a team member
 // worker's AGENTS.md. This is the worker-side counterpart to
-// InjectCoordinationContext, which targets the leader.
+// InjectCoordinationContext, which targets the leader. The detach path calls
+// this with an empty TeamLeaderName to reset the worker to standalone — role
+// is derived, not hardcoded, so that reset renders the @manager Coordinator
+// line instead of a malformed "@:domain (Team Leader of )" worker line.
 func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+	role := "worker"
+	if req.TeamLeaderName == "" {
+		role = "standalone"
+	}
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.WorkerName,
 		SelfDisplayName:      req.SelfDisplayName,
-		Role:                 "worker",
+		Role:                 role,
 		MatrixDomain:         d.matrixDomain,
 		TeamName:             req.TeamName,
 		TeamLeaderName:       req.TeamLeaderName,
