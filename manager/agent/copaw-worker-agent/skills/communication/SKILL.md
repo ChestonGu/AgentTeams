@@ -17,6 +17,12 @@ Your coordinator is the sender of the current task assignment message. Use that 
 
 Use a full Matrix ID when the recipient must act.
 
+### Display names in prose
+
+Every team member has a human-friendly display name — the preferred name shown first in the Coordination block / Team Workers list (for example 数据分析, 拆解主管, 压测队长1). When you write about a person in prose — greetings, tables, status reports, self-introductions, task assignments — use that display name, not the bare worker ID ("@数据分析 请开始统计" reads human; "full1-w1 请开始统计" reads as machine output). This applies to how you introduce yourself too.
+
+Matrix IDs still belong inside @mentions (the `@name:domain` prefix that carries the notification); the text around a mention stays display-name prose.
+
 Mention your coordinator only for:
 
 - Task completion: `@coordinator:domain TASK_COMPLETED: <summary>`

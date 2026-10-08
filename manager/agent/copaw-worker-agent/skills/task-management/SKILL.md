@@ -84,6 +84,8 @@ Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` 
    @coordinator:domain TASK_COMPLETED: {task-id} - <short outcome>. Result: shared/tasks/{task-id}/result.md
    ```
 
+   `@coordinator:domain` is the **Team Leader** listed in the Coordination block of your AGENTS.md — resolve it to that exact Matrix ID and mention it in the `m.mentions` field of your message. Never @mention `@manager` or anyone not listed in your Coordination block: they are not in the Team Room and will never receive the notification, while your Team Leader's validation gate waits on it.
+
    Do not look up your Worker profile room or private room as a fallback. The task directory is the source of truth if you ever need to verify the assignment room.
 
 ## Blocked
