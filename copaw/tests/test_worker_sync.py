@@ -94,3 +94,37 @@ def test_cat_non_missing_failure_warns(monkeypatch, tmp_path, caplog):
     assert fs._cat("agents/tt/openclaw.json") is None
     assert "mc cat failed" in caplog.text
     assert "AccessDenied: denied" in caplog.text
+
+
+def test_on_files_pulled_projects_agents_md_into_runtime(tmp_path):
+    """AGENTS.md changes pulled from MinIO must reach the CoPaw workspace.
+
+    Regression guard for the stale-coordinator bug: workers that start as
+    standalone and are later added to a team kept their first-boot AGENTS.md
+    (Coordinator: @manager) forever, so TASK_COMPLETED mentions went to a
+    user outside the Team Room and the Team Leader never saw them.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from copaw_worker.worker import Worker
+
+    standard = tmp_path / "standard"
+    standard.mkdir()
+    (standard / "AGENTS.md").write_text("team coordination block\n")
+    (standard / "SOUL.md").write_text("soul\n")
+
+    runtime_dir = standard / ".copaw"
+
+    stub = SimpleNamespace(
+        sync=SimpleNamespace(local_dir=standard, list_skills=lambda: []),
+        _copaw_working_dir=runtime_dir,
+    )
+
+    asyncio.run(Worker._on_files_pulled(stub, ["AGENTS.md"]))
+
+    workspace = runtime_dir / "workspaces" / "default"
+    assert (workspace / "AGENTS.md").read_text() == "team coordination block\n"
+    assert (workspace / "SOUL.md").read_text() == "soul\n"
+    # HEARTBEAT is first-boot only — nothing here to copy, none created.
+    assert not (workspace / "HEARTBEAT.md").exists()

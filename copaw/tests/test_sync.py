@@ -332,6 +332,8 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
     def fake_cat(key):
         if key.endswith("/openclaw.json"):
             return json.dumps(remote_config)
+        if key.endswith("/AGENTS.md"):
+            return "# agents\nteam coordination block\n"
         if key.endswith("/runtime/runtime.yaml"):
             return "member:\n  role: team_leader\n"
         if key.endswith("/config/mcporter.json"):
@@ -355,6 +357,7 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
 
     assert set(changed) == {
         "openclaw.json",
+        "AGENTS.md",
         "runtime/runtime.yaml",
         "config/mcporter.json",
         "skills/github/",
@@ -362,6 +365,11 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
     written = json.loads((sync.local_dir / "openclaw.json").read_text())
     assert written["channels"]["matrix"]["accessToken"] == "local-token"
     assert written["channels"]["matrix"]["groupAllowFrom"] == ["@new:mx"]
+    # Coordination block refresh: a worker that started standalone picks up
+    # the controller-written team AGENTS.md without a restart.
+    assert (sync.local_dir / "AGENTS.md").read_text() == (
+        "# agents\nteam coordination block\n"
+    )
     assert (sync.local_dir / "runtime" / "runtime.yaml").read_text() == (
         "member:\n  role: team_leader\n"
     )
@@ -415,16 +423,16 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
 
-    pushed = push_local(sync, since=0)
+    pushed = [p.replace("\\", "/") for p in push_local(sync, since=0)]
 
+    # AGENTS.md is controller-owned (coordination block) and pulled, never
+    # pushed — a stale local copy must not overwrite the team version.
     assert set(pushed) == {
-        "AGENTS.md",
         "memory/note.txt",
         "memory/shared/note.txt",
         "skills/github/SKILL.md",
     }
     assert set(pushed_destinations) == {
-        "agentteams/agentteams-storage/agents/dag-team-dev/AGENTS.md",
         "agentteams/agentteams-storage/agents/dag-team-dev/memory/note.txt",
         "agentteams/agentteams-storage/agents/dag-team-dev/memory/shared/note.txt",
         "agentteams/agentteams-storage/agents/dag-team-dev/skills/github/SKILL.md",

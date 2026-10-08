@@ -717,6 +717,13 @@ class FileSync:
         changed: list[str] = []
         files: dict[str, list[str]] = {
             "openclaw.json": [f"{self._prefix}/openclaw.json"],
+            # AGENTS.md carries the controller-injected coordination block
+            # (coordinator identity, team roster). A worker that starts as
+            # standalone and is later added to a team would otherwise keep
+            # the stale standalone block forever — the agent then reports
+            # completion to the wrong coordinator (@manager instead of its
+            # Team Leader).
+            "AGENTS.md": [f"{self._prefix}/AGENTS.md"],
             "runtime/runtime.yaml": [f"{self._prefix}/runtime/runtime.yaml"],
             "config/mcporter.json": [
                 f"{self._prefix}/config/mcporter.json",
@@ -786,13 +793,17 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     mtime > `since` (epoch seconds), then content-compares before uploading.
     When since=0 (first run), scans all eligible files.
 
-    Excludes Manager-managed files only. AGENTS.md, SOUL.md, runtime sessions/
+    Excludes Manager-managed files only. SOUL.md, runtime sessions/
     are Worker-managed and are pushed (including session backup).
+    AGENTS.md holds the controller-owned coordination block and is pulled
+    periodically (see pull_all); pushing a stale local copy back would fight
+    the controller and keep workers pinned to an outdated coordinator.
     """
     # Manager-managed files that should never be pushed back
     _EXCLUDE_FILES = {
         "openclaw.json",
         "mcporter-servers.json",
+        "AGENTS.md",
     }
     # Manager-managed files at specific relative paths (not just root)
     _EXCLUDE_PATHS = {

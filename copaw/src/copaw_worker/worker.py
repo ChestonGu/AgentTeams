@@ -27,6 +27,7 @@ from copaw_worker.bridge import (
     bridge_standard_to_runtime,
     refresh_standard_to_runtime,
     sync_mcporter_config_to_runtime,
+    sync_outer_prompt_files_to_inner,
     sync_skills_to_runtime,
 )
 from copaw_worker.worker_api import WorkerAPIServer
@@ -673,7 +674,10 @@ class Worker:
 
     async def _on_files_pulled(self, pulled_files: list[str]) -> None:
         """Re-bridge config when Manager-managed files change (openclaw.json).
-        SOUL.md, AGENTS.md are Worker-managed and not pulled; use local copies."""
+        AGENTS.md carries the controller-owned coordination block and is also
+        pulled (pull_all); refresh the runtime copy so a worker added to a
+        team after first boot stops reporting to the stale standalone
+        coordinator (@manager) and mentions its real Team Leader instead."""
         # Re-sync skills if any skill file changed
         if any(f.startswith("skills/") for f in pulled_files):
             sync_skills_to_runtime(
@@ -685,6 +689,14 @@ class Worker:
         # Copy mcporter config into CoPaw working dir when it changes
         if "config/mcporter.json" in pulled_files:
             sync_mcporter_config_to_runtime(
+                self.sync.local_dir,
+                self._copaw_working_dir,
+            )
+
+        # Project a refreshed coordination block into the CoPaw workspace
+        # (SOUL/AGENTS refresh every run; HEARTBEAT stays first-boot-only).
+        if "AGENTS.md" in pulled_files:
+            sync_outer_prompt_files_to_inner(
                 self.sync.local_dir,
                 self._copaw_working_dir,
             )
