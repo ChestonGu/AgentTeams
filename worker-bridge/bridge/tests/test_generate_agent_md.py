@@ -471,6 +471,8 @@ class GenerateTest(unittest.TestCase):
         self.assertIn(
             "## Environment\n\n"
             "- Worker name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7\n"
+            "- Display name: Sandbox Engineer — your human-friendly name; "
+            "introduce yourself and refer to yourself in prose with it\n"
             "- Matrix ID: @t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org\n"
             "- Team: t-8a3f2c\n"
             "- Storage prefix: teams/t-8a3f2c/shared\n"
@@ -479,6 +481,11 @@ class GenerateTest(unittest.TestCase):
     def test_environment_standalone_fallbacks(self):
         out = gen.generate(cfg_standalone(), read(TEMPLATE), date=DATE)
         self.assertIn("- Team: standalone", out)
+        # No member.displayName in the standalone fixture: the Display name
+        # line falls back to the bare worker ID (never empty).
+        self.assertIn(
+            "- Display name: s-standalone-c0ffee — your human-friendly name",
+            out)
         cfg = cfg_standalone()
         cfg["storage_prefix"] = ""
         out = gen.generate(cfg, read(TEMPLATE), date=DATE)

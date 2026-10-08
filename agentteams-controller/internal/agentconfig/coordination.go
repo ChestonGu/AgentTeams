@@ -7,9 +7,12 @@ import (
 
 // CoordinationContext describes the team/coordination context to inject into AGENTS.md.
 type CoordinationContext struct {
-	WorkerName     string
-	Role           string // "worker", "team_leader", "standalone"
-	MatrixDomain   string
+	WorkerName string
+	// SelfDisplayName is this agent's own spec.displayName; empty renders
+	// no self-identity line (the agent then only knows its worker ID).
+	SelfDisplayName string
+	Role            string // "worker", "team_leader", "standalone"
+	MatrixDomain    string
 	TeamName       string
 	TeamLeaderName string
 	TeamAdminID    string // full Matrix ID of team admin
@@ -72,6 +75,13 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 	b.WriteString("\n")
 	b.WriteString(teamCtxStart)
 	b.WriteString("\n## Coordination\n\n")
+
+	// Self-identity first: without this line the agent only knows its bare
+	// worker ID and introduces itself as "I am a4-lead" even though synapse
+	// shows a display name. Roster lines below carry everyone *else's* name.
+	if ctx.SelfDisplayName != "" && ctx.SelfDisplayName != ctx.WorkerName {
+		fmt.Fprintf(&b, "- **Your display name**: %s — introduce yourself and refer to yourself in prose with this display name, not your worker ID\n", ctx.SelfDisplayName)
+	}
 
 	switch ctx.Role {
 	case "team_leader":

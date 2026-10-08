@@ -65,6 +65,10 @@ type memberRuntimeConfigMember struct {
 	Runtime        string `json:"runtime"`
 	MatrixUserID   string `json:"matrixUserId,omitempty"`
 	PersonalRoomID string `json:"personalRoomId,omitempty"`
+	// DisplayName is this member's own spec.displayName — lets runtime
+	// prompt builders (bridge agent.md Environment section) render the
+	// agent's friendly self-name instead of the bare worker ID.
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type memberRuntimeConfigMatrix struct {
@@ -354,6 +358,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			Runtime:        runtime,
 			MatrixUserID:   req.MatrixUserID,
 			PersonalRoomID: req.PersonalRoomID,
+			DisplayName:    req.Spec.DisplayName,
 		},
 		Desired: desired,
 		Storage: memberRuntimeConfigStorage{

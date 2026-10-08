@@ -689,6 +689,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		// Leader coordination context
 		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
 			LeaderName:           leaderRuntimeName,
+			SelfDisplayName:      leaderMember.worker.Spec.DisplayName,
 			Role:                 RoleTeamLeader.String(),
 			TeamName:             teamRuntimeName,
 			TeamRoomID:           rooms.TeamRoomID,
@@ -726,6 +727,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:           rm.runtimeName,
+			SelfDisplayName:      rm.worker.Spec.DisplayName,
 			TeamName:             teamRuntimeName,
 			TeamLeaderName:       leaderRuntimeName,
 			TeamAdminID:          teamAdminMatrixID(derivedTeam),
@@ -1192,6 +1194,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if !backend.IsManagedRuntime(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:           runtimeName,
+			SelfDisplayName:      w.Spec.DisplayName,
 			TeamName:             "",
 			TeamLeaderName:       "",
 			TeamAdminID:          "",

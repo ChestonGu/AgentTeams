@@ -137,8 +137,11 @@ type RuntimeConfigTeamMember struct {
 
 // CoordinationDeployRequest describes coordination context injection for a team leader.
 type CoordinationDeployRequest struct {
-	LeaderName           string
-	Role                 string
+	LeaderName string
+	// SelfDisplayName is the leader's own spec.displayName — rendered as the
+	// "Your display name" line so the leader introduces itself by name.
+	SelfDisplayName string
+	Role            string
 	TeamName             string
 	TeamRoomID           string
 	LeaderDMRoomID       string
@@ -166,8 +169,11 @@ type TeamWorkerEntry struct {
 
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
 type WorkerCoordinationRequest struct {
-	WorkerName           string
-	TeamName             string
+	WorkerName string
+	// SelfDisplayName is the worker's own spec.displayName — rendered as the
+	// "Your display name" line so the worker introduces itself by name.
+	SelfDisplayName string
+	TeamName        string
 	TeamLeaderName       string
 	TeamAdminID          string
 	TeamAdminDisplayName string
@@ -481,7 +487,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
 	phaseStart = time.Now()
-	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamAdminDisplayName, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamAdminDisplayName, req.Spec.DisplayName, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
 	if req.Role == "team_leader" && req.TeamName != "" && req.TeamRoomID != "" {
@@ -500,6 +506,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
 			LeaderName:           req.Name,
+			SelfDisplayName:      req.Spec.DisplayName,
 			Role:                 req.Role,
 			TeamName:             req.TeamName,
 			TeamRoomID:           req.TeamRoomID,
@@ -673,6 +680,7 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.LeaderName,
+		SelfDisplayName:      req.SelfDisplayName,
 		Role:                 req.Role,
 		MatrixDomain:         d.matrixDomain,
 		TeamName:             req.TeamName,
@@ -746,6 +754,7 @@ func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoord
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.WorkerName,
+		SelfDisplayName:      req.SelfDisplayName,
 		Role:                 "worker",
 		MatrixDomain:         d.matrixDomain,
 		TeamName:             req.TeamName,
@@ -794,7 +803,7 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	role := "team_leader"
-	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", "", nil, ""); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", "", "", nil, ""); err != nil {
 		return err
 	}
 	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
@@ -1342,7 +1351,7 @@ func redactPackageURI(raw string) string {
 
 // prepareAndPushAgentsMD merges the builtin AGENTS.md section and injects
 // coordination context in a single OSS read-write cycle.
-func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string) error {
+func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName, selfDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string) error {
 	logger := log.FromContext(ctx)
 	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), "AGENTS.md")
 	builtinContent, err := os.ReadFile(builtinPath)
@@ -1396,6 +1405,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 		}
 		coordCtx := agentconfig.CoordinationContext{
 			WorkerName:           workerName,
+			SelfDisplayName:      selfDisplayName,
 			MatrixDomain:         d.matrixDomain,
 			TeamName:             teamName,
 			TeamLeaderName:       teamLeaderName,

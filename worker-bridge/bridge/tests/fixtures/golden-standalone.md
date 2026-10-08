@@ -164,6 +164,7 @@ Do not:
 ## Environment
 
 - Worker name: s-standalone-c0ffee
+- Display name: s-standalone-c0ffee — your human-friendly name; introduce yourself and refer to yourself in prose with it
 - Matrix ID: @s-standalone-c0ffee:example.org
 - Team: standalone
 - Storage prefix: shared

@@ -92,6 +92,7 @@ PLACEHOLDER_ENVIRONMENT = "{{ENVIRONMENT}}"
 ENV_SECTION_TEMPLATE = """## Environment
 
 - Worker name: {worker_name}
+- Display name: {display_name} — your human-friendly name; introduce yourself and refer to yourself in prose with it
 - Matrix ID: {matrix_id}
 - Team: {team}
 - Storage prefix: {storage_prefix}
@@ -120,7 +121,7 @@ def parse_runtime_config(text):
     from a typed struct (internal/service/runtime_config.go
     memberRuntimeConfigDocument), so it is loaded with yaml.safe_load and
     read as plain dicts/lists — no line matching. Fields consumed:
-    member.name/runtimeName/matrixUserId/role, team.name,
+    member.name/runtimeName/matrixUserId/role/displayName, team.name,
     team.admin.matrixUserId/displayName, team.members[].matrixUserId/
     role/displayName, storage.sharedPrefix; everything else (credentials,
     desired, ...) is ignored by simply not being read.
@@ -128,6 +129,7 @@ def parse_runtime_config(text):
     Returns:
       {
         'worker_name', 'matrix_id', 'domain', 'role',   # member.*
+        'display_name',                                  # member.displayName (self)
         'team_name', 'leader_id', 'admin_id',           # team.*
         'admin_display',                                # team.admin.displayName
         'coordinators': [{matrix_user_id, display_name}, ...],  # members[role=coordinator]
@@ -232,6 +234,11 @@ def parse_runtime_config(text):
 
     return {
         "worker_name": worker_name,
+        # member.displayName: the agent's own friendly name (controller
+        # projects spec.displayName). Falls back to the worker ID so the
+        # Environment line is never empty — self-cognition mirrors the
+        # controller's "Your display name" coordination line.
+        "display_name": member.get("displayName") or worker_name,
         "matrix_id": matrix_id,
         "domain": domain,
         "role": role,
@@ -339,6 +346,7 @@ def render_coordination(cfg):
 def render_environment(cfg, date):
     return ENV_SECTION_TEMPLATE.format(
         worker_name=cfg["worker_name"],
+        display_name=cfg["display_name"],
         matrix_id=cfg["matrix_id"],
         team=cfg["team_name"] or "standalone",
         storage_prefix=cfg["storage_prefix"] or "agentteams",

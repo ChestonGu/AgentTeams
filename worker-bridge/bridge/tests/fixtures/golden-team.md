@@ -174,6 +174,7 @@ Do not:
 ## Environment
 
 - Worker name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+- Display name: Sandbox Engineer — your human-friendly name; introduce yourself and refer to yourself in prose with it
 - Matrix ID: @t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org
 - Team: t-8a3f2c
 - Storage prefix: teams/t-8a3f2c/shared

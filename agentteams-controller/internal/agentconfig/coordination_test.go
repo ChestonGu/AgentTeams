@@ -86,3 +86,47 @@ func TestCoordinationBlockWorkerShowsHumanNames(t *testing.T) {
 		t.Errorf("worker block mention policy changed unexpectedly:\ngot:\n%s", got)
 	}
 }
+
+func TestCoordinationBlockSelfDisplayName(t *testing.T) {
+	ctx := CoordinationContext{
+		WorkerName:      "a4-lead",
+		SelfDisplayName: "甲四队长",
+		Role:            "team_leader",
+		MatrixDomain:    "matrix.local",
+		TeamName:        "t-a4",
+	}
+	got := buildCoordinationBlock(ctx)
+
+	wantSelf := "- **Your display name**: 甲四队长 — introduce yourself and refer to yourself in prose with this display name, not your worker ID"
+	if !strings.Contains(got, wantSelf) {
+		t.Errorf("block missing self display-name line:\nwant: %s\ngot:\n%s", wantSelf, got)
+	}
+	// The self line must precede every role bullet so self-cognition is
+	// unmissable (the HTML comment marker also contains "- ", so compare
+	// against the first role line instead of a bare bullet match).
+	selfIdx := strings.Index(got, wantSelf)
+	roleIdx := strings.Index(got, "- **Upstream coordinator**")
+	if selfIdx == -1 || roleIdx == -1 || selfIdx > roleIdx {
+		t.Errorf("self display-name line should precede the role bullets:\ngot:\n%s", got)
+	}
+}
+
+func TestCoordinationBlockSelfDisplayNameOmittedWhenEmpty(t *testing.T) {
+	ctx := CoordinationContext{
+		WorkerName:     "w1",
+		Role:           "worker",
+		MatrixDomain:   "matrix.local",
+		TeamName:       "alpha",
+		TeamLeaderName: "lead",
+	}
+	got := buildCoordinationBlock(ctx)
+	if strings.Contains(got, "Your display name") {
+		t.Errorf("empty self display name must not render a self line:\ngot:\n%s", got)
+	}
+	// Equal-to-name display names are also skipped (no new information).
+	ctx.SelfDisplayName = "w1"
+	got = buildCoordinationBlock(ctx)
+	if strings.Contains(got, "Your display name") {
+		t.Errorf("display name equal to worker name must not render a self line:\ngot:\n%s", got)
+	}
+}

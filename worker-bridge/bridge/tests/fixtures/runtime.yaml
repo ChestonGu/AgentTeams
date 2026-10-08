@@ -16,6 +16,7 @@ kind: MemberRuntimeConfig
 member:
   matrixUserId: '@t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7:example.org'
   name: t-8a3f2c-6b1d20c9f3e84a57d2b9c1f0a3e5d7
+  displayName: Sandbox Engineer
   personalRoomId: '!lLybQDJXFYjcenbOjZ:example.org'
   role: worker
   runtime: copaw
