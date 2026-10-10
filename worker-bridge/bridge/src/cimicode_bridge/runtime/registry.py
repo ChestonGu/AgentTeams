@@ -29,6 +29,10 @@ def build_runtime_adapter(runtime: RuntimeConfig):
             runtime.base_url,
             timeout_seconds=runtime.turn_timeout_seconds,
             eid=runtime.eid,
+            app_key=runtime.app_key,
+            app_secret=runtime.app_secret,
+            api_key=runtime.api_key,
+            model=runtime.model,
         )
     if runtime.adapter == "cimicode-pod":
         return CimicodePodAdapter(

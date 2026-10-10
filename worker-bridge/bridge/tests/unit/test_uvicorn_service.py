@@ -22,6 +22,10 @@ class FakeMatrix:
         self.sent = (room_id, body)
         return "$reply"
 
+    async def edit_message(self, room_id, event_id, body):
+        # 流式编辑：记录最终编辑内容（终态收尾会编辑占位消息为全文）
+        self.edited = (room_id, event_id, body)
+
     async def start_typing(self, room_id):
         self.typing_started = room_id
 
@@ -109,7 +113,10 @@ def test_matrix_event_calls_gateway_and_sends_reply(monkeypatch):
     assert bridge.runtime_client.request["session_id"] == "sess-1"
     assert bridge.runtime_client.request["agent_md"] == "# generated agent.md"
     assert "[Current message - respond to this]" in bridge.runtime_client.request["user_message"]
+    # 方案 A 流式回复：无占位文案——FakeRuntime 不触发 on_event（无 TEXT_DONE），
+    # 锚点未建立，终态走 send_text 直发最终回复
     assert bridge.matrix_gateway.sent == ("!room:matrix.local", "done")
+    assert not hasattr(bridge.matrix_gateway, "edited") or not bridge.matrix_gateway.edited
     assert bridge.matrix_gateway.typing_started == "!room:matrix.local"
     assert bridge.matrix_gateway.typing_stopped == "!room:matrix.local"
 

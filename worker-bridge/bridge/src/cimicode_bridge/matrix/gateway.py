@@ -195,6 +195,41 @@ class MatrixGateway:
         event_id = getattr(response, "event_id", None)
         return str(event_id) if event_id else None
 
+    async def edit_message(self, room_id: str, event_id: str, body: str) -> None:
+        """编辑已发送的消息（Matrix m.replace 协议，对齐 CoPaw thread-root 编辑）。
+
+        客户端（Element）收到 m.replace 事件后原地替换原消息内容——
+        用于流式回复：先 send_text 占位，再随 SSE 增量不断 edit_message，
+        用户看到同一条消息逐步长成完整回复。m.new_content 是全量替换
+        （非追加），body 须传"到目前为止的累积全文"。
+        """
+        new_content = render_matrix_message(body)
+        content: dict[str, Any] = {
+            "msgtype": new_content.get("msgtype", "m.text"),
+            "body": f"* {new_content.get('body', body)}",
+            "m.new_content": new_content,
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": event_id,
+            },
+        }
+        # MSC3952：m.mentions 需同时在外层事件上才触发通知
+        if "m.mentions" in new_content:
+            content["m.mentions"] = new_content["m.mentions"]
+        if "format" in new_content:
+            content["format"] = new_content["format"]
+            content["formatted_body"] = f"* {new_content.get('formatted_body', '')}"
+        try:
+            await self.client.room_send(
+                room_id,
+                "m.room.message",
+                content,
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            # 编辑失败不致命（下次编辑或最终回复兜底）——降级为 debug
+            logger.debug("edit_message(%s) failed: %s", event_id, exc)
+
     async def _room_member_index(self, room_id: str) -> dict[str, str] | None:
         """房间成员索引：alias（小写 localpart/显示名）-> 完整 MXID，TTL 缓存。
 

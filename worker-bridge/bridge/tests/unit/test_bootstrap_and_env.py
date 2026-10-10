@@ -392,6 +392,22 @@ bridge:
         assert app.config.runtime.session_id == "sess-2"
         assert app.config.runtime.eid == "user-9"  # v1.4 已知键 → 固定字段
 
+    def test_apply_extracts_api_key(self, monkeypatch):
+        # apiKey（APISIX OpenAPI key-auth，2026-10-08 鉴权上移）→ 固定字段
+        yaml_with_api_key = """bridge:
+  adapterMode: cimicode-stateless
+  runtimeParameter:
+    baseUrl: http://t-app.cdtp.com/api/agi/agentgateway/openapi
+    sessionId: sess-9
+    eid: "38432"
+    apiKey: ak-from-yaml
+"""
+        app = self._app_with_files(yaml_with_api_key)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.runtime.api_key == "ak-from-yaml"
+        assert app.config.runtime.eid == "38432"
+        assert app.config.runtime.base_url == "http://t-app.cdtp.com/api/agi/agentgateway/openapi"
+
     def test_snake_case_nested_keys_accepted(self, monkeypatch):
         app = self._app_with_files(self.SNAKE_NESTED_YAML)
         app._apply_bridge_section(app.worker_files)

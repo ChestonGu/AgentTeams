@@ -50,7 +50,11 @@ class RuntimeConfig(BaseModel):
     template_id: str = ""                              # 仅来自 CR 投影，无假默认
     session_id: str = ""                               # S3 下发的 gateway session
     sandbox_id: str = ""                               # S3 下发的 sandbox
-    eid: str = ""                                      # 用户业务标识（runtimeParameter 已知键；Gateway v2 submit 必传 Header）
+    eid: str = ""                                      # 用户业务标识（runtimeParameter 已知键；应用级鉴权经 X-Operator-Eid 头传）
+    app_key: str = ""                                  # 应用级鉴权 X-App-Key（Gateway 运维分配；runtime.yaml appKey 键）
+    app_secret: str = ""                               # 应用级鉴权 X-App-Secret（同上；secret 不进日志）
+    api_key: str = ""                                   # APISIX OpenAPI key-auth（runtime.yaml apiKey 键；经 x-api-key 头传，2026-10-08 鉴权上移 APISIX）
+    model: str = ""                                    # submit 信封 model 覆盖（空=用 Session 冻结值；测试环境需 deepseek-v4-flash）
     auth_type: str = "none"                            # gateway 当前不鉴权
     # 注：runtimeParameter 袋本体不在此存副本——参数面就是 runtime.yaml
     # （bootstrap 每 turn 重拉，_apply_bridge_section 每轮重抽已知键；

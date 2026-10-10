@@ -1,0 +1,49 @@
+# 本地开发/模拟配置（不进生产镜像）。
+# 运行方式见文件底部注释；与 bridge.example.yaml 的区别：
+#   - homeserver 直接写值（不走 ${ENV} 占位符），可指向本地 mock
+#   - store 用 memory，无外部依赖
+#   - runtime adapter 显式指定 stateless + mock base_url，便于本地联调
+#     （不指定则进入未定态自愈轮询，服务同样能起）
+matrix:
+  # 指向本地 mock 或真实 homeserver；token 从 env AGENTTEAMS_WORKER_MATRIX_TOKEN 读
+  homeserver_url: "http://localhost:8008"
+  domain: "localhost"
+  token_env: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  sync_timeout_seconds: 30
+runtime:
+  # 模拟 stateless 形态；base_url 指向本地 mock gateway。
+  # 想模拟"接线不全"的未定态：把这两行留空（""），bridge 会进自愈轮询。
+  adapter: "cimicode-stateless"
+  base_url: "http://localhost:4096"
+  auth_type: none
+filter:
+  require_mention: true
+  allow_unknown: false
+history:
+  max_entries: 50
+store:
+  backend: memory
+emitter:
+  markdown_html: true
+  thinking: "hide"
+  tools: "compact"
+
+# ============================================================
+# 运行方法（在 worker-bridge/bridge/ 目录下）：
+#
+#   1. 安装：pip install -e .
+#   2. 启动：
+#        export AGENTTEAMS_WORKER_MATRIX_TOKEN=dev-token     # 任意值
+#        cimicode-bridge run --config config/bridge.dev.yaml --port 8081
+#   3. 验证：
+#        curl localhost:8081/healthz   # {"status":"ok"}
+#        curl localhost:8081/status    # phase=bootstrap（Matrix 连不上时）
+#
+# 可选 env（模拟更完整的接线）：
+#   AGENTTEAMS_MATRIX_URL          覆盖 homeserver（优先级高于 YAML）
+#   AGENTTEAMS_WORKER_NAME         worker 名（since key 用）
+#   COORDINATION_LEADER/ADMIN      mention 白名单的 MXID
+#   BRIDGE_RUNTIME_ADAPTER         cimicode-stateless / cimicode-pod
+#   BRIDGE_RUNTIME_BASE_URL        gateway 地址
+#   AGENTTEAMS_FS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET  四项全设才启用 S3
+# ============================================================

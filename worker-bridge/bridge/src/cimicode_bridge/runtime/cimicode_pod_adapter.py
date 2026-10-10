@@ -237,6 +237,7 @@ class CimicodePodAdapter:
         agent_md: str,
         user_message: str,
         turn_id: str = "",   # 可选日志关联（Matrix event_id；Gateway v2 下 turnId 由平台生成）
+        on_event: Any | None = None,  # 契约兼容：app 固定传参；轮询形态无流式，接受但忽略
     ) -> list[RuntimeEvent]:
         """提交 turn：会话自愈 → 阻塞 POST（agent.md 走消息体 system 字段）→ 轮询完成。
 

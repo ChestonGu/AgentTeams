@@ -140,12 +140,38 @@ def test_stateless_submit_envelope_strict_no_bag_leak():
     assert "turnId=turn-9" in events[0].text
     assert captured["method"] == "POST"
     assert captured["path"] == "/agi/gateway/v1/turn/submit"
-    # 信封严格三字段——没有任何袋键泄漏
+    # 信封严格三字段顶层平铺（Gateway 实测不认 {data:{...}} 信封）——没有任何袋键泄漏
     assert captured["body"] == {
-        "data": {"sessionId": "sess-1", "agentPrompt": "md", "userMessage": "hi"}
+        "sessionId": "sess-1", "agentPrompt": "md", "userMessage": "hi"
     }
     assert captured["headers"]["eid"] == "user-123"
     assert captured["headers"]["X-Idempotency-Key"]  # UUID v4 非空
+
+
+def test_stateless_submit_rejects_business_error_code():
+    """Gateway 对非法 body 也回 HTTP 200 + code!=SUCCESS（如信封形态实测
+    返回 code="sessionId不能为空"）——chat() 必须显式校验业务 code 抛错，
+    否则错误延迟到 SSE 订阅 404 才暴露（难排查）。"""
+    adapter = CimicodeStatelessAdapter("http://gw.example.com", eid="user-123")
+
+    async def fake_request_json(method, path, *, json_body=None, headers=None):
+        # HTTP 200 但业务失败（Gateway 实测行为）
+        return {"timestamp": 1790579940817, "code": "sessionId不能为空",
+                "message": "[sessionId]: unknown_error", "data": None}
+
+    async def fake_stream_sse(method, path, *, json_body=None, headers=None):
+        raise AssertionError("submit 业务失败时不应走到 SSE 订阅")
+        yield  # pragma: no cover
+
+    adapter.request_json = fake_request_json
+    adapter.stream_sse = fake_stream_sse
+    try:
+        asyncio.run(adapter.chat(session_id="sess-1", agent_md="md", user_message="hi"))
+    except RuntimeError as e:
+        assert "sessionId不能为空" in str(e)
+        assert "sess-1" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError on business error code")
 
 
 def test_gateway_v2_dialect_translates_text_delta():
@@ -185,6 +211,69 @@ def test_gateway_v2_dialect_aggregates_parts_on_idle():
     assert completed.kind == RuntimeEventKind.TURN_COMPLETED
     assert completed.text == "hello\nworld"
     assert dialect.terminal_seen is True
+
+
+def test_gateway_v2_dialect_official_schema_field_names():
+    """官方 schema 字段名（frame-structure-catalog §4.6/§4.7）：part id 是
+    textID/reasoningID（不是 partID）。实测 2026-09-29 抓包确认。场景：
+    订阅晚于 live delta，只回放 durable 帧——text.ended 全文必须进聚合，
+    否则终态拼接为空（正文丢失 → no reply）。帧序列取自真实抓包。"""
+    dialect = GatewayV2Dialect()
+    # reasoning 三帧（官方字段名 reasoningID）
+    dialect.translate({"data": {"type": "session.next.reasoning.started@1",
+                                "data": {"reasoningID": "prt_r1", "assistantMessageID": "msg_1"}}})
+    assert dialect.translate({"data": {"type": "session.next.reasoning.delta",
+                                       "data": {"reasoningID": "prt_r1", "delta": "thinking..."}}}) == []
+    assert dialect.translate({"data": {"type": "session.next.reasoning.ended@1",
+                                       "data": {"reasoningID": "prt_r1", "text": "thinking... full"}}}) == []
+    # text 三帧（官方字段名 textID）——只回放 ended（错过 live delta）
+    dialect.translate({"data": {"type": "session.next.text.started@1",
+                                "data": {"textID": "prt_t1", "assistantMessageID": "msg_1"}}})
+    done = dialect.translate({"data": {"type": "session.next.text.ended@1",
+                                       "data": {"textID": "prt_t1", "text": "你好，我是测试业务专家。"}}})
+    assert len(done) == 1 and done[0].kind == RuntimeEventKind.TEXT_DONE
+    assert done[0].text == "你好，我是测试业务专家。"
+    # 终态：idle 无 content → 按 part 聚合拼接（只有 text part，reasoning 排除）
+    completed = dialect.translate({"data": {"type": "invocation.idle",
+                                            "data": {"revision": 71, "stopReason": "complete",
+                                                     "turns": 1, "toolCalls": 0}}})[0]
+    assert completed.kind == RuntimeEventKind.TURN_COMPLETED
+    assert completed.text == "你好，我是测试业务专家。"
+    assert "thinking" not in completed.text
+    # part 身份登记验证：reasoning part 的迟到 delta 不进正文
+    assert dialect.translate({"data": {"type": "session.next.text.delta",
+                                       "data": {"textID": "prt_r1", "delta": "sneaky"}}}) == []
+
+
+def test_gateway_v2_dialect_reasoning_excluded_from_reply():
+    """reasoning part（思考链）不进正文：delta 不产生 TEXT_DELTA 事件，
+    ended 收口不聚合，终态拼接只拼 text part——思考链不混进回复正文。"""
+    dialect = GatewayV2Dialect()
+    # reasoning delta：不产生正文事件（上层会把 TEXT_DELTA 拼进 response_text）
+    assert dialect.translate({"data": {"type": "session.next.reasoning.delta",
+                                       "data": {"partID": "r1", "delta": "Let me think..."}}}) == []
+    # reasoning ended 收口帧（part.type=reasoning）：不聚合
+    assert dialect.translate({"data": {"type": "message.part.updated",
+                                       "data": {"part": {"partID": "r1", "type": "reasoning",
+                                                         "text": "Let me think... full"}}}}) == []
+    # 正文 text part 正常聚合
+    dialect.translate({"data": {"type": "session.next.text.delta",
+                                "data": {"partID": "t1", "delta": "你好"}}})
+    dialect.translate({"data": {"type": "message.part.updated",
+                                "data": {"part": {"partID": "t1", "type": "text",
+                                                  "text": "你好，我是后端业务专家。"}}}})
+    # 同 part_id 先 reasoning 后 text 的防御：r1 已标记 reasoning，即使
+    # 后续 delta 事件名不带 reasoning 也不进正文（part 身份以首见为准）
+    assert dialect.translate({"data": {"type": "session.next.text.delta",
+                                       "data": {"partID": "r1", "delta": "sneaky"}}}) == []
+
+    completed = dialect.translate({"data": {"type": "invocation.idle", "data": {}}})[0]
+
+    assert completed.kind == RuntimeEventKind.TURN_COMPLETED
+    # 正文只有 text part 的内容，思考链（r1）完全排除
+    assert completed.text == "你好，我是后端业务专家。"
+    assert "Let me think" not in completed.text
+    assert "sneaky" not in completed.text
 
 
 def test_gateway_v2_dialect_failed_is_terminal_error():
@@ -276,9 +365,13 @@ async def _two_step_stream():
             submit_seen["path"] = request_line.decode().split(" ")[1]
             submit_seen["idempotency_key"] = headers.get("x-idempotency-key", "")
             submit_seen["eid"] = headers.get("eid", "")
+            submit_seen["app_key"] = headers.get("x-app-key", "")
+            submit_seen["app_secret"] = headers.get("x-app-secret", "")
+            submit_seen["operator_eid"] = headers.get("x-operator-eid", "")
+            submit_seen["api_key"] = headers.get("x-api-key", "")
             submit_seen["body"] = json.loads(body) if body else {}
             resp = json.dumps({"code": "SUCCESS", "data": {"turnId": "turn-1", "attemptId": "att-1", "queueStatus": "QUEUED"}}).encode()
-        elif request_line.startswith(b"GET /agi/gateway/v1/session/s1/events"):
+        elif request_line.startswith(b"GET /agi/gateway/v1/sse/session/s1/events"):
             submit_seen["events_path"] = request_line.decode().split(" ")[1]
             resp = _v2_frames(
                 {"kind": "live", "type": "turn.accepted", "data": {"invocationID": "inv-1"}},
@@ -307,18 +400,34 @@ async def _two_step_stream():
 
     base_url, srv = await _serve(handler)
     try:
-        rt = CimicodeStatelessAdapter(base_url, timeout_seconds=5, eid="emp-001")
+        rt = CimicodeStatelessAdapter(
+            base_url,
+            timeout_seconds=5,
+            eid="emp-001",
+            app_key="app-k",
+            app_secret="app-s",
+            model="deepseek-v4-flash",
+        )
         events = await rt.chat(session_id="s1", agent_md="md", user_message="hi")
     finally:
         srv.close()
         await srv.wait_closed()
 
-    # submit 契约断言：路径 / 幂等键 / eid / 信封 body
+    # submit 契约断言：路径 / 幂等键 / 应用级鉴权三件套 / 信封 body（含 model）
     assert submit_seen["path"] == "/agi/gateway/v1/turn/submit"
     assert submit_seen["idempotency_key"]  # UUID v4 非空
-    assert submit_seen["eid"] == "emp-001"
-    assert submit_seen["body"] == {"data": {"sessionId": "s1", "agentPrompt": "md", "userMessage": "hi"}}
-    assert submit_seen["events_path"] == "/agi/gateway/v1/session/s1/events"
+    # 应用级鉴权：三件套齐备，eid 经 X-Operator-Eid 传，不再裸传 eid header
+    assert submit_seen["app_key"] == "app-k"
+    assert submit_seen["app_secret"] == "app-s"
+    assert submit_seen["operator_eid"] == "emp-001"
+    assert submit_seen["eid"] == ""
+    assert submit_seen["body"] == {
+        "sessionId": "s1",
+        "agentPrompt": "md",
+        "userMessage": "hi",
+        "model": "deepseek-v4-flash",
+    }
+    assert submit_seen["events_path"] == "/agi/gateway/v1/sse/session/s1/events"
 
     # 事件翻译断言：delta + 终态（turn.accepted 被忽略不产生事件）
     kinds = [e.kind for e in events]
@@ -326,6 +435,82 @@ async def _two_step_stream():
     assert next(e for e in events if e.kind == RuntimeEventKind.TEXT_DELTA).text == "hello"
     # 终态帧后服务端关闭 = 正常结束，不补 turn_interrupted
     assert not any(e.kind == RuntimeEventKind.TURN_INTERRUPTED for e in events)
+
+
+async def _api_key_auth_headers():
+    """APISIX OpenAPI key-auth 形态：api_key 配置时 x-api-key + 裸 eid 头，
+    优先级高于旧 app_key/app_secret 三件套（三形态互斥）。"""
+    submit_seen = {}
+
+    async def handler(reader, writer):
+        request_line = await reader.readline()
+        headers = {}
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            name, _, value = line.decode().partition(":")
+            headers[name.strip().lower()] = value.strip()
+        body_len = int(headers.get("content-length", "0"))
+        body = await reader.readexactly(body_len) if body_len else b""
+
+        import json
+        if request_line.startswith(b"POST /agi/gateway/v1/turn/submit"):
+            submit_seen["api_key"] = headers.get("x-api-key", "")
+            submit_seen["eid"] = headers.get("eid", "")
+            submit_seen["app_key"] = headers.get("x-app-key", "")
+            submit_seen["operator_eid"] = headers.get("x-operator-eid", "")
+            resp = json.dumps({"code": "SUCCESS", "data": {"turnId": "turn-1"}}).encode()
+        elif request_line.startswith(b"GET /agi/gateway/v1/sse/session/s1/events"):
+            submit_seen["sse_api_key"] = headers.get("x-api-key", "")
+            submit_seen["sse_eid"] = headers.get("eid", "")
+            resp = _v2_frames(
+                {"kind": "durable", "type": "invocation.idle", "seq": 1, "data": {"revision": 1}},
+            )
+            writer.write(
+                b"HTTP/1.1 200 Status\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Content-Length: " + str(len(resp)).encode() + b"\r\n\r\n" + resp
+            )
+            await writer.drain()
+            await asyncio.sleep(0.05)
+            writer.close()
+            return
+        else:
+            resp = b'{"code":"NOT_FOUND"}'
+        writer.write(
+            b"HTTP/1.1 200 Status\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(resp)).encode() + b"\r\n\r\n" + resp
+        )
+        await writer.drain()
+        await asyncio.sleep(0.05)
+        writer.close()
+
+    base_url, srv = await _serve(handler)
+    try:
+        rt = CimicodeStatelessAdapter(
+            base_url,
+            timeout_seconds=5,
+            eid="emp-001",
+            app_key="app-k",       # 旧三件套同时配置——应被 api_key 形态压制
+            app_secret="app-s",
+            api_key="ak-123",
+        )
+        await rt.chat(session_id="s1", agent_md="md", user_message="hi")
+    finally:
+        srv.close()
+        await srv.wait_closed()
+
+    # x-api-key 认证服务身份 + 裸 eid 头代表最终用户（Gateway 优先采信 eid）
+    assert submit_seen["api_key"] == "ak-123"
+    assert submit_seen["eid"] == "emp-001"
+    # 旧三件套形态互斥：不得同时出现
+    assert submit_seen["app_key"] == ""
+    assert submit_seen["operator_eid"] == ""
+    # SSE 订阅请求同样携带 x-api-key + eid
+    assert submit_seen["sse_api_key"] == "ak-123"
+    assert submit_seen["sse_eid"] == "emp-001"
 
 
 async def _interrupted_on_gap():
@@ -338,7 +523,7 @@ async def _interrupted_on_gap():
             line = await reader.readline()
             if line in (b"\r\n", b"\n", b""):
                 break
-        if request_line.startswith(b"GET /agi/gateway/v1/session"):
+        if request_line.startswith(b"GET /agi/gateway/v1/sse/session"):
             writer.write(
                 b"HTTP/1.1 200 Status\r\n"
                 b"Content-Type: text/event-stream\r\n"
@@ -408,6 +593,10 @@ async def _raises_on_non_2xx():
 
 def test_stateless_two_step_stream():
     asyncio.run(_two_step_stream())
+
+
+def test_stateless_api_key_auth_headers():
+    asyncio.run(_api_key_auth_headers())
 
 
 def test_stateless_appends_interrupted_on_gap():
