@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import hashlib
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, ClassVar
@@ -36,6 +37,35 @@ from cimicode_bridge.store.memory import MemoryStore
 from cimicode_bridge.store.redis import RedisStore
 
 logger = logging.getLogger(__name__)
+
+# 媒体记账：与 copaw matrix_channel 同公式的确定性归档路径（房间/事件/
+# 文件名三原料全在 Matrix 事件里，无需下载即可推出 leader 将写入的位置）。
+# bridge worker 不归档（team leader/copaw 负责），只把路径带进群聊视野。
+_MEDIA_SANITIZE_RE = re.compile(r"[^\w.\-]+")
+
+
+def _media_shared_rel_path(room_id: str, event_id: str, body: str) -> str:
+    """shared/knowledge/matrix/<房间8>/<事件8>_<净化文件名>（对齐 copaw 公式）。"""
+    eid = (event_id or "")[:8].lstrip("$")
+    room_key = (room_id or "")[:8].lstrip("!")
+    safe = _MEDIA_SANITIZE_RE.sub("_", body or "").strip("._")[:120]
+    safe = safe or f"matrix_media_{eid}"
+    return f"shared/knowledge/matrix/{room_key}/{eid}_{safe}"
+
+
+def _media_history_line(
+    msgtype: str, body: str, room_id: str, event_id: str,
+) -> str:
+    """把媒体上传折叠成一行带归档路径的记账行（对齐 copaw 侧格式）。"""
+    if msgtype == "m.image":
+        rel = _media_shared_rel_path(room_id, event_id, body)
+        return f"[sent an image: {body} | archived: {rel}]"
+    if msgtype == "m.audio":
+        return f"[sent audio: {body}]"
+    if msgtype == "m.video":
+        return f"[sent a video: {body}]"
+    rel = _media_shared_rel_path(room_id, event_id, body)
+    return f"[sent a file: {body} | archived: {rel}]"
 
 # pod 模式推导常量：operator 供给的 svc 命名与端口是契约级确定值
 # （adapter-contract：`<w>-cimicode-svc:4096`）。接线目标因此可以提前
@@ -611,6 +641,19 @@ class BridgeApp:
         等下去——委派的 leader 没有别的失败信号）。
         """
         body = str(content.get("body", ""))
+        msgtype = str(content.get("msgtype", "m.text"))
+        if msgtype in ("m.image", "m.file", "m.audio", "m.video"):
+            # 媒体上传：只进群聊视野（记账行带确定性归档路径），永不触发
+            # turn。归档由 team leader（copaw 侧）执行；后续 mention 触发
+            # turn 时 agent 顺着路径 filesync 拉取。短路必须在 mention
+            # filter 之前——文件名里的 "@xxx" 不是 mention。
+            self.history_manager.record_ambient(
+                room_id,
+                sender,
+                _media_history_line(msgtype, body, room_id, event_id),
+                event_id=event_id,
+            )
+            return
         decision = self.mention_filter.evaluate(body, sender, content=content)
         # 全量决策日志（含丢弃）：原因/角色/mentions 可见
         logger.info(

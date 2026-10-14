@@ -8,7 +8,16 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from nio import AsyncClient, AsyncClientConfig, RoomMessageText, WhoamiResponse
+from nio import (
+    AsyncClient,
+    AsyncClientConfig,
+    RoomMessageAudio,
+    RoomMessageFile,
+    RoomMessageImage,
+    RoomMessageText,
+    RoomMessageVideo,
+    WhoamiResponse,
+)
 
 from cimicode_bridge.render import render_matrix_message
 from cimicode_bridge.store.base import StateStore
@@ -88,7 +97,19 @@ class MatrixGateway:
         """启动：whoami → 注册文本回调 → 手动 sync 循环（since 持久化 + 退避 + 401 刷新）。"""
         if not await self.authenticate():
             return
-        self.client.add_event_callback(self._on_text, RoomMessageText)
+        # 文本之外连带注册媒体事件（m.file/m.image/m.audio/m.video）：文件
+        # 上传进 app 侧 ambient 记账（带确定性归档路径），不再被传输层
+        # 静默丢弃——群聊里 @ 谁，谁能从视野里看到这份文件。
+        self.client.add_event_callback(
+            self._on_room_message,
+            (
+                RoomMessageText,
+                RoomMessageImage,
+                RoomMessageFile,
+                RoomMessageAudio,
+                RoomMessageVideo,
+            ),
+        )
         self.connected = True
         self._stopped.clear()
         # 从 StateStore 恢复 since（无则首次全量）
@@ -159,8 +180,12 @@ class MatrixGateway:
         finally:
             self.connected = False
 
-    async def _on_text(self, room: Any, event: RoomMessageText) -> None:
-        """文本事件回调：忽略自发消息，把 content 原样交给上层处理链。"""
+    async def _on_room_message(self, room: Any, event: Any) -> None:
+        """房间消息回调（文本 + 媒体）：忽略自发消息，content 原样上交。
+
+        媒体事件的 body 是文件名、content 带 msgtype=m.file/m.image/...，
+        app 侧据此短路成 ambient 记账行（文件名里的 "@xxx" 不是 mention）。
+        """
         if event.sender == self.user_id or self.on_message is None:
             return
         content = getattr(event, "source", {}).get("content", {}) or {}
