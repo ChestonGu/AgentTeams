@@ -22,12 +22,22 @@ import (
 
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,255}$`)
 
+// humanLoginDefaultPermissionLevel is applied when sso-login creates a new
+// Human without an explicit permissionLevel. The CRD marks
+// spec.permissionLevel required with minimum 1, so leaving the Go zero value 0
+// would be rejected by the API server.
+const humanLoginDefaultPermissionLevel = 1
+
 type HumanLoginRequest struct {
 	Name            string `json:"name"`
 	DisplayName     string `json:"displayName"`
 	Email           string `json:"email,omitempty"`
 	InitialPassword string `json:"initialPassword,omitempty"`
 	DeviceID        string `json:"deviceId,omitempty"`
+	// PermissionLevel optionally overrides humanLoginDefaultPermissionLevel
+	// when sso-login creates a new Human. It is ignored for existing Humans,
+	// whose permission level is owned by the update API. Nil leaves the default.
+	PermissionLevel *int `json:"permissionLevel,omitempty"`
 }
 
 type HumanLoginResponse struct {
@@ -95,12 +105,21 @@ func (h *HumanLoginHandler) Login(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "InitialPasswordRequired", "initialPassword is required for a new human")
 			return
 		}
+		permissionLevel := humanLoginDefaultPermissionLevel
+		if req.PermissionLevel != nil {
+			if *req.PermissionLevel < 1 || *req.PermissionLevel > 3 {
+				httpError(w, http.StatusBadRequest, "InvalidPermissionLevel", "permissionLevel must be between 1 and 3")
+				return
+			}
+			permissionLevel = *req.PermissionLevel
+		}
 		human = v1beta1.Human{
 			ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: h.namespace},
 			Spec: v1beta1.HumanSpec{
 				DisplayName:     req.DisplayName,
 				Email:           req.Email,
 				InitialPassword: req.InitialPassword,
+				PermissionLevel: permissionLevel,
 			},
 		}
 		if h.controllerName != "" {
