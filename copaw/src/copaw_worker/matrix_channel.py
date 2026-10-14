@@ -284,6 +284,32 @@ def _runtime_config_field(section: str, key: str) -> str:
     return ""
 
 
+def _media_shared_rel_path(room_id: str, event: Any, body: str) -> str:
+    """Deterministic team-shared path for a room media event.
+
+    Computed from the event alone (room id + event id + body) — no
+    download, no coordination — so every channel instance (leader or
+    worker) derives the same path the archiving leader writes to.
+    """
+    eid = (getattr(event, "event_id", "") or "")[:8].lstrip("$")
+    room_key = (room_id or "")[:8].lstrip("!")
+    safe_name = _sanitize_media_filename(body) or f"matrix_media_{eid}"
+    return f"shared/knowledge/matrix/{room_key}/{eid}_{safe_name}"
+
+
+def _should_archive_media() -> bool:
+    """Only the team leader (or a standalone worker) archives room media.
+
+    Team workers skip both the media download and the MinIO write on the
+    non-mention path; their history entry still carries the deterministic
+    shared path (``_media_shared_rel_path``) so a later mention can
+    filesync-pull the archived file. Unknown/missing role degrades to
+    "don't archive" — the room stays quiet and the file can be re-sent.
+    """
+    role = _runtime_config_field("member", "role")
+    return role in ("team_leader", "standalone")
+
+
 def _extract_matrix_user_ids(text: str) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -1028,17 +1054,28 @@ class MatrixChannel(BaseChannel):
     ) -> None:
         """Record a non-mentioned media message as a history entry.
 
-        Produces a typed text description (e.g. ``[sent an image: photo.jpg]``)
-        and, for images when vision is enabled, downloads the actual file so it
-        can be included as an image content part later.
+        Produces a typed text description (e.g. ``[sent a file: X |
+        archived: shared/knowledge/matrix/...]``) pointing at the
+        deterministic team-shared path. Only the designated archiver
+        (team leader / standalone worker) downloads and archives the
+        bytes; plain workers record the line download-free.
         """
         body = event.body or ""
         media_parts: list[dict[str, Any]] = []
 
         if isinstance(event, RoomMessageImage):
-            body_desc = f"[sent an image: {body}]" if body else "[sent an image]"
+            rel_path = _media_shared_rel_path(room_id, event, body)
+            body_desc = (
+                f"[sent an image: {body} | archived: {rel_path}]"
+                if body
+                else f"[sent an image | archived: {rel_path}]"
+            )
             mxc_url: str = getattr(event, "url", "") or ""
-            if mxc_url:
+            # Download + archive only when this instance is the designated
+            # archiver (team leader / standalone). Workers stay download-free
+            # here: the history line above already points at the shared path
+            # the leader will write to.
+            if mxc_url and _should_archive_media():
                 eid = event.event_id[:8].lstrip("$")
                 filename = body or f"matrix_media_{eid}"
                 filename = f"{eid}_{filename}"
@@ -1056,9 +1093,14 @@ class MatrixChannel(BaseChannel):
                             "image_url": Path(local_path).as_uri(),
                         })
         elif isinstance(event, RoomMessageFile):
-            body_desc = f"[sent a file: {body}]" if body else "[sent a file]"
+            rel_path = _media_shared_rel_path(room_id, event, body)
+            body_desc = (
+                f"[sent a file: {body} | archived: {rel_path}]"
+                if body
+                else f"[sent a file | archived: {rel_path}]"
+            )
             mxc_url = getattr(event, "url", "") or ""
-            if mxc_url:
+            if mxc_url and _should_archive_media():
                 eid = event.event_id[:8].lstrip("$")
                 filename = body or f"matrix_media_{eid}"
                 filename = f"{eid}_{filename}"
@@ -1155,16 +1197,10 @@ class MatrixChannel(BaseChannel):
         fs = self._get_media_filesync()
         if fs is None:
             return None
-        eid = (getattr(event, "event_id", "") or "")[:8].lstrip("$")
-        room_key = (room_id or "")[:8].lstrip("!")
-        safe_name = _sanitize_media_filename(body) or f"matrix_media_{eid}"
-        filename = f"{eid}_{safe_name}"
-        remote = (
-            f"{fs._get_shared_remote()}"
-            f"knowledge/matrix/{room_key}/{filename}"
-        )
+        rel_path = _media_shared_rel_path(room_id, event, body)
+        remote = f"{fs._get_shared_remote()}{rel_path.removeprefix('shared/')}"
         sync_module._mc("cp", local_path, remote, check=True)
-        return f"shared/knowledge/matrix/{room_key}/{filename}"
+        return rel_path
 
     async def _archive_media_to_shared(
         self, local_path: str, room_id: str, event: Any, body: str,
@@ -1173,8 +1209,11 @@ class MatrixChannel(BaseChannel):
 
         Uploads to ``shared/knowledge/matrix/<room>/<event>_<name>`` on the
         team's MinIO shared tree (``teams/<team>/shared/`` for team members,
-        global ``shared/`` for standalone workers) and notifies the room via
-        m.notice so members know the filesync-pullable path.
+        global ``shared/`` for standalone workers). Only the archiver
+        (team_leader/standalone, gated by ``_should_archive_media`` at every
+        call site) reaches this method, so the success notice is exactly one
+        per file — the deterministic path is also part of every member's
+        history line (``_media_shared_rel_path``).
         """
         if not self._media_archive_enabled():
             return
@@ -1326,17 +1365,30 @@ class MatrixChannel(BaseChannel):
                 # Record as history (text description only)
                 body = event.body or ""
                 if isinstance(event, RoomEncryptedImage):
-                    desc = f"[sent an encrypted image: {body}]" if body else "[sent an encrypted image]"
+                    erel = _media_shared_rel_path(room_id, event, body)
+                    desc = (
+                        f"[sent an encrypted image: {body} | archived: {erel}]"
+                        if body
+                        else f"[sent an encrypted image | archived: {erel}]"
+                    )
                 elif isinstance(event, RoomEncryptedAudio):
                     desc = f"[sent encrypted audio: {body}]" if body else "[sent encrypted audio]"
                 elif isinstance(event, RoomEncryptedVideo):
                     desc = f"[sent an encrypted video: {body}]" if body else "[sent an encrypted video]"
                 else:
-                    desc = f"[sent an encrypted file: {body}]" if body else "[sent an encrypted file]"
-                # Archive encrypted room files even without a mention: the
-                # turn only gets the text description, but the team archive
-                # still needs the decrypted bytes.
-                if isinstance(event, (RoomEncryptedImage, RoomEncryptedFile)):
+                    erel = _media_shared_rel_path(room_id, event, body)
+                    desc = (
+                        f"[sent an encrypted file: {body} | archived: {erel}]"
+                        if body
+                        else f"[sent an encrypted file | archived: {erel}]"
+                    )
+                # Archive encrypted room files even without a mention —
+                # designated archiver only: the turn only gets the text
+                # description, but the team archive still needs the
+                # decrypted bytes.
+                if isinstance(
+                    event, (RoomEncryptedImage, RoomEncryptedFile),
+                ) and _should_archive_media():
                     enc_mxc = getattr(event, "url", "") or ""
                     enc_key = getattr(event, "key", {}) or {}
                     enc_hashes = getattr(event, "hashes", {}) or {}
@@ -1378,7 +1430,7 @@ class MatrixChannel(BaseChannel):
             filename = f"{eid}_{filename}"
             local_path = await self._download_encrypted_mxc(mxc_url, filename, key, hashes, iv)
             if local_path:
-                if not is_dm:
+                if not is_dm and _should_archive_media():
                     await self._archive_media_to_shared(
                         local_path, room_id, event, body,
                     )
@@ -1590,7 +1642,10 @@ class MatrixChannel(BaseChannel):
             filename = f"{eid}_{filename}"
             local_path = await self._download_mxc(mxc_url, filename)
             if local_path:
-                if not is_dm:
+                # Mention path: the download feeds this instance's own turn;
+                # archiving stays gated to the designated archiver so a team
+                # room gets exactly one MinIO write per file.
+                if not is_dm and _should_archive_media():
                     await self._archive_media_to_shared(
                         local_path, room_id, event, body,
                     )
