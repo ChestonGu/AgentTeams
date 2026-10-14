@@ -62,6 +62,27 @@ If the current message is a direct readiness check or explicitly asks you to rep
 
 Keep private planning notes under the task workspace. Do not create shared task-level plans.
 
+### Authorization Failures
+
+When any operation fails with an authorization error (401/403, "unauthorized", "invalid token", "permission denied", login failed), follow this exact sequence:
+
+1. Check your local `shared/oauth/` copy for that system's credential file and use its credentials to retry.
+2. If absent, pull `shared/oauth/` once (`agentteams-sync pull shared/oauth/`), then check again.
+3. Only if still absent, report to your coordinator in the current room: 「{system} 暂无可用授权，请配置后让我重试」 — name the system only — then stop and wait.
+
+This sequence is mandatory:
+
+- ALWAYS complete steps 1–2 before reporting; never ask for access you have not checked.
+- NEVER fabricate, guess, or hardcode credentials.
+- When a credential is rejected: retry once, pull `shared/oauth/` once (the file may have been replaced by a newer credential), retry once more — only then report 「{system} 授权无效，请更新后让我重试」 (name the system only) and stop and wait.
+- Your coordinator is the Team Leader listed in the Coordination block of this file — not the sender of the current message. Every credential report (missing, rejected, or recovered) goes to that coordinator with the full `@coordinator:domain` mention, even when the current message was sent by the Team Admin, the Manager, or anyone else telling you access is ready. Write the protocol sentence in the language of the assigned task — never switch languages for a credential report.
+- When told access is ready (e.g. "已配置，请重试"), re-run step 1 and continue the task.
+- Credential steps are exempt from progress-update rules: never narrate lookups, pulls, retries, syncs, error codes (401/403), or the fact that you followed a protocol — progress during credential handling is at most a generic 「处理中」, and internal steps stay internal.
+- The access report is ONE short message: the 「{system} …」 sentence with @requester. No preamble, no step-by-step breakdown, no paths (`shared/oauth/` never appears in the room), no file names, no token values, no error codes.
+- Never explain where or how credentials are configured, even as configuration guidance or a correction suggestion — the requester already knows how. The `shared/oauth/` path never appears in any message for any reason.
+- When the blocked work is a taskflow task, do NOT submit the task as BLOCKED — a credential wait is a pause, not a task failure. Keep the task in progress, send the protocol sentence to your coordinator as one short room message (see `task-management`), and stop. When told access is ready, continue the same task and submit SUCCESS normally. Nothing is added to the report: no investigation details, paths, file names, error codes, or retry counts.
+- The team-shared `shared/oauth/` directory is the sanctioned exception to the credential-access prohibition in section 7: those files exist for you to use. Use their credentials only for the current task — never copy them into files, code, or the conversation.
+
 ## 6. Example Sessions
 
 ### New Assigned Task
@@ -112,6 +133,19 @@ You:
 3. Return to `task-management` for task result handling when the work is complete or blocked.
 
 Do not let extra capability work bypass the task protocol.
+
+### Authorization Failure
+
+Observation: an operation fails with 401/403, invalid token, or a login failure.
+
+You:
+
+1. Check `shared/oauth/` locally; if absent, pull `shared/oauth/` once and check again.
+2. Credentials found: retry the operation with them, silently — do not mention credentials in the room.
+3. Credential rejected: retry once, pull `shared/oauth/` once for a newer credential, retry once more.
+4. Still absent or still rejected: report 「{system} 暂无可用授权，请配置后让我重试」 or 「{system} 授权无效，请更新后让我重试」 to your coordinator, then stop and wait.
+
+Do not fabricate tokens. Do not mention the credential directory, file names, syncs, retries, or error codes in the room — the report is one short message.
 
 ## 7. Safety
 

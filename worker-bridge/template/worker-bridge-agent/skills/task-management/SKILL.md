@@ -107,6 +107,15 @@ Then @mention your coordinator:
 
 Do not invent missing task files, project plans, or shared directories.
 
+When the blocker is an authorization failure covered by the Authorization Failures sequence in your AGENTS.md (missing or rejected credentials), do NOT submit the task as BLOCKED and do NOT use the blocked-task flow above — a credential wait is a pause, not a task failure. Keep the task in progress, send the protocol sentence to your coordinator in the room as one short message, and stop:
+
+```text
+@coordinator:domain {system} 暂无可用授权，请配置后让我重试
+@coordinator:domain {system} 授权无效，请更新后让我重试
+```
+
+When told access is ready, continue the same task and submit SUCCESS normally when the work is done. Do not add investigation details, paths, file names, error codes, or retry counts to a credential report — the protocol sentence is the complete report.
+
 ## Progress
 
 Progress notes are optional unless the task spec asks for them. If you write progress, put it under:

@@ -158,6 +158,29 @@ Batch same-turn state changes into one report. Do not report polling, waiting, r
 
 For Team Admin requested Projects, the requester update must reach the Team Admin in Leader DM. Team Room messages to Workers do not satisfy this requirement.
 
+Requester-facing Team Room reports always @mention both the requester and the Team Admin by their full Matrix IDs (once each; skip the duplicate when they are the same person) — see the anchor rule under Authorization Failures below.
+
+### Authorization Failures
+
+When any operation you perform fails with an authorization error (401/403, "unauthorized", "invalid token", "permission denied", login failed), follow this exact sequence:
+
+1. Check your local `shared/oauth/` copy for that system's credential file and use its credentials to retry.
+2. If absent, pull `shared/oauth/` once (`filesync` with `action="pull"`), then check again.
+3. Only if still absent, report in the current room with an @mention of both the requester and the Team Admin: 「{system} 暂无可用授权，请配置后让我重试」 — name the system only — then stop and wait.
+
+This sequence is mandatory:
+
+- Requester-facing reports — authorization relays, blockers, completion reports, decision questions — always @mention BOTH the requester and the Team Admin by their full Matrix IDs. The requester is the Matrix sender of the message that requested the current work — never assume the Team Admin sent it unless they actually did. When both are the same person, mention that person once.
+- ALWAYS complete steps 1–2 before reporting; never ask for access you have not checked.
+- NEVER fabricate, guess, or hardcode credentials.
+- When a credential is rejected: retry once, pull `shared/oauth/` once (the file may have been replaced by a newer credential), retry once more — only then report 「{system} 授权无效，请更新后让我重试」 (name the system only) and stop and wait.
+- When told access is ready (e.g. "已配置，请重试"), re-run step 1 and continue the task.
+- Credential steps are exempt from progress-update rules: never narrate lookups, pulls, retries, syncs, error codes (401/403), or the fact that you followed a protocol — progress during credential handling is at most a generic 「处理中」, and internal steps stay internal.
+- The access report is ONE short message: the 「{system} …」 sentence with @requester and @team-admin, posted in the room where the task was assigned. No preamble, no step-by-step breakdown, no paths (`shared/oauth/` never appears in the room), no file names, no token values, no error codes.
+- Never explain where or how credentials are configured, even as configuration guidance, a correction suggestion, or an escalation request — the requester and the Team Admin already know how. The `shared/oauth/` path never appears in any message for any reason.
+- When relaying or escalating a Worker authorization blocker: the Worker's protocol sentence (`BLOCKED: {task-id} - {system} …`) is already the complete report. Do not repeat paths, file names, error codes, retry sequences, or credential-directory details in task specs, status summaries, Team Room updates, or escalation messages to the Team Admin — refer to the issue as 「{system} 授权问题」 and wait for the access decision.
+- The team-shared `shared/oauth/` directory is the sanctioned exception to the credential-access prohibition in section 3: those files exist for you to use. Use their credentials only for the current task — never copy them into files, code, or the conversation.
+
 ## 10. Patch Rules And Prohibitions
 
 Do not:
