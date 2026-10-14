@@ -43,11 +43,55 @@ func TestHumanLoginCreatesHumanAndReturnsProvisionedToken(t *testing.T) {
 	if human.Spec.InitialPassword != "pw" {
 		t.Fatalf("initialPassword=%q, want pw", human.Spec.InitialPassword)
 	}
+	if human.Spec.PermissionLevel != 1 {
+		t.Fatalf("permissionLevel=%d, want 1 (sso-login default)", human.Spec.PermissionLevel)
+	}
 	if human.Labels[v1beta1.LabelController] != "ctrl-a" {
 		t.Fatalf("controller label=%q, want ctrl-a", human.Labels[v1beta1.LabelController])
 	}
 	if len(provisioner.Calls.EnsureHumanUser) != 1 {
 		t.Fatalf("EnsureHumanUser calls=%d, want 1", len(provisioner.Calls.EnsureHumanUser))
+	}
+}
+
+func TestHumanLoginCreateHonorsPermissionLevelOverride(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	provisioner := &mocks.MockHumanProvisioner{}
+	handler := NewHumanLoginHandler(k8sClient, "default", "", provisioner)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans/sso-login", bytes.NewBufferString(`{"name":"bob","initialPassword":"pw","permissionLevel":2}`))
+	rec := httptest.NewRecorder()
+	handler.Login(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "bob", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get Human: %v", err)
+	}
+	if human.Spec.PermissionLevel != 2 {
+		t.Fatalf("permissionLevel=%d, want 2", human.Spec.PermissionLevel)
+	}
+}
+
+func TestHumanLoginCreateRejectsInvalidPermissionLevel(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	provisioner := &mocks.MockHumanProvisioner{}
+	handler := NewHumanLoginHandler(k8sClient, "default", "", provisioner)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans/sso-login", bytes.NewBufferString(`{"name":"carol","initialPassword":"pw","permissionLevel":9}`))
+	rec := httptest.NewRecorder()
+	handler.Login(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "carol", Namespace: "default"}, &human); err == nil {
+		t.Fatal("out-of-range permissionLevel must not create a Human")
 	}
 }
 
