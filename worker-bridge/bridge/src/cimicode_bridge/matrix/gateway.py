@@ -199,8 +199,14 @@ class MatrixGateway:
             },
         )
 
-    async def send_text(self, room_id: str, body: str, *, content: dict[str, Any] | None = None) -> str | None:
-        """发送 m.room.message（markdown 渲染 + 三层 mention），返回 event_id。"""
+    async def send_text(self, room_id: str, body: str, *,
+                        content: dict[str, Any] | None = None,
+                        tx_id: str | None = None) -> str | None:
+        """发送 m.room.message（markdown 渲染 + 三层 mention），返回 event_id。
+
+        tx_id: Matrix 客户端事务 ID（可选）。相同 tx_id 重发被 homeserver 去重
+        ——委派通知等“恰好一次”语义的出站消息用它兜底重试。
+        """
         message = render_matrix_message(body)
         if content:
             message.update(content)
@@ -216,6 +222,7 @@ class MatrixGateway:
             "m.room.message",
             message,
             ignore_unverified_devices=True,
+            tx_id=tx_id,
         )
         event_id = getattr(response, "event_id", None)
         return str(event_id) if event_id else None

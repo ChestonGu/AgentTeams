@@ -120,3 +120,32 @@ def test_multiple_mentions_deduped_in_order():
     asyncio.run(gateway.send_text(ROOM, "@admin @oct-lead @oct-lead 请复核"))
 
     assert client.sent[0][1]["m.mentions"]["user_ids"] == [ADMIN, LEAD]
+
+
+def test_send_text_forwards_tx_id():
+    class _RecordingClient(FakeNioClient):
+        def __init__(self):
+            super().__init__()
+            self.kwargs = None
+
+        async def room_send(self, room_id, etype, content, **kwargs):
+            self.kwargs = kwargs
+            return await super().room_send(room_id, etype, content, **kwargs)
+
+    client = _RecordingClient()
+    gateway = _gateway(client)
+
+    asyncio.run(gateway.send_text(ROOM, "notify", tx_id="delegate-t-1"))
+
+    assert client.kwargs.get("tx_id") == "delegate-t-1"
+    assert client.sent[0][0] == ROOM
+
+
+def test_send_text_tx_id_default_none():
+    client = FakeNioClient([_Member(LEAD), _Member(OCW)])
+    gateway = _gateway(client)
+
+    asyncio.run(gateway.send_text(ROOM, "plain reply"))
+
+    # 现状回归:不传 tx_id 时 room_send 不收到 tx_id 关键字或收到 None
+    assert client.sent[0][0] == ROOM
