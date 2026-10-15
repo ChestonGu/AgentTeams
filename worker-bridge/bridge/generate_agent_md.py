@@ -9,10 +9,12 @@ upstream-rendered file is ever needed.
 
 Inputs:
 
-  --template       source template (defaults to the repo copy at
-                   template/worker-bridge-agent/AGENTS.md — the static
-                   skeleton: marker fences + §2-§8 + exactly two
-                   placeholders, {{COORDINATION}} and {{ENVIRONMENT}})
+  --template       source template (default: auto by member.role — the repo
+                   copy at template/worker-bridge-agent/AGENTS.md for
+                   worker/standalone, template/worker-bridge-leader-agent/
+                   AGENTS.md for team_leader; the static skeleton: marker
+                   fences + §2-§8 + exactly two placeholders,
+                   {{COORDINATION}} and {{ENVIRONMENT}})
   --runtime-config runtime.yaml (MinIO agents/<name>/runtime/runtime.yaml,
                    the controller-maintained MemberRuntimeConfig snapshot —
                    the single source of identity AND team facts)
@@ -26,9 +28,11 @@ Rendering:
     (agentteams-controller internal/agentconfig/coordination.go): worker
     form renders Coordinator (the team_leader member), Team Admin, and
     Coordinator Members from the runtime.yaml team section; standalone
-    form renders the Manager coordinator. The agentteams-team-context
-    fences stay in the template, so the marker skeleton is identical to
-    the copaw prompt form.
+    form renders the Manager coordinator; team_leader form renders Team
+    Admin, Team Workers (the delegation roster), Coordinator Members, and
+    the Team Roster from the leader's perspective. The
+    agentteams-team-context fences stay in the template, so the marker
+    skeleton is identical to the copaw prompt form.
   * {{ENVIRONMENT}} — worker identity (name, Matrix ID, team, storage
     prefix, date) from the runtime.yaml member/storage sections.
   * SOUL.md / PROFILE.md are appended verbatim after the rendered
@@ -82,9 +86,12 @@ except ImportError:  # module not deployed next door -> no-op shim, never break 
             pass
     agentteams_log = _NoLog
 
+_TEMPLATE_BASE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "template")
 DEFAULT_TEMPLATE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..",
-    "template", "worker-bridge-agent", "AGENTS.md")
+    _TEMPLATE_BASE, "worker-bridge-agent", "AGENTS.md")
+DEFAULT_LEADER_TEMPLATE = os.path.join(
+    _TEMPLATE_BASE, "worker-bridge-leader-agent", "AGENTS.md")
 
 PLACEHOLDER_COORDINATION = "{{COORDINATION}}"
 PLACEHOLDER_ENVIRONMENT = "{{ENVIRONMENT}}"
@@ -139,9 +146,10 @@ def parse_runtime_config(text):
         'storage_prefix',                                # storage.sharedPrefix
       }
     Worker identity is required (GenerateError when absent). role defaults
-    from team presence (team -> worker, no team -> standalone); any explicit
-    role other than worker/standalone (team_leader, coordinator, ...) is
-    rejected — the leader template is future work, not silent degradation."""
+    from team presence (team -> worker, no team -> standalone);
+    team_leader is accepted only with a team section (a leader only exists
+    inside a team); any other explicit role (coordinator, ...) is
+    rejected — not silent degradation."""
     if yaml is None:
         raise GenerateError(
             "PyYAML is required to parse the MemberRuntimeConfig document "
@@ -179,16 +187,18 @@ def parse_runtime_config(text):
 
     has_team = bool(team.get("name"))
     role = member.get("role") or ("worker" if has_team else "standalone")
-    if role not in ("worker", "standalone"):
-        # whitelist, not a team_leader special case: any other role (e.g.
-        # coordinator, a real roster value) would slip past the worker-only
-        # leader guard below and render a Coordination block with
-        # leader_id=None
+    if role == "team_leader":
+        if not has_team:
+            raise GenerateError(
+                "member.role=team_leader without a team section — a leader "
+                "only exists inside a team")
+    elif role not in ("worker", "standalone"):
+        # whitelist: any other role (e.g. coordinator, a real roster value)
+        # has no template form — fail loud instead of rendering a malformed
+        # Coordination block
         raise GenerateError(
-            f"member.role={role}: unsupported role (worker/standalone only; "
-            "the team_leader template is future work; a coordinator member "
-            "is not a worker agent) — refusing to render a malformed "
-            "Coordination block")
+            f"member.role={role}: unsupported role (worker/standalone/"
+            "team_leader only; a coordinator member is not an agent)")
 
     admin = team.get("admin") or {}
     admin_id = admin.get("matrixUserId") or ""
@@ -307,6 +317,46 @@ def render_coordination(cfg):
                      "and Admin")
         return "\n".join(lines)
 
+    if cfg["role"] == "team_leader":
+        # leader view of the same team facts: who to delegate to (Team
+        # Workers), who escalates (Team Admin / coordinators), and the
+        # full roster for @mention routing — rendered from the same
+        # runtime.yaml section the worker block reads
+        lines.append(f"- **Team**: {cfg['team_name']}")
+        if cfg["admin_id"]:
+            lines.append(f"- **Team Admin**: "
+                         f"{_named_mxid(cfg['admin_display'], cfg['admin_id'])} "
+                         "(has admin authority within this team)")
+        workers = [e for e in cfg["roster"]
+                   if e["role"] == "worker" and e["matrix_user_id"]]
+        if workers:
+            lines.append("- **Team Workers**:")
+            for entry in workers:
+                head = _named_mxid(
+                    entry["display_name"] or entry["name"],
+                    entry["matrix_user_id"])
+                lines.append(f"  - {head} — delegate assignments to them"
+                             + (f"; {entry['description']}"
+                                if entry["description"] else ""))
+        if cfg["coordinators"]:
+            lines.append("- **Coordinator Members**:")
+            for coord in cfg["coordinators"]:
+                lines.append(f"  - {_named_mxid(coord['display_name'], coord['matrix_user_id'])} "
+                             "— can assign tasks and make decisions within the team")
+        roster = _roster_lines(cfg)
+        if roster:
+            lines.append("- **Team Roster**:")
+            lines.extend(roster)
+        lines.append("- Team Room is the collaboration surface: task "
+                     "assignments, worker results, blockers, and questions "
+                     "all happen there")
+        lines.append("- Requester-facing reports @mention both the requester "
+                     "and the Team Admin by full Matrix ID (once each; skip "
+                     "the duplicate when they are the same person)")
+        lines.append("- Leader DM is for direct human conversation only — "
+                     "it is not a report channel")
+        return "\n".join(lines)
+
     lines.append(f"- **Coordinator**: {cfg['leader_id']} "
                  f"(Team Leader of {cfg['team_name']})")
     if cfg["admin_id"]:
@@ -344,7 +394,12 @@ def render_coordination(cfg):
 
 
 def render_environment(cfg, date):
-    return ENV_SECTION_TEMPLATE.format(
+    # leader identity line says "Leader name:" — worker/standalone keep
+    # the byte-identical "Worker name:" form the goldens lock
+    name_label = "Leader name" if cfg["role"] == "team_leader" else "Worker name"
+    section = ENV_SECTION_TEMPLATE.replace(
+        "- Worker name: {worker_name}", f"- {name_label}: {{worker_name}}")
+    return section.format(
         worker_name=cfg["worker_name"],
         display_name=cfg["display_name"],
         matrix_id=cfg["matrix_id"],
@@ -415,8 +470,9 @@ def main(argv=None):
     ap.add_argument("--runtime-config", required=True,
                     help="runtime.yaml path (MinIO agents/<name>/runtime/"
                          "runtime.yaml) — identity and team facts")
-    ap.add_argument("--template", default=DEFAULT_TEMPLATE,
-                    help=f"source template path (default: {DEFAULT_TEMPLATE})")
+    ap.add_argument("--template", default=None,
+                    help="source template path (default: auto by member.role — "
+                         f"{DEFAULT_TEMPLATE} or {DEFAULT_LEADER_TEMPLATE})")
     ap.add_argument("--soul-file", default=None,
                     help="optional SOUL.md path; content appended verbatim "
                          "after the rendered agent.md (copaw prompt order)")
@@ -438,14 +494,21 @@ def main(argv=None):
             return fh.read()
 
     try:
+        runtime = load_runtime_config(args.runtime_config)
+        # template autodispatch: the bridge call chain never passes
+        # --template, so the member's own role picks the source template
+        # (an explicit --template path overrides; an empty value falls
+        # back to autodispatch)
+        template_path = args.template or (
+            DEFAULT_LEADER_TEMPLATE if runtime["role"] == "team_leader"
+            else DEFAULT_TEMPLATE)
         try:
-            with open(args.template, encoding="utf-8") as fh:
+            with open(template_path, encoding="utf-8") as fh:
                 template = fh.read()
         except OSError as exc:
             raise GenerateError(f"cannot read template: {exc}")
         if not template.strip():
-            raise GenerateError(f"empty template: {args.template}")
-        runtime = load_runtime_config(args.runtime_config)
+            raise GenerateError(f"empty template: {template_path}")
         soul_text = _read_optional(args.soul_file)
         profile_text = _read_optional(args.profile_file)
         out = generate(runtime, template, date=args.date,

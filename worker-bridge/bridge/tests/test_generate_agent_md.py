@@ -30,10 +30,14 @@ import generate_agent_md as gen
 REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent", "AGENTS.md")
+LEADER_TEMPLATE = os.path.join(
+    REPO, "template", "worker-bridge-leader-agent", "AGENTS.md")
 RUNTIME_TEAM = os.path.join(FIXTURES, "runtime.yaml")
 RUNTIME_STANDALONE = os.path.join(FIXTURES, "runtime-standalone.yaml")
+RUNTIME_LEADER = os.path.join(FIXTURES, "runtime-leader.yaml")
 GOLDEN_TEAM = os.path.join(FIXTURES, "golden-team.md")
 GOLDEN_STANDALONE = os.path.join(FIXTURES, "golden-standalone.md")
+GOLDEN_LEADER = os.path.join(FIXTURES, "golden-leader.md")
 DATE = "2026-09-03"
 
 SOUL_TEXT = "# SOUL\n\nYou are a meticulous backend engineer.\nPrefer minimal diffs.\n"
@@ -65,6 +69,12 @@ class GoldenTest(unittest.TestCase):
     def test_standalone_golden(self):
         out = gen.generate(cfg_standalone(), read(TEMPLATE), date=DATE)
         self.assertEqual(out, read(GOLDEN_STANDALONE))
+
+    def test_leader_golden(self):
+        cfg = gen.load_runtime_config(RUNTIME_LEADER)
+        self.assertEqual(cfg["role"], "team_leader")
+        out = gen.generate(cfg, read(LEADER_TEMPLATE), date=DATE)
+        self.assertEqual(out, read(GOLDEN_LEADER))
 
     def test_persona_seam_then_soul_then_profile(self):
         out = gen.generate(cfg_team(), read(TEMPLATE), date=DATE,
@@ -211,12 +221,27 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(
             gen.parse_runtime_config(with_team)["role"], "worker")
 
-    def test_team_leader_role_rejected(self):
+    def test_team_leader_role_accepted_with_team(self):
+        cfg = gen.parse_runtime_config(
+            "member:\n"
+            "  name: l1\n"
+            "  matrixUserId: '@l1:example.org'\n"
+            "  role: team_leader\n"
+            "team:\n"
+            "  name: t1\n"
+            "  members:\n"
+            "  - matrixUserId: '@l1:example.org'\n"
+            "    role: team_leader\n"
+            "  - matrixUserId: '@w1:example.org'\n"
+            "    role: worker\n")
+        self.assertEqual(cfg["role"], "team_leader")
+
+    def test_team_leader_without_team_rejected(self):
         text = ("member:\n"
                 "  name: l1\n"
                 "  matrixUserId: '@l1:example.org'\n"
                 "  role: team_leader\n")
-        with self.assertRaisesRegex(gen.GenerateError, "team_leader"):
+        with self.assertRaisesRegex(gen.GenerateError, "team_leader.*team|team.*team_leader"):
             gen.parse_runtime_config(text)
 
     def test_coordinator_role_rejected(self):
@@ -464,6 +489,20 @@ class CoordinationTest(unittest.TestCase):
             "- Only respond to @mentions from your coordinator and Admin",
         ])
 
+    def test_leader_block(self):
+        cfg = gen.load_runtime_config(RUNTIME_LEADER)
+        block = gen.render_coordination(cfg)
+        self.assertIn("- **Team**: t-8a3f2c", block)
+        self.assertIn("- **Team Admin**: Alice (@u1234:example.org) "
+                      "(has admin authority within this team)", block)
+        self.assertIn("- **Team Workers**:", block)
+        self.assertIn("  - Frontend Dev "
+                      "(@t-8a3f2c-a9c417e2d5b83f60a1c7e9d2b4f6a8:example.org, "
+                      "worker) — Builds and reviews web UI components", block)
+        # leader 自己不出现在名册里(self 排除)
+        self.assertNotIn("Tower Lead (@t-8a3f2c-leader:example.org", block)
+        self.assertIn("- Team Room is the collaboration surface", block)
+
 
 class GenerateTest(unittest.TestCase):
     def test_environment_fields(self):
@@ -532,6 +571,12 @@ class CliTest(unittest.TestCase):
                             "--date", DATE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, read(GOLDEN_TEAM))
+
+    def test_leader_template_autodispatch(self):
+        # --template 缺省时按 role 自动选 leader 模板(bridge 调用链不传 template)
+        proc = self.run_cli("--runtime-config", RUNTIME_LEADER, "--date", DATE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, read(GOLDEN_LEADER))
 
     def test_output_file(self):
         with tempfile.TemporaryDirectory() as tmp:
