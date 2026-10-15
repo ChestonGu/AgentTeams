@@ -1,7 +1,7 @@
 # AgentTeams opencode Worker 接口契约
 
 > **统一命名注记（2026-09-13）**：runtime 统一为 worker-bridge（原 opencode），旧 opencode 链路退役；adapter 拆分 cimicode-stateless / cimicode-pod。文中 opencode 表述按此映射阅读。
-**版本** v2.4（2026-09-03，§6 生成契约：源模板 + runtime.yaml 渲染，canonical AGENTS.md 退役为非输入） · 对应实现：`opencode-worker-migration` T1-T11 交付物
+**版本** v2.7（2026-10-15，见 §8 版本沿革） · 对应实现：`opencode-worker-migration` T1-T11 + `leader-worker-bridge` P0 交付物
 **上游基线**：copaw dev-v1.2.2（`AgentTeams/copaw/src/copaw_worker/`、`manager/agent/copaw-worker-agent/`）
 
 两方消费本契约：
