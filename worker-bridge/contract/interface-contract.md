@@ -188,6 +188,10 @@ POST /api/v1/bridge/send            ← Content-Type: application/json
   不会重复入房。重试敏感的调用方应固定事务 ID（§5.4 委派通知固定
   `delegate-{task_id}`）。
 - 端点基址经 `BRIDGE_SEND_URL` env 注入沙箱（§1）；worker 不消费此端点。
+- pod 形态供给链：该 env 由 worker-bridge-operator 从 Worker CR
+  `spec.runtimeParameter.bridgeSendUrl` 注入（缺省不注入，与历史一致）；
+  该 worker 的沙箱镜像可经 `runtimeParameter.sandboxImage` 按 worker
+  覆盖（leader 变体镜像走此通道，缺省 = 全局 `CIMICODE_IMAGE`）。
 
 ## §5 命令契约（worker 侧 bash 命令）
 

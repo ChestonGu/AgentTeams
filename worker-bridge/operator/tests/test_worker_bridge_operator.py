@@ -148,6 +148,30 @@ def _decoded_secret(core: FakeCore, name: str) -> dict[str, str]:
     return {k: base64.b64decode(v).decode() for k, v in (live.data or {}).items()}
 
 
+def reconcile_full_stack(
+    runtime_parameter: dict[str, str] | None = None, cfg: wbo.OperatorConfig | None = None
+) -> tuple[wbo.StackOperator, FakeApps]:
+    """全链路供给 fixture（bridge pod env + spec.model 齐备）→ 单 worker 一轮
+    reconcile，返回 (operator, apps)。runtime_parameter=None = CR 不带键。"""
+    spec: dict[str, Any] = {"runtime": "worker-bridge", "model": "glm-5.3-flash"}
+    if runtime_parameter is not None:
+        spec["runtimeParameter"] = runtime_parameter
+    custom = FakeCustom(
+        workers={"w1": {"spec": spec, "status": {"matrixUserID": "@w1:matrix.local"}}},
+        teams=[{"metadata": {"name": "t1"}, "spec": {"workerMembers": [{"name": "w1"}]}}],
+    )
+    core = FakeCore(pods={
+        "agentteams-worker-w1-bridge": make_bridge_pod({
+            "AGENTTEAMS_FS_ACCESS_KEY": "ak", "AGENTTEAMS_FS_SECRET_KEY": "sk",
+            **GATEWAY_ENVS,
+        }),
+    })
+    apps = FakeApps()
+    op = make_operator(cfg or make_cfg(fs_endpoint="http://minio:9000"), custom=custom, core=core, apps=apps)
+    op.reconcile_worker("w1", custom.workers["w1"])
+    return op, apps
+
+
 # ----------------------------------------------------------------------
 # svc：单端口（runtime）
 # ----------------------------------------------------------------------
@@ -482,3 +506,63 @@ def test_reconcile_stateless_touches_nothing():
     assert apps.deployments == {}
     assert core.secrets == {}
     assert custom.patches == []
+
+
+# ----------------------------------------------------------------------
+# runtimeParameter 两键：sandboxImage / bridgeSendUrl（缺省路径零变化）
+# ----------------------------------------------------------------------
+def test_runtime_parameter_sandbox_image_overrides():
+    """sandboxImage 键 → 容器镜像按 worker 覆盖（全局 cfg.cimicode_image 为另一值）。"""
+    _, apps = reconcile_full_stack({"sandboxImage": "reg/leader:1"})
+    container = apps.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    assert container.image == "reg/leader:1"
+    # 只带 image 键不注入任何 env
+    assert "BRIDGE_SEND_URL" not in {e.name for e in container.env}
+
+
+def test_runtime_parameter_bridge_send_url_env():
+    """bridgeSendUrl 键 → 明文 env BRIDGE_SEND_URL 注入（镜像不被覆盖）。"""
+    op, apps = reconcile_full_stack({"bridgeSendUrl": "http://x:8081"})
+    container = apps.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    plain = {e.name: e.value for e in container.env if e.value is not None}
+    assert plain["BRIDGE_SEND_URL"] == "http://x:8081"
+    assert container.image == op.cfg.cimicode_image
+
+
+def test_runtime_parameter_absent_keeps_default_path():
+    """零变化锁：不带键 → image = 全局镜像，env 键集合 == 既有白名单（无
+    BRIDGE_SEND_URL）。"""
+    op, apps = reconcile_full_stack()
+    container = apps.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    assert container.image == op.cfg.cimicode_image
+    plain = {e.name: e.value for e in container.env if e.value is not None}
+    assert set(plain) == {
+        "AGENTTEAMS_FS_ROOT", "AGENTTEAMS_WORKER_NAME", "OPENCODE_PORT",
+        "AGENTTEAMS_FS_ENDPOINT", "AGENTTEAMS_FS_BUCKET", "AGENTTEAMS_TEAM",
+        "AGENTTEAMS_MATRIX_USER_ID", wbo.ENV_MODEL_CONFIG_HASH,
+    }
+    assert "BRIDGE_SEND_URL" not in plain
+
+
+def test_image_override_allows_provision_when_global_missing():
+    """cfg.cimicode_image="" + per-worker override → 正常供给不 defer。"""
+    _, apps = reconcile_full_stack(
+        {"sandboxImage": "reg/leader:1"},
+        cfg=make_cfg(fs_endpoint="http://minio:9000", cimicode_image=""),
+    )
+    container = apps.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    assert container.image == "reg/leader:1"
+
+
+def test_runtime_parameter_unknown_keys_ignored():
+    """未知键（契约袋语义）→ 供给结果与不带键逐项一致（image/env 序列+指纹）。"""
+    op_plain, apps_plain = reconcile_full_stack()
+    op_foo, apps_foo = reconcile_full_stack({"foo": "bar"})
+    c_plain = apps_plain.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    c_foo = apps_foo.deployments["w1-cimicode"].spec.template.spec.containers[0]
+    assert c_foo.image == c_plain.image
+    assert [e.name for e in c_foo.env] == [e.name for e in c_plain.env]
+    assert op_foo._env_fingerprint(c_foo) == op_foo._env_fingerprint(c_plain)
+    assert op_foo.deployment_drift(
+        apps_foo.deployments["w1-cimicode"], apps_plain.deployments["w1-cimicode"]
+    ) is False

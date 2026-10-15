@@ -32,6 +32,17 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
                           keys left in spec.env by an older operator are
                           harmless: same values, highest priority, explicit.
 
+Per-worker pod-form knobs (optional, Worker CR spec.runtimeParameter —
+the same string bag the stateless binding reads; the pod form recognizes
+exactly two keys, and workers carry neither, so a keyless CR provisions
+byte-identical objects as before):
+    sandboxImage   → override that worker's sandbox image (leader variant
+                     image rides this channel; absent = global CIMICODE_IMAGE)
+    bridgeSendUrl  → inject pod env BRIDGE_SEND_URL, the leader sandbox's
+                     projectflow delegate-commit auto-notification egress
+                     (bridge send endpoint, interface-contract §4.1)
+Unknown keys are ignored (lenient-bag semantics, as in the stateless path).
+
 The runtime image is form-agnostic: CIMICODE_IMAGE may point at either
 worker-bridge/cimicode-runtime (internal coder-cimicode base image) or
 worker-bridge/opencode-runtime (external opencode npm form). The two share
@@ -372,6 +383,8 @@ class StackOperator:
         matrix_user: str = "",
         with_fs_secret: bool = False,
         model_config: str | None = None,
+        image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> client.V1Deployment:
         name = self.cimicode_deploy_name(worker)
         # Working env for the in-pod toolchain (taskflow / mc sync). FS_* 契约
@@ -389,6 +402,9 @@ class StackOperator:
             pod_env["AGENTTEAMS_TEAM"] = team
         if matrix_user:
             pod_env["AGENTTEAMS_MATRIX_USER_ID"] = matrix_user
+        # per-worker 追加明文 env（runtimeParameter.bridgeSendUrl →
+        # BRIDGE_SEND_URL 经此进入；team/matrix_user 之后、secretKeyRef 之前）
+        pod_env.update(extra_env or {})
         container_env = env_list(pod_env)
         secret_name = self.cimicode_secret_name(worker)
         if with_fs_secret:
@@ -432,7 +448,7 @@ class StackOperator:
             ]
         container = client.V1Container(
             name="cimicode",
-            image=self.cfg.cimicode_image,
+            image=image or self.cfg.cimicode_image,
             image_pull_policy="IfNotPresent",
             env=container_env,
             ports=[
@@ -624,10 +640,22 @@ class StackOperator:
         if mode != ADAPTER_POD:
             log.warning("worker %s: unknown adapterMode %r — skipping", worker, mode)
             return
-        if not self.cfg.cimicode_image:
+        # 可选 per-worker 供给旋钮（CR spec.runtimeParameter，契约 v1.3 袋）：
+        #   sandboxImage  → 覆盖该 worker 的沙箱镜像（leader 变体走此通道；
+        #                   不带键 = 全局 CIMICODE_IMAGE，行为与历史逐字节一致）
+        #   bridgeSendUrl → 注入沙箱 env BRIDGE_SEND_URL（leader 沙箱的
+        #                   projectflow delegate-commit 自动通知出口；不带键不注入）
+        # 未知键忽略（stateless 绑定袋的既有语义，pod 形态只认这两个键）。
+        rp = worker_obj.get("spec", {}).get("runtimeParameter") or {}
+        if not isinstance(rp, dict):
+            rp = {}
+        image_override = str(rp.get("sandboxImage") or "").strip() or None
+        bridge_send_url = str(rp.get("bridgeSendUrl") or "").strip()
+        effective_image = image_override or self.cfg.cimicode_image
+        if not effective_image:
             log.error(
-                "worker %s: CIMICODE_IMAGE is not set — provisioning deferred "
-                "(set it in the operator deployment env)",
+                "worker %s: no sandbox image (CIMICODE_IMAGE unset and no "
+                "runtimeParameter.sandboxImage) — provisioning deferred",
                 worker,
             )
             return
@@ -686,6 +714,8 @@ class StackOperator:
                 matrix_user=matrix_user,
                 with_fs_secret=with_fs_secret,
                 model_config=model_config,
+                image=image_override,
+                extra_env={"BRIDGE_SEND_URL": bridge_send_url} if bridge_send_url else None,
             )
         )
         # 不 patch Worker CR：bridge 从 svc 命名契约自行推导接线（见模块
