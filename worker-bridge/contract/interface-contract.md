@@ -9,12 +9,14 @@
 | 方 | 消费内容 |
 |---|---|
 | **沙箱镜像/部署侧** | §1 env、§2 镜像布局、§3 同步、§5 命令 |
-| **bridge（Matrix 桥接层）** | §1 env 注入、§4 触发消息、§6 agent.md 生成 |
+| **bridge（Matrix 桥接层）** | §1 env 注入、§4 触发消息、§4.1 出站端点、§6 agent.md 生成 |
 
-> Leader 侧（copaw）当前不迁移、不改动；本契约主体约束 opencode worker 侧
-> 接口，与 copaw 机制相接的部分（任务协议字节、MinIO 布局、消息格式）以
-> copaw 实现为权威。**§5.4 为未来 leader 迁移预置的 projectflow CLI**
-> （已实现已测试，未部署；模板 `template/worker-bridge-leader-agent/`）。
+> Leader 侧（copaw）可继续沿用、不因本契约改动；本契约主体约束
+> worker-bridge worker 侧接口，与 copaw 机制相接的部分（任务协议字节、
+> MinIO 布局、消息格式）以 copaw 实现为权威。**v2.7 起 leader 形态已
+> 接线**：生成器接受 `member.role=team_leader` 并按 role 自动分派 leader
+> 模板（§6），`projectflow` CLI 随 leader 沙箱镜像部署、delegate-commit
+> 默认自动通知（§5.4，经 §4.1 出站端点）。
 
 ## §0 架构决策（v2，2026-09-01 与需求方确认）
 
@@ -55,6 +57,7 @@
 | `AGENTTEAMS_LOG_DIR` | 否 | — | 同上 | 目录形式（文件名固定 `agentteams.log`），优先级低于上一条 |
 | `AGENTTEAMS_LOG_LEVEL` | 否 | `INFO` | 同上 | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
 | `AGENTTEAMS_LOG_STDERR` | 否 | `1` | 同上 | `0` 关闭 stderr 镜像（文件 sink 不受影响） |
+| `BRIDGE_SEND_URL` | leader 沙箱 ✅ | — | `projectflow delegate-commit`（notify.py） | bridge send 端点（§4.1）基址，如 `http://agentteams-worker-<w>-bridge-svc:8081`（`<w>`=leader worker 名，暴露形态由部署侧定）。**仅 leader 沙箱需要**（delegate-commit 默认自动通知）；worker 恒不需要。缺失/不可达时 delegate-commit 报错退出、任务保持 prepared。**§1.1 runtime.json 回退不覆盖此键**（无 `AGENTTEAMS_` 前缀）——stateless leader 由平台侧以真实 env 注入 |
 
 > env 三元组（ENDPOINT/AK/SK）与 MC_HOST 二选一：local 模式注入三元组，
 > k8s/cloud 模式注入 MC_HOST。同时存在时三元组优先用于 `mc alias set`。
@@ -91,10 +94,13 @@
 ```
 bridge/generate_agent_md.py        ← agent.md 生成工具（§6）
 bridge/agentteams_log.py           ← 与 skills 副本逐字节同源（§5.5）
-template/worker-bridge-agent/AGENTS.md ← 源模板（§6；生成器默认模板路径是
-                                     相对自身的 ../template/worker-bridge-agent/
-                                     AGENTS.md——两处须保持仓库相对布局成对
-                                     部署，布局不同则显式传 --template）
+template/worker-bridge-agent/AGENTS.md ← worker/standalone 源模板（§6）
+template/worker-bridge-leader-agent/AGENTS.md ← leader 源模板（§6，v2.7）
+                                     ↑ 两模板均随 bridge 镜像打包；生成器默认
+                                     按 member.role 自动分派，路径是相对自身的
+                                     ../template/<对应模板>/AGENTS.md——两处须
+                                     保持仓库相对布局成对部署，布局不同则显式
+                                     传 --template
 + python3 / PyYAML（safe_load 结构化解析 runtime.yaml）
 ```
 
@@ -151,6 +157,38 @@ OpenClaw 兼容约定），bridge 构造下发消息时使用完全相同的两�
 **回复转发**：worker 当轮最终文本 = 发给团队的消息。bridge 原样转发到消息
 来源房间（不加工、不代答）。`NO_REPLY` 表示无意发送——bridge 收到后不转发。
 
+**路由纪律（v2.7）**：会话回复只送达触发本轮 turn 的房间——bridge 不提供
+"回复到其他房间"的会话通道；跨房发送（典型：leader 在 Leader DM 被触发，
+委派通知必须进 Team Room）必须经工具走 §4.1 出站端点——每次发送是独立
+Matrix 事件、txn 可幂等、可追溯。
+
+### 4.1 出站端点契约（bridge send，v2.7）
+
+沙箱侧工具往任意房间**主动发送**消息的唯一通道（会话回复之外的出站
+路径；当前消费者 = leader `projectflow delegate-commit` 自动通知，§5.4）。
+bridge 的 HTTP 服务（uvicorn，缺省 `0.0.0.0:8081`，与探针同一进程）承载
+本端点；**端点无鉴权，以网络隔离为前提**——只应在集群命名空间内对沙箱
+可达，部署侧必须保证该端口不向集群外暴露。
+
+```
+POST /api/v1/bridge/send            ← Content-Type: application/json
+{"room_id": "<!room:domain>",       ← 必填，目标房间全 ID
+ "text":    "<消息正文>",            ← 必填；markdown 渲染 + m.mentions 自动解析
+ "txn_id":  "<事务 ID>"}            ← 可选；事务 ID（幂等语义见下）
+
+→ {"ok": true,  "event_id": "$..."}   ← 发送成功
+→ {"ok": false, "error": "<原因>"}    ← 参数拒绝 / 网关未就绪 / 发送失败
+```
+
+- **拒绝项**：`room_id`/`text` 缺失或空白（显式 `null` 按缺失处理，不落
+  字面量 `"None"`）；`text` 去空白后恰为 `NO_REPLY`（"无意发送"的语义
+  不允许经工具发往任何房间）；Matrix 网关未就绪；发送异常。
+- **`txn_id` 幂等**：可选；`null`/空串 = homeserver 缺省事务 ID。非空时
+  透传 homeserver 作事务 ID——同 ID 重放由 homeserver 去重，重复请求
+  不会重复入房。重试敏感的调用方应固定事务 ID（§5.4 委派通知固定
+  `delegate-{task_id}`）。
+- 端点基址经 `BRIDGE_SEND_URL` env 注入沙箱（§1）；worker 不消费此端点。
+
 ## §5 命令契约（worker 侧 bash 命令）
 
 ### 5.1 taskflow（= copaw taskflow 工具 check_task/ack_task/submit_task）
@@ -196,12 +234,13 @@ agentteams-sync [--root FS_ROOT] pull  <path> [--dry-run]
 3. push/verify 失败回滚（copaw 无回滚）
 4. `AGENTTEAMS_TEAM` env 替代 agt 运行时查询（沙箱无 controller 访问，D8）
 
-### 5.4 projectflow（leader 侧 CLI，预置未部署）
+### 5.4 projectflow（leader 侧 CLI，v2.7 起随 leader 沙箱部署）
 
-为未来 leader 运行时迁移到 opencode 预置。实现在 `cli/projectflow/`
-（三件套 projectflow.py + projectflow_core.py + mc_sync.py，后者与前两处
-逐字节一致），vendor 自 copaw task.py **全量**（worker+leader 函数一体，
-CLI 层只暴露 leader 动词）。映射关系：
+leader 形态的命令面（v2.7 前为预置未部署）。实现在 `cli/projectflow/`
+（projectflow.py + projectflow_core.py + mc_sync.py + notify.py 四件，
+mc_sync 与其他 scripts 副本逐字节一致），vendor 自 copaw task.py
+**全量**（worker+leader 函数一体，CLI 层只暴露 leader 动词）；随
+leader 模板 skills 树进 leader 沙箱镜像（§2）。映射关系：
 
 ```
 projectflow create-project|show-project|pause-project|resume-project|complete-project <pid>
@@ -210,7 +249,7 @@ projectflow plan-loop <pid> --goal <g> --stop-condition <c> --iteration-template
 projectflow record-iteration <pid> --iteration <n> --decision continue|replan|ask_user|stop_success|stop_blocked --summary <s> [--next-action <a>]
 projectflow show-plan <pid> / ready <pid>          # ready 自动按 plan 类型分 dag/loop
 projectflow delegate <pid> <tid> --spec <text|@file|-> [--room-id <!room:domain>]
-projectflow delegate-commit <pid> <tid> [--event-id <matrix event>]
+projectflow delegate-commit <pid> <tid> --assignee-mxid <full-mxid> | --no-notify [--event-id <matrix event>]
 projectflow check <tid>                             # leader 读回：meta + result.md 全文 + effective_for_acceptance
 ```
 
@@ -220,19 +259,41 @@ projectflow check <tid>                             # leader 读回：meta + res
    的协议所有方，push 恒带空 exclude（worker 侧恒排除前两者）。
 2. 每条命令 pull → mutate → push；push 失败**快照回滚**本地文件
    （与 §5.3.3 同一增强类，leader 形态）。
-3. 委派序列固定：`ready` → `delegate`（写 meta+spec、节点标记 delegated）
-   → 通知 worker → `delegate-commit`（记 event_id 防重发，幂等）。
+3. **委派序列固定**：`ready` → `delegate`（写 meta+spec、节点标记
+   delegated；`--room-id` 记入 meta——委派通知的目的地与 worker ack 的
+   房间校验共用它，建议恒传）→ `delegate-commit`。
 4. `--tasks-json`/`--spec`/`--iteration-template` 统一支持字面量 / `@file` / `-`(stdin)。
 5. 角色分离在工具面：worker `taskflow` CLI 无 leader 动词，`projectflow`
    无 worker 动词（ack/submit 专属 worker）。
-6. env 同 §1（`AGENTTEAMS_WORKER_NAME` 注入 leader 名，mc 同步契约要求）。
+6. env 同 §1（`AGENTTEAMS_WORKER_NAME` 注入 leader 名，mc 同步契约要求；
+   delegate-commit 自动通知另需 `BRIDGE_SEND_URL`）。
+
+**delegate-commit 通知语义（v2.7，默认自动通知）**：
+
+- **自动路径（默认）**：`delegate-commit <pid> <tid> --assignee-mxid <full-mxid>`
+  经 `BRIDGE_SEND_URL`（§1）调 bridge send 端点（§4.1），把委派通知发到
+  `meta.room_id`（Team Room）——文本 `@{assignee} You are assigned task
+  **{task_id}**: {title}` + spec 预览（500 字符截断），固定事务 ID
+  `delegate-{task_id}`（homeserver 幂等，重试不重复入房）。**先发后
+  commit**（copaw delegate_task 原子序）。`delegate` 收尾提示语直接引导
+  跑此命令并声明"勿自发委派消息"——重复通知可能把 worker 触发两次。
+- **前置**：`meta.room_id`（delegate 时记入，缺则报错要求带 `--room-id`
+  重新 delegate）与 `--assignee-mxid`（协作块 Team Workers 名单里的
+  full Matrix ID）。
+- **失败保持 prepared**：env 缺失 / 端点不可达 / 发送被拒——命令退出 1，
+  meta 仍 prepared、未 commit；修复后重跑同一命令（固定 txn 幂等短路，
+  已入房的通知不会重发）。
+- **幂等短路**：任务已 assigned 且带 event_id 时直接跳过通知、幂等成功。
+- **手动通道（`--no-notify [--event-id <id>]`）**：零网络——v2.7 前的
+  唯一形态，通知由外部自发、拿到 event id 再记账；该路径下 notify
+  模块根本不加载。
 
 ### 5.5 统一日志契约（全部工具 → 一个 JSONL 文件）
 
 **要求**（2026-09-02 与需求方确认）：所有工具的日志统一记录在**同一个
 日志文件**里，方便排查和追溯。
 
-覆盖工具：`taskflow`、`agentteams-sync`、`projectflow`（部署后）、
+覆盖工具：`taskflow`、`agentteams-sync`、`projectflow`（leader 沙箱）、
 `generate_agent_md`（bridge 侧运行，日志文件由调用方指定）。实现模块
 `agentteams_log.py`，随每个 scripts 目录部署。
 
@@ -289,7 +350,9 @@ system prompt 传给 opencode**——"调谐合成 AGENTS.md"这件事（静态�
 - **SOUL.md / PROFILE.md**（MinIO `agents/<name>/` 下存在时）：persona
   逐字合并。
 - **源模板**：bridge 容器内 `template/worker-bridge-agent/AGENTS.md`
-  （与生成器同仓部署，§2 bridge 段；`--template` 可覆盖）。
+  （worker/standalone）或 `template/worker-bridge-leader-agent/AGENTS.md`
+  （leader）——**生成器按 member.role 自动分派**（不传 `--template` 时；
+  显式传参覆盖），两模板均随 bridge 镜像打包（§2 bridge 段）。
 
 ### 6.1 生成规则（模板固化骨架 + 两个占位符）
 
@@ -299,7 +362,8 @@ system prompt 传给 opencode**——"调谐合成 AGENTS.md"这件事（静态�
 ```
 <!-- agentteams-builtin-start -->   ← 模板固化（文件开头）
 > ⚠️ DO NOT EDIT ...                ← 模板固化
-# opencode Worker Agent Workspace   ← 模板固化（前导 + §2-§8 全静态正文）
+# opencode Worker Agent Workspace   ← 模板固化（前导 + §2-§8 全静态正文；
+                                     　 leader 模板同构，标题/正文为 leader 版）
 <!-- agentteams-builtin-end -->     ← 模板固化
 <!-- agentteams-team-context-start -->
 {{COORDINATION}}                    ← 渲染自 runtime.yaml team 段
@@ -312,7 +376,8 @@ system prompt 传给 opencode**——"调谐合成 AGENTS.md"这件事（静态�
 |---|---|---|
 | `{{COORDINATION}}` worker 形态 | team 段 | Coordinator = `members[role=team_leader]`；Team Admin = `team.admin.matrixUserId`（缺省整行省略）；Coordinator Members = `members[role=coordinator]`（排除 admin、去重保序）；Respond 行按 admin/coordinators 有无共四种变体。**文案与 controller `agentconfig/coordination.go` 逐行对齐**（等价信息换结构化源重渲染，消费语义不变） |
 | `{{COORDINATION}}` standalone 形态 | member.matrixUserId 域名 | Coordinator = `@manager:{domain}` + 两条规则（无 team 段时；role 缺省按 team 有无回落 worker/standalone） |
-| `{{ENVIRONMENT}}` | member/storage 段 | worker 名（member.name 缺省回落 runtimeName）/ Matrix ID / team.name（缺省 standalone）/ storage.sharedPrefix（缺省 agentteams）/ UTC 日期 |
+| `{{COORDINATION}}` leader 形态（v2.7） | team 段 | `member.role=team_leader`（须有 team 段）渲染 leader 视角：Team / Team Room（`team.teamRoomId`）/ Leader DM Room（`team.leaderDmRoomId`）/ Team Admin / **Team Workers**（`members[role=worker]` 全体，委派对象=delegate-commit `--assignee-mxid` 取值处）/ Coordinator Members / Team Roster（自排除）+ Team Room 协作面与 requester 报告双锚规则 |
+| `{{ENVIRONMENT}}` | member/storage 段 | worker 名（member.name 缺省回落 runtimeName）/ Matrix ID / team.name（缺省 standalone）/ storage.sharedPrefix（缺省 agentteams）/ UTC 日期；leader 形态首行标签 `Leader name:`（worker/standalone 保持 `Worker name:` 字节不变） |
 | Persona 追加 | SOUL/PROFILE 文件 | 归一（CRLF→LF、去首尾空行）后逐字追加，顺序 SOUL → PROFILE；前置 `## Persona` 接缝段（显式归因 "define who you are" + "never override your Worker role" 优先级声明）；两者皆缺则接缝不出现；空白文件 no-op |
 
 行为细节（**fail-loud：以下全部硬错误，退出码 1，bridge 拒开该会话，
@@ -321,8 +386,11 @@ system prompt 传给 opencode**——"调谐合成 AGENTS.md"这件事（静态�
 - runtime.yaml 用 **PyYAML 结构化解析**（`yaml.safe_load`，dict/list 直取；
   镜像预装 pyyaml，无逐行文本匹配——不合法 YAML 当场拒绝）。
 - 缺 member 身份（name/runtimeName/matrixUserId）、matrixUserId 无域名、
-  worker 形态无 team_leader 成员、`member.role=team_leader`（leader 模板
-  未建，拒绝降级渲染 worker 形态）。
+  worker 形态无 team_leader 成员、`member.role` 不在白名单
+  （worker/standalone/team_leader——coordinator 等真实名册角色无模板
+  形态，拒绝静默降级）、`team_leader` 无 team 段（leader 只存在于团队内）。
+  v2.6 前 `team_leader` 被整类拒绝（leader 模板未建）；v2.7 起放行并自动
+  分派 leader 模板，worker/standalone 两形态渲染逐字节不变（golden 锁定）。
 - 模板占位符数量不等于恰一个、模板含未知 `{{...}}`、渲染后残留 `{{`/`}}`
   （含占位符 payload 自身被污染的情况）。
 - 输出恒 UTF-8/LF（CLI 内部强制，不受宿主 locale 影响）。
@@ -337,6 +405,8 @@ python3 generate_agent_md.py --runtime-config <runtime.yaml> \
 
 `--runtime-config` 必填（指向 bridge 从 MinIO 拉下的本地文件）；
 `--output` 缺省 stdout；退出码 0/1/2（与其他 CLI 一致）。
+`--template` 缺省按 member.role 在 worker/leader 两模板间**自动分派**
+（§6.1；显式传参覆盖）。
 `--soul-file`/`--profile-file` 文件存在才传（与 copaw
 `system_prompt_files` 的 if-exists 语义一致）。
 golden 单测锁定：渲染输出 == `bridge/tests/fixtures/golden-team.md` /
@@ -361,8 +431,9 @@ soul_merged/profile_merged）。
 - ~~canonical AGENTS.md~~：**不再是 opencode worker 的输入**（copaw
   leader/worker 照常消费，互不影响）；`spec.agents` 用户自定义内容不向
   opencode 传播（个性化走 PROFILE.md）。
-- 模板：镜像构建时从仓库 `template/worker-bridge-agent/` 取，与生成器
-  的相对位置即缺省 `--template` 解析路径。
+- 模板：镜像构建时从仓库 `template/worker-bridge-agent/` 与
+  `template/worker-bridge-leader-agent/` 取两份，与生成器的相对位置即
+  缺省分派的解析路径（`<gen>/../template/<对应模板>/AGENTS.md`）。
 
 ## §7 职责矩阵（v2：两方）
 
@@ -371,8 +442,8 @@ soul_merged/profile_merged）。
 | 镜像内 mc/python3/jq、skills 预装、PATH wrapper | ✅ | | |
 | runtime=opencode 的 pod 镜像选择 | ✅（部署配置） | | |
 | §1 env 注入 | | ✅ | |
-| §4 消息构造（history 累积 + marker + 转发 + NO_REPLY 吞掉） | | ✅ | |
-| §6 agent.md 生成（generate_agent_md.py：源模板 + runtime.yaml 渲染，Coordination/Environment + persona 合并） | 模板随镜像 | ✅（调用方） | |
+| §4 消息构造（history 累积 + marker + 转发 + NO_REPLY 吞掉）+ §4.1 出站端点 | | ✅ | |
+| §6 agent.md 生成（generate_agent_md.py：源模板按 role 分派 worker/leader + runtime.yaml 渲染，Coordination/Environment + persona 合并） | 模板随镜像 | ✅（调用方） | |
 | `agents/<name>/` 两件套（runtime/runtime.yaml、SOUL.md；canonical AGENTS.md 与 opencode 无关） | | 拉取 | ✅ 调谐写入维护（runtime.yaml 仅 qwenpaw/edge 分支） |
 | Coordination 等价信息（原 controller 注入 AGENTS.md 的块） | | 从 runtime.yaml team 段渲染 | ✅ team 段调谐维护 |
 | §5.5 统一日志（文件位置由 env/缺省决定；bridge 侧生成器日志文件自定） | ✅（pod 内缺省路径） | ✅（生成器） | |
@@ -392,3 +463,4 @@ soul_merged/profile_merged）。
 | v2.4 | 2026-09-03 | §6 重写为**生成契约**（需求方定夺）：弃"转换 canonical AGENTS.md"，改 `bridge/generate_agent_md.py` = **源模板 + runtime.yaml 渲染**——模板占位符化（`{{COORDINATION}}`/`{{ENVIRONMENT}}`，标记骨架固化在模板）；Coordination 块改从 runtime.yaml team 段渲染（文案与 controller `coordination.go` 逐行对齐，等价信息换结构化源）；runtime.yaml 改 **PyYAML 结构化解析**（当场抓出 fixture 粘贴污染）；persona 追加前置 **`## Persona` 接缝段**（归因 + 不覆盖 Worker 角色声明）；**fail-loud 全硬错误**（缺身份/无 leader/leader 角色/占位符漂移/残留括号/坏 YAML 均退出码 1，bridge 拒开会话）；canonical AGENTS.md 退役为非输入（`spec.agents` 用户内容不传播，个性化走 PROFILE.md）；数据义务改两件套（runtime.yaml + persona）+ 镜像内模板，**前提 = Member 落 qwenpaw/edge 调谐分支**（生产同型部署已确认）；golden 改为审定渲染快照双份（team/standalone） |
 | v2.5 | 2026-09-22 | 新增 **§1.1 配置文件回退**：`/opt/teams/config/runtime.json`（平铺 JSON，键=env 名，仅 `AGENTTEAMS_` 前缀生效）作为 §1 全部 env 键的 fallback 通道——stateless 沙箱平台无法建时注入 env，改由平台侧服务按 operator 同款三源拼值写文件；env 显式恒优先，pod 模式不受影响（文件缺席=正常态）。装载实现在 `mc_sync.load_runtime_config_file()`，import 时执行（早于 `_MC_ALIAS` 模块级求值），CLI 三件（taskflow/agentteams-sync/projectflow）零入口改动全覆盖 |
 | v2.6 | 2026-09-23 | §1 `AGENTTEAMS_FS_ROOT` 行补**沙箱约定值 `/workspace/work`**（pod 模式 operator 注入；runtime entrypoint 按 env `mkdir -p` + `cd`，cwd 与 `shared/` 同根——单旋钮）。工具链缺席缺省 `/root/agentteams-fs` 不变（沙箱内恒被 env/runtime.json 覆盖）；cimicode-runtime / opencode-runtime / cimicode-sandbox 三镜像的 WORKDIR 与 entrypoint 兜底同步迁移；stateless 平台侧改 runtime.json 供值即可，沙箱 cwd 仍归平台管（cimicode-sandbox 无 entrypoint） |
+| v2.7 | 2026-10-15 | Leader 形态接线（dev-v1.2.3-leader 首批）：§4 补路由纪律（会话回复只达触发房、跨房必经工具）+ 新增 **§4.1 出站端点** `POST /api/v1/bridge/send`（请求/响应体、`txn_id` 幂等透传、NO_REPLY 拒发、无鉴权以网络隔离为前提）；§1 新增 `BRIDGE_SEND_URL`（仅 leader 沙箱；§1.1 回退不覆盖，stateless 走平台真实 env）；§5.4 projectflow 转正为随 leader 沙箱部署——delegate-commit **默认自动通知**（`--assignee-mxid`、先发后 commit、txn `delegate-{task_id}` 幂等短路、失败保持 prepared、`--no-notify` 手动通道），"notify 由 agent 自发"旧描述删除；§6 生成器接受 `member.role=team_leader` 并按 role 自动分派 worker/leader 两模板（fail-loud 白名单改写；worker/standalone 渲染逐字节不变，golden 锁定），leader Coordination 渲染 Team/Team Room/Leader DM Room/Team Admin/Team Workers/Coordinator Members/Team Roster，Environment leader 标签 `Leader name:`；§2 bridge 预装补 leader 模板（随镜像打包） |
