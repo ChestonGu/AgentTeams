@@ -80,3 +80,27 @@ def register_routes(app: FastAPI, bridge) -> None:
             "user_message": user_message,
             "sandbox_id": bridge.config.runtime.sandbox_id,
         }
+
+    @app.post("/api/v1/bridge/send")
+    async def send_message(payload: dict[str, Any]) -> dict[str, Any]:
+        """出站通道:沙箱 CLI(leader 委派通知)经 bridge 往指定房间发消息。
+
+        纯基础设施:复用 gateway.send_text(m.mentions 自动解析 + markdown
+        渲染),txn_id 透传 homeserver 事务幂等。契约 interface-contract §4。
+        """
+        room_id = str(payload.get("room_id", "")).strip()
+        text = str(payload.get("text", ""))
+        if not room_id or not text.strip():
+            return {"ok": False, "error": "room_id and text are required"}
+        if text.strip() == "NO_REPLY":
+            return {"ok": False,
+                    "error": "NO_REPLY must not be sent to any room"}
+        gateway = bridge.matrix_gateway
+        if gateway is None:
+            return {"ok": False, "error": "matrix gateway not ready"}
+        txn_id = str(payload.get("txn_id", "")).strip() or None
+        try:
+            event_id = await gateway.send_text(room_id, text, tx_id=txn_id)
+        except Exception as exc:  # nio 失败必须可见,调用方据此保持 prepared 态
+            return {"ok": False, "error": f"send failed: {exc}"}
+        return {"ok": True, "event_id": event_id}
