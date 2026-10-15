@@ -16,7 +16,7 @@ byte-compatible:
     taskflow(action="ready_nodes")      ->  projectflow ready <id>          (auto dag/loop)
     taskflow(action="record_loop_iteration") -> projectflow record-iteration <id> ...
     taskflow(action="prepare_task")     ->  projectflow delegate <pid> <tid> --spec ...
-    taskflow(action="commit_task_assignment") -> projectflow delegate-commit <pid> <tid> [--event-id ...]
+    taskflow(action="commit_task_assignment") -> projectflow delegate-commit <pid> <tid> [--assignee-mxid <full-mxid> | --no-notify --event-id ...]
     taskflow(action="pause_project")    ->  projectflow pause-project <id>
     taskflow(action="resume_project")   ->  projectflow resume-project <id>
     taskflow(action="complete_project") ->  projectflow complete-project <id>
@@ -419,8 +419,10 @@ def cmd_delegate(store, args, sync) -> int:
     print(f"[delegate] {meta.task_id}: pending -> {meta.status} "
           f"(spec at shared/tasks/{meta.task_id}/spec.md)")
     print(meta_json(meta))
-    print("[next] notify the worker, then run "
-          f"'projectflow delegate-commit {args.project_id} {meta.task_id}'")
+    print("[next] run "
+          f"'projectflow delegate-commit {args.project_id} {meta.task_id} "
+          f"--assignee-mxid <full-mxid>' — it notifies the worker "
+          "automatically; do NOT send the assignment yourself")
     return 0
 
 
@@ -429,12 +431,44 @@ def cmd_delegate_commit(store, args, sync) -> int:
          backend=sync.describe())
     sync.pull_project(args.project_id)
     sync.pull_task(args.task_id)
+    meta = store.read_task_meta(args.task_id)
+    event_id = args.event_id
+    notified = False
+    if not getattr(args, "no_notify", False):
+        # Auto-notification path (default): notify -> commit -> push, the
+        # copaw delegate_task atomic order. Any failure below exits with
+        # meta still prepared; the fixed txn_id makes a retry idempotent.
+        if meta.status == "assigned" and meta.event_id:
+            print(f"[commit] {meta.task_id}: already assigned "
+                  f"(event_id={meta.event_id}) — notification skipped")
+            print(meta_json(meta))
+            return 0
+        if not (meta.room_id or "").strip():
+            print("error: task has no room_id — re-delegate with --room-id",
+                  file=sys.stderr)
+            return 1
+        if not (getattr(args, "assignee_mxid", "") or "").strip():
+            print("error: --assignee-mxid is required for auto-notification "
+                  "(full Matrix ID from the Coordination Team Workers list); "
+                  "or pass --no-notify --event-id for the manual path",
+                  file=sys.stderr)
+            return 1
+        spec = store.read_task_spec(args.task_id)
+        import notify as _notify  # delayed: --no-notify path never loads it
+        try:
+            event_id = _notify.send_assignment(
+                meta.room_id, args.assignee_mxid.lstrip("@"),
+                meta.task_id, meta.task_title, spec)
+        except _notify.NotifyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        notified = True
     snap = _snapshot(_task_paths(store, args.task_id))
     meta = commit_task_assignment(
         store,
         project_id=args.project_id,
         task_id=args.task_id,
-        event_id=args.event_id,
+        event_id=event_id,
     )
     _log("status_change", task=args.task_id, to=meta.status,
          event_id=meta.event_id or None)
@@ -442,6 +476,10 @@ def cmd_delegate_commit(store, args, sync) -> int:
     print(f"[commit] {meta.task_id}: {meta.status} "
           f"(event_id={meta.event_id or '-'})")
     print(meta_json(meta))
+    if notified:
+        print("[notify] assignment sent to the Team Room — do NOT send the "
+              "assignment message yourself (a duplicate can trigger the "
+              "worker twice)")
     return 0
 
 
@@ -555,7 +593,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("delegate-commit", help="mark the prepared task assigned (after notifying)")
     p.add_argument("project_id")
     p.add_argument("task_id")
-    p.add_argument("--event-id", default=None)
+    p.add_argument("--event-id", default=None,
+                   help="manual path (--no-notify): record this Matrix event id")
+    p.add_argument("--assignee-mxid", default="",
+                   help="assigned worker's full Matrix ID (auto-notification)")
+    p.add_argument("--no-notify", action="store_true",
+                   help="manual path: no auto-notification, use --event-id")
 
     p = sub.add_parser("check", help="leader read: task meta + result.md")
     p.add_argument("task_id")

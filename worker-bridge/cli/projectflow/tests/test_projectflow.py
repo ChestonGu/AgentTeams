@@ -225,7 +225,8 @@ class CliTest(unittest.TestCase):
                           "--room-id", "!r:example.org")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn('"status": "prepared"', out.stdout)
-        out = self.leader("delegate-commit", "p-1", "t-1", "--event-id", "$ev1")
+        out = self.leader("delegate-commit", "p-1", "t-1", "--no-notify",
+                          "--event-id", "$ev1")
         self.assertIn('"status": "assigned"', out.stdout)
 
         out = self.worker_cli("ack", "t-1")
@@ -247,7 +248,7 @@ class CliTest(unittest.TestCase):
         self.bootstrap_project()
         self.leader("delegate", "p-1", "t-1", "--spec", "s",
                     "--room-id", "!r:example.org")
-        self.leader("delegate-commit", "p-1", "t-1")
+        self.leader("delegate-commit", "p-1", "t-1", "--no-notify")
         out = self.leader("check", "t-1")
         self.assertIn("result: <none>", out.stdout)
 
