@@ -5,7 +5,9 @@
 # 创建沙箱（team 侧不做任何管控），沙箱内必须预置：
 #   1. 全套 worker skills（agent 可读的 SKILL.md 文档 + scripts CLI；
 #      leader 变体 stage 换 leader 版 skills——见下方多 stage 说明）
-#   2. taskflow / agentteams-sync 全局命令（协作协议的命令行入口）
+#   2. taskflow / agentteams-sync 全局命令（协作协议的命令行入口；
+#      leader 变体 stage 仅包装 agentteams-sync——projectflow 按
+#      task-management skill 文档直呼/python3 fallback）
 #   3. 运行依赖：python3 / mc(MinIO 客户端) / jq / git / procps
 #
 # 不包含（对比 opencode 测试沙箱的裁剪项）：
@@ -46,8 +48,10 @@
 # =============================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-# leader stage —— leader 沙箱变体：与 worker stage 仅 skills COPY 源不同
-#（leader 版 skills 整树替换 worker 版；其余指令逐字相同）
+# leader stage —— leader 沙箱变体，与 worker stage 两处不同：
+#   ① skills COPY 源 = leader 树（整树替换 worker 版）
+#   ② CLI 包装 RUN：不创建 taskflow 包装器（leader 树载 projectflow 而非
+#     taskflow，leader 文档从不调用 taskflow），仅创建 agentteams-sync
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS leader
 
@@ -59,18 +63,23 @@ RUN apt-get update \
         https://dl.min.io/client/mc/release/linux-amd64/mc \
     && chmod +x /usr/local/bin/mc
 
-# ── 1. skills 全套（leader 2 件）─────────────────────────────────────────
-# communication / task-management（task-management scripts 5 文件：
-# projectflow(_core) 委派状态机含 delegate-commit 自动通知 / notify /
-# mc_sync / agentteams_log）
+# ── 1. skills 全套（leader 3 件）─────────────────────────────────────────
+# communication / task-management / file-sharing
+# （task-management scripts 5 文件：projectflow(_core) 委派状态机含
+#   delegate-commit 自动通知 / notify / mc_sync / agentteams_log；
+#   file-sharing scripts 与 worker 树逐字节相同——agentteams_sync.py 需要
+#   mc_sync.py 同目录平铺 + import agentteams_log，凭据协议 v5 的
+#   shared/oauth/ 拉取与验收 push/pull 走它，SKILL.md 带 leader 序言）
 COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
 
 # ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────
-# taskflow        任务状态机：ack / submit / check（teams/<t>/shared/tasks/）
-# agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）
-RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scripts/taskflow.py "$@"\n' > /usr/local/bin/taskflow \
-    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
-    && chmod +x /usr/local/bin/taskflow /usr/local/bin/agentteams-sync \
+# agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）——
+#   file-sharing scripts 随 leader skills 树进镜像，包装到全局 PATH
+# projectflow 不做全局包装：leader 直呼 bash 命令，不在 PATH 时按
+#   task-management SKILL.md 的 python3 fallback 调用；本 stage 不创建
+#   taskflow 包装器（worker 形态的 taskflow.py 不在 leader 树中）
+RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
+    && chmod +x /usr/local/bin/agentteams-sync \
     && chmod +x /opt/agentteams/skills/*/scripts/*.py || true
 
 # ── 3. 约定 ──────────────────────────────────────────────────────────────

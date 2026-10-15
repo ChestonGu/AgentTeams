@@ -260,6 +260,9 @@ build-opencode-runtime: ## Build opencode-runtime merged image (opencode npm + t
 		-t $(LOCAL_OPENCODE_RUNTIME) \
 		.
 
+# 部署约定：leader 沙箱必须引用本镜像名 agentteams/cimicode-sandbox-leader
+# （105 stateless 平台 sandbox 配置 / leader Worker CR 侧），不是
+# cimicode-sandbox:leader tag 形态——镜像名即变体选择，代码零改动。
 build-cimicode-sandbox-leader: ## Build cimicode-sandbox leader-variant image (--target leader: leader skills replace worker's)
 	@echo "==> Building cimicode-sandbox leader image: $(LOCAL_CIMICODE_SANDBOX_LEADER)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
