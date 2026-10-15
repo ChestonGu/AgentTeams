@@ -3,8 +3,6 @@
 leader 委派通知的唯一出站通道;worker 形态不调用(模板禁止跨房),
 端点对两种形态一视同仁——纯基础设施。
 """
-import asyncio
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -81,3 +79,18 @@ def test_send_gateway_failure_reported():
         "room_id": "!team:x", "text": "hi"})
     assert resp.json()["ok"] is False
     assert "nio down" in resp.json()["error"]
+
+
+def test_send_null_or_empty_txn_id_passes_none():
+    # 显式 JSON null 与空串 txn_id 都归一为 None——旧写法 str(None) 会落成
+    # 字面量 "None"，所有请求共享同一 homeserver 事务 ID，去重窗口内不同
+    # 消息被静默吞掉而端点仍报 ok:true。
+    gw = FakeGateway()
+    resp = _client(gw).post("/api/v1/bridge/send", json={
+        "room_id": "!team:x", "text": "hi", "txn_id": None})
+    assert resp.json() == {"ok": True, "event_id": "$evt-1"}
+    assert gw.calls[0][2] is None
+    resp = _client(gw).post("/api/v1/bridge/send", json={
+        "room_id": "!team:x", "text": "hi", "txn_id": ""})
+    assert resp.json()["ok"] is True
+    assert gw.calls[1][2] is None

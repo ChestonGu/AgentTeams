@@ -88,8 +88,8 @@ def register_routes(app: FastAPI, bridge) -> None:
         纯基础设施:复用 gateway.send_text(m.mentions 自动解析 + markdown
         渲染),txn_id 透传 homeserver 事务幂等。契约 interface-contract §4。
         """
-        room_id = str(payload.get("room_id", "")).strip()
-        text = str(payload.get("text", ""))
+        room_id = (payload.get("room_id") or "").strip()
+        text = str(payload.get("text") or "")
         if not room_id or not text.strip():
             return {"ok": False, "error": "room_id and text are required"}
         if text.strip() == "NO_REPLY":
@@ -98,7 +98,7 @@ def register_routes(app: FastAPI, bridge) -> None:
         gateway = bridge.matrix_gateway
         if gateway is None:
             return {"ok": False, "error": "matrix gateway not ready"}
-        txn_id = str(payload.get("txn_id", "")).strip() or None
+        txn_id = (payload.get("txn_id") or "").strip() or None
         try:
             event_id = await gateway.send_text(room_id, text, tx_id=txn_id)
         except Exception as exc:  # nio 失败必须可见,调用方据此保持 prepared 态
