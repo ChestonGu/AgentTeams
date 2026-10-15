@@ -9,9 +9,9 @@ Project and task protocol state lives in `shared/projects/<id>/` (meta.json + pl
 
 ## The Command
 
-`projectflow` is a bash command backed by `~/skills/task-management/scripts/projectflow.py`. Every command pulls what it needs from storage, mutates, and pushes back; on push failure local files roll back to their pre-command state. Your workspace root comes from the environment (`AGENTTEAMS_FS_ROOT`) — never pass it yourself.
+`projectflow` is a bash command backed by `/opt/agentteams/skills/task-management/scripts/projectflow.py`. Every command pulls what it needs from storage, mutates, and pushes back; on push failure local files roll back to their pre-command state. Your workspace root comes from the environment (`AGENTTEAMS_FS_ROOT`) — never pass it yourself.
 
-If `projectflow` is not on PATH: `python3 ~/skills/task-management/scripts/projectflow.py <args>`.
+If `projectflow` is not on PATH: `python3 /opt/agentteams/skills/task-management/scripts/projectflow.py <args>`.
 
 ## Verbs
 
