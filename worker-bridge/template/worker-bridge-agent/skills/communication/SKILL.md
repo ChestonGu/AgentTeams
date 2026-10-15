@@ -9,6 +9,8 @@ description: Use before sending @mentions, deciding whether to reply, TASK_COMPL
 
 Always reply directly in the current session. Your reply is the message the team receives — do not try to send to another room; Workers do not communicate across rooms.
 
+Task protocol — acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — belongs to the Team Room conversation where the task was assigned: when the current session is that Team Room conversation, send the protocol message there with the @coordinator mention. Private-room conversations carry direct Q&A only, never task assignment or task reporting.
+
 ## Coordinator Identity
 
 Your coordinator is the sender of the current task assignment message. Use that Matrix ID directly for @mentions. Do not call `organization` to look up your coordinator during standard task flows.

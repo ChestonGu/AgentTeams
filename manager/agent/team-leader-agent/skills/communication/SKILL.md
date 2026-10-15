@@ -29,6 +29,8 @@ An assignment intent sentence is not an assignment. Do not send same-room text s
 
 Use a Worker private room only for exceptional follow-up that should not be team-visible, such as sensitive clarification or direct recovery/debugging.
 
+Leader DM carries direct human conversation with the Team Admin (questions, clarifications, casual chat). It is not a project report channel — requester updates, status/completion reports, decision requests, and blocker escalations belong in the Team Room with the requester @mention, even when the request originally arrived in Leader DM.
+
 ## Requester Reports
 
 Route reports by the project source:
@@ -36,21 +38,21 @@ Route reports by the project source:
 | Source | Target Room | Report To |
 |--------|----------------|-----------|
 | Manager | Leader Room @mention | Manager |
-| Team Admin | Leader DM | Team Admin |
+| Team Admin | Team Room @mention (requester + Team Admin anchors) | Team Admin |
 
 Determine requester from the current notification message `sender`, and report back to the requester recorded on the project:
 
-- If `sender` is Team Admin, the target room is Leader DM. If the current room is that Leader DM, reply directly in the current session.
+- If `sender` is Team Admin, the target room is the Team Room, with the requester and Team Admin anchor @mentions. If the current room is already the Team Room, reply directly in the current session; otherwise use the `message` tool to deliver the report to the Team Room.
 - If `sender` is Manager, the target room is Leader Room. If the current room is that Leader Room, reply directly in the current session and @mention Manager when action is needed.
 - If the recorded requester is missing or does not match the original event sender, stop and fix project metadata before reporting.
 
 Only use the `message` tool for a requester report when the target room is not the current room.
 
-After task handling changes Project state, notifying the requester is mandatory. If the requester is Team Admin, this means a Leader DM report to the DM admin. Team Room coordination, Worker assignment messages, and downstream task notices do not count as the requester report.
+After task handling changes Project state, notifying the requester is mandatory. If the requester is Team Admin, this means a Team Room report that @mentions the requester (and the Team Admin when different). Leader DM messages do not count as the requester report; neither do bare Worker assignment messages or downstream task notices — the requester report must be a message the requester is @mentioned in.
 
-Do not copy team-room coordination logs into requester DM. Summarize the state.
+Keep the Team Room requester report summarized: current state, outcomes, and next steps. Do not paste raw coordination logs or tool output.
 
-For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, tool preambles, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. While reading skills, checking organization, planning, creating the Project, or delegating the first task, your same-room Leader DM reply must be exactly `NO_REPLY`. The first visible non-`NO_REPLY` message for that request must be either the Worker assignment delivered by the `taskflow(delegate_task)` auto-notification (which sends the Team Room @mention itself), or a blocker/question to the Team Admin when assignment cannot proceed. After the Team Room assignment, send one concise requester update if needed.
+For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, tool preambles, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. While reading skills, checking organization, planning, creating the Project, or delegating the first task, your same-room Leader DM reply must be exactly `NO_REPLY`. The first visible non-`NO_REPLY` message for that request must be either the Worker assignment delivered by the `taskflow(delegate_task)` auto-notification (which sends the Team Room @mention itself), or a blocker/question posted in the Team Room with the requester @mention when assignment cannot proceed. After the Team Room assignment, send one concise requester update in the Team Room if needed.
 
 Use `project-management` to determine project report content and the DAG or Loop Project Status Report shape. Use this skill to decide where the report should be delivered and whether to reply directly or use the `message` tool.
 

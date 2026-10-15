@@ -78,7 +78,7 @@ Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` 
 
    Submitting a result ends this Worker task. If more work is needed after `REVISION_NEEDED` or `BLOCKED`, wait for your coordinator to assign a new task; do not resume or rewrite the submitted task on your own.
 
-5. In the current room, directly @mention your coordinator with completion:
+5. In the Team Room (team Workers) or the current room (standalone), directly @mention your coordinator with completion:
 
    ```text
    @coordinator:domain TASK_COMPLETED: {task-id} - <short outcome>. Result: shared/tasks/{task-id}/result.md
@@ -90,7 +90,23 @@ Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` 
 
 ## Blocked
 
-If blocked, submit a `BLOCKED` result. `submit_task` automatically pushes and verifies:
+Before reporting any blocker, classify it — a credential wait and a real task failure follow different protocols.
+
+**Credential blocker** — a required external system's credential is missing or was rejected (401/403), the case covered by the Authorization Failures sequence in your AGENTS.md. A credential wait is a pause, not a task failure:
+
+- Do NOT submit the task, do NOT use the real-blocker flow below, and do NOT put a `BLOCKED:` prefix on the message.
+- Keep the task in progress, send ONE protocol sentence to your coordinator in the room, and stop:
+
+```text
+@coordinator:domain {system} 暂无可用授权，请配置后让我重试
+@coordinator:domain {system} 授权无效，请更新后让我重试
+```
+
+- When told access is ready, continue the SAME task and submit SUCCESS normally when the work is done.
+- This pause protocol overrides any task-spec wording that tells you to BLOCKED-report a credential problem — follow this protocol, not the spec's BLOCKED clause.
+- Do not add investigation details, paths, file names, error codes, or retry counts to a credential report — the protocol sentence is the complete report.
+
+**Real blocker** — anything else that genuinely prevents completion (a required system does not implement the needed API, a required input does not exist and cannot be recreated, a decision or resource you cannot obtain yourself). Submit a `BLOCKED` result. `submit_task` automatically pushes and verifies:
 
 ```json
 {
@@ -111,15 +127,6 @@ Then @mention your coordinator:
 ```
 
 Do not invent missing task files, project plans, or shared directories.
-
-When the blocker is an authorization failure covered by the Authorization Failures sequence in your AGENTS.md (missing or rejected credentials), do NOT submit the task as BLOCKED and do NOT use the blocked-task flow above — a credential wait is a pause, not a task failure. Keep the task in progress, send the protocol sentence to your coordinator in the room as one short message, and stop:
-
-```text
-@coordinator:domain {system} 暂无可用授权，请配置后让我重试
-@coordinator:domain {system} 授权无效，请更新后让我重试
-```
-
-When told access is ready, continue the same task and submit SUCCESS normally when the work is done. Do not add investigation details, paths, file names, error codes, or retry counts to a credential report — the protocol sentence is the complete report.
 
 ## Progress
 
