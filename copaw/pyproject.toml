@@ -15,6 +15,19 @@ dependencies = [
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
     "pyyaml>=6.0",
+    # These three pins reproduce the dependency resolve of the image that ran
+    # the 105 five-team verification; an unpinned resolve drifts to newer
+    # releases that break at runtime (both pins apply to both venvs):
+    # - mcp 2.0 renamed `streamablehttp_client` -> `streamable_http_client`,
+    #   and agentscope/reme/agentscope_runtime still import the old symbol:
+    #   ImportError on any in-process MCP client init.
+    # - openai >= 3.29 defines `delta.audio` on every streamed chunk (default
+    #   None); agentscope 1.0.18 guards audio handling with hasattr(), so the
+    #   ever-present None field turns `"data" in choice.delta.audio` into a
+    #   TypeError on every turn.
+    "mcp==1.29.1",
+    "agentscope==1.0.18",
+    "openai==3.3.1",
 ]
 
 [project.urls]
