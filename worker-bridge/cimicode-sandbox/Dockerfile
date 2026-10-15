@@ -3,7 +3,8 @@
 # =============================================================================
 # 用途：无状态 cimicode 运行时自建沙箱的基础镜像。cimicode 使用过程中自行
 # 创建沙箱（team 侧不做任何管控），沙箱内必须预置：
-#   1. 全套 worker skills（agent 可读的 SKILL.md 文档 + scripts CLI）
+#   1. 全套 worker skills（agent 可读的 SKILL.md 文档 + scripts CLI；
+#      leader 变体 stage 换 leader 版 skills——见下方多 stage 说明）
 #   2. taskflow / agentteams-sync 全局命令（协作协议的命令行入口）
 #   3. 运行依赖：python3 / mc(MinIO 客户端) / jq / git / procps
 #
@@ -21,6 +22,13 @@
 # 构建上下文 = 仓库根：
 #   docker build -f worker-bridge/cimicode-sandbox/Dockerfile -t <registry>/cimicode-sandbox:<tag> .
 #
+# 多 stage（docker 不带 --target 时构建最后 stage，worker 故意放末位——
+# 历史 default 构建产出与单 stage 时代字节一致）：
+#   --target leader   leader 沙箱变体（skills 整树替换为 leader 版，105
+#                     stateless 平台部署层为 leader 沙箱选此变体镜像；
+#                     亦可用 make build-cimicode-sandbox-leader）
+#   --target worker / 默认   worker 变体（现状不变）
+#
 # 运行时配置契约（镜像内不含任何凭据；两个通道，显式 env 恒优先）：
 #   ① 沙箱 env 注入（平台支持时）
 #   ② /opt/teams/config/runtime.json 配置文件（平台侧服务动态追加；键 = env
@@ -36,7 +44,49 @@
 #   AGENTTEAMS_FS_ROOT          workspace 根（缺省 /root/agentteams-fs）
 #   （可选）AGENTTEAMS_STORAGE_PREFIX   alias/bucket 前缀（默认 agentteams/agentteams-storage）
 # =============================================================================
-FROM python:3.12-slim
+
+# ─────────────────────────────────────────────────────────────────────────────
+# leader stage —— leader 沙箱变体：与 worker stage 仅 skills COPY 源不同
+#（leader 版 skills 整树替换 worker 版；其余指令逐字相同）
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS leader
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl jq git procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /usr/local/bin/mc \
+        https://dl.min.io/client/mc/release/linux-amd64/mc \
+    && chmod +x /usr/local/bin/mc
+
+# ── 1. skills 全套（leader 2 件）─────────────────────────────────────────
+# communication / task-management（task-management scripts 5 文件：
+# projectflow(_core) 委派状态机含 delegate-commit 自动通知 / notify /
+# mc_sync / agentteams_log）
+COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
+
+# ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────
+# taskflow        任务状态机：ack / submit / check（teams/<t>/shared/tasks/）
+# agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）
+RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scripts/taskflow.py "$@"\n' > /usr/local/bin/taskflow \
+    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
+    && chmod +x /usr/local/bin/taskflow /usr/local/bin/agentteams-sync \
+    && chmod +x /opt/agentteams/skills/*/scripts/*.py || true
+
+# ── 3. 约定 ──────────────────────────────────────────────────────────────
+ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills
+# 协作工作区约定路径（cimicode 挂载任务工作区到这里； Skills 与任务文件同树
+# 可读）。/workspace/work 与 pod 形态的 FS_ROOT 约定值对齐——本镜像无
+# entrypoint（启动命令由平台决定），FS_ROOT 经 env / runtime.json 供值。
+WORKDIR /workspace/work
+
+# 无 ENTRYPOINT：cimicode 自行决定沙箱启动命令（通常 sleep infinity / 长驻 shell）
+
+# ─────────────────────────────────────────────────────────────────────────────
+# worker stage —— 默认 target（末位 stage：不带 --target 的构建产出与改前
+# 字节一致，指令序与单 stage 时代相同，仅 FROM 增加 stage 名）
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS worker
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -48,9 +98,9 @@ RUN apt-get update \
 
 # ── 1. skills 全套（worker 5 件）─────────────────────────────────────────
 # communication / file-sharing / mcporter / organization / task-management
-# 若该沙箱还要承载 leader 角色，追加：
-#   worker-bridge/template/worker-bridge-leader-agent/skills 下的
-#   project-management / team-coordination（leader 专属 2 件）
+# （leader 角色不在此 stage 叠加 skill——上面的 leader stage 把 skills 整树
+#   换成 leader 版 2 件，105 stateless 平台部署层为 leader 沙箱选 leader
+#   变体镜像，见 Makefile build-cimicode-sandbox-leader）
 COPY worker-bridge/template/worker-bridge-agent/skills /opt/agentteams/skills
 
 # ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────

@@ -11,12 +11,14 @@ COPY worker-bridge/bridge/config ./config
 RUN pip install --no-cache-dir .
 
 # v2.4 generator toolchain (contract §6): generator + unified log module +
-# source template. The template lands at /opt/template — the generator's
-# default --template resolves to <script_dir>/../template/..., so this
-# relative pairing must be preserved for flagless invocation.
+# source templates (worker + leader — the generator dispatches by member.role
+# at flagless invocation). The templates land at /opt/template — the
+# generator's default --template resolves to <script_dir>/../template/...,
+# so this relative pairing must be preserved for BOTH templates.
 COPY worker-bridge/bridge/generate_agent_md.py /opt/agenttools/generate_agent_md.py
 COPY worker-bridge/bridge/agentteams_log.py /opt/agenttools/agentteams_log.py
 COPY worker-bridge/template/worker-bridge-agent/AGENTS.md /opt/template/worker-bridge-agent/AGENTS.md
+COPY worker-bridge/template/worker-bridge-leader-agent/AGENTS.md /opt/template/worker-bridge-leader-agent/AGENTS.md
 ENV BRIDGE_GENERATOR_PATH=/opt/agenttools/generate_agent_md.py
 
 # sed strips any CR characters: a CRLF shebang (#!/bin/sh\r) fails exec with
