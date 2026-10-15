@@ -40,10 +40,10 @@ projectflow check           <tid>                          # leader read: meta +
 Task object shape (`add-tasks` / `plan-dag` / `plan-loop`):
 
 ```json
-[{"taskId": "collect-1", "title": "Collect source data", "assignedTo": "frontend-dev", "dependsOn": []}]
+[{"taskId": "collect-1", "title": "Collect source data", "assignedTo": "<assignee>", "dependsOn": []}]
 ```
 
-- `assignedTo` is the Worker's Matrix localpart — mechanically strip `@` and `:domain` from the full Matrix ID in the Coordination block's Team Workers list; never guess or shorten further.
+- `assignedTo` records who executes the node; make it unambiguous — the canonical assignment identity is the full Matrix ID you pass to `delegate-commit --assignee-mxid`.
 - `add-tasks` is additive: it adds nodes and updates pending ones only. `plan-dag` / `plan-loop` replace the graph: kept ids keep their status, obsolete ids are dropped by omission, new ids start pending.
 - Long payloads: `@path` reads a file, `-` reads stdin. Cycles, unknown dependencies, and duplicate ids are rejected.
 - Project ids follow `{description}-YYYYMMDD-HHMMSS`; task ids follow `{projectId}-{seq}`.
@@ -51,7 +51,7 @@ Task object shape (`add-tasks` / `plan-dag` / `plan-loop`):
 ## Delegation (three steps, in order)
 
 1. `projectflow ready <pid>` — returns pending nodes whose dependencies are completed. Delegate only ids `ready` returned; never delegate from memory.
-2. `projectflow delegate <pid> <tid> --spec "<spec>" --room-id "<Team Room ID>"` — writes meta.json + spec.md and marks the node delegated. `--room-id` is required for team work: it is the Team Room, the room where the Worker acknowledges and reports completion.
+2. `projectflow delegate <pid> <tid> --spec "<spec>" --room-id "<Team Room ID>"` — writes meta.json + spec.md and marks the node delegated. `--room-id` is required for team work: the Team Room ID from the Coordination block of your agent.md — the room where the Worker acknowledges and reports completion.
 3. `projectflow delegate-commit <pid> <tid> --assignee-mxid <@worker:domain>` — marks the task assigned AND automatically sends the Team Room notification: the Worker's full Matrix ID as a structured @mention, a per-task transaction id (a retry never double-sends), and the Matrix event id recorded on the task. `--assignee-mxid` is the full Matrix ID from the Coordination block's Team Workers list.
 
 After a successful `delegate-commit`, do NOT send a second assignment message — the auto-notification IS the assignment; a duplicate can trigger the Worker twice. `--no-notify` skips the automatic notification (manual bookkeeping path paired with `--event-id`); use it only for recovery when told to.
@@ -62,7 +62,7 @@ Write the spec in the language selected by your AGENTS.md Response Language. The
 
 1. On a Worker TASK_COMPLETED notice, run `projectflow check <tid>`. It pulls the task directory and prints the task meta, `effective_for_acceptance: yes|no`, and the full result.md.
 2. `effective_for_acceptance` is `yes` for `SUCCESS` / `SUCCESS_WITH_NOTES` — those are candidate results, not acceptance. Only your acceptance completes a node; a Worker `SUCCESS` alone unblocks nothing.
-3. Accept: pull the project directory (`agentteams-sync pull shared/projects/<pid>/`), change the node's marker from `[~]` to `[x]` in `shared/projects/<pid>/plan.md` — the sanctioned acceptance edit, that one marker and nothing else — push it back (`agentteams-sync push shared/projects/<pid>/`), then run `projectflow ready <pid>` to resolve the next wave.
+3. Accept: pull the project directory (`agentteams-sync pull shared/projects/<pid>/`), set the node's marker to `[x]` in `shared/projects/<pid>/plan.md` — the sanctioned acceptance edit, that one marker and nothing else — push it back (`agentteams-sync push shared/projects/<pid>/`), then run `projectflow ready <pid>` to resolve the next wave.
 4. Reject, revise, or extend: do not mark `[x]`. Re-shape the graph with `plan-dag` / `plan-loop` (drop obsolete ids, add new pending ids — a delegated node cannot reset to pending, so revision work gets a NEW task id) and delegate the new nodes normally.
 5. Loop plans: accept nodes with the same marker edit; record iteration decisions with `record-iteration` and shape the next iteration's task set with `plan-loop`.
 
@@ -72,5 +72,5 @@ Plan markers: `[ ]` pending, `[~]` delegated, `[x]` completed / accepted by you,
 
 - Run `ready` before each delegation round; one delegation per node at a time (a delegated node disappears from `ready`).
 - Paused projects return no ready nodes and reject delegation; resume with `resume-project` before scheduling again.
-- Do not hand-edit meta.json, spec.md, result.md, or plan.md structure; the only manual write is the `[~]` → `[x]` acceptance marker (step 3 above).
+- Do not hand-edit meta.json, spec.md, result.md, or plan.md structure; the only manual write is the acceptance marker — setting a node's marker to `[x]` (step 3 above).
 - If a shared directory pull fails, stop and report the sync failure; do not fall back to partial file pulls and then mutate project state.

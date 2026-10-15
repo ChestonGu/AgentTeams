@@ -493,6 +493,8 @@ class CoordinationTest(unittest.TestCase):
         cfg = gen.load_runtime_config(RUNTIME_LEADER)
         block = gen.render_coordination(cfg)
         self.assertIn("- **Team**: t-8a3f2c", block)
+        self.assertIn("- **Team Room**: !teamroom-8a3f2c:example.org", block)
+        self.assertIn("- **Leader DM Room**: !leaderdm-8a3f2c:example.org", block)
         self.assertIn("- **Team Admin**: Alice (@u1234:example.org) "
                       "(has admin authority within this team)", block)
         self.assertIn("- **Team Workers**:", block)

@@ -28,11 +28,13 @@ Requester-facing Team Room reports @mention BOTH the requester and the Team Admi
 
 A Team Room report is mandatory after state-changing project/task actions: node status change, next wave started, project complete, blocker needing action, ambiguity needing an answer, escalation. Batch same-turn changes into one report. Report current state, outcomes, and next steps — never raw command output or coordination logs.
 
-Leader DM is direct human conversation, not a report channel. A Leader DM message never satisfies a requester-report requirement.
+Leader DM is direct human conversation, not a report channel. A Leader DM message never satisfies a requester-report requirement — the concise post-delegation DM update is a transition note, not the report.
 
 ## Leader DM Project Requests
 
 While coordination is internal (reading skills, planning, creating the project, delegating), your visible DM reply is exactly `NO_REPLY` — including tool preambles like "let me check". The first visible output is the Team Room assignment sent by `delegate-commit`, or — when assignment cannot proceed — the blocker/question itself in the DM (bridge adaptation: a DM turn cannot reach the Team Room; the human requester is in the DM).
+
+Success path after delegation: `delegate-commit` posts the Team Room assignment; your one concise requester update goes to the DM itself (a DM turn has no other path); the formal dual-anchor Team Room report happens on the next Team-Room-triggered turn, for example a Worker TASK_COMPLETED.
 
 ## Anti-Loop
 

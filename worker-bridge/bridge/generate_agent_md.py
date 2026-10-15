@@ -29,8 +29,9 @@ Rendering:
     form renders Coordinator (the team_leader member), Team Admin, and
     Coordinator Members from the runtime.yaml team section; standalone
     form renders the Manager coordinator; team_leader form renders Team
-    Admin, Team Workers (the delegation roster), Coordinator Members, and
-    the Team Roster from the leader's perspective. The
+    Admin, the Team Room / Leader DM Room IDs, Team Workers (the
+    delegation roster), Coordinator Members, and the Team Roster from the
+    leader's perspective. The
     agentteams-team-context fences stay in the template, so the marker
     skeleton is identical to the copaw prompt form.
   * {{ENVIRONMENT}} — worker identity (name, Matrix ID, team, storage
@@ -129,15 +130,17 @@ def parse_runtime_config(text):
     memberRuntimeConfigDocument), so it is loaded with yaml.safe_load and
     read as plain dicts/lists — no line matching. Fields consumed:
     member.name/runtimeName/matrixUserId/role/displayName, team.name,
-    team.admin.matrixUserId/displayName, team.members[].matrixUserId/
-    role/displayName, storage.sharedPrefix; everything else (credentials,
-    desired, ...) is ignored by simply not being read.
+    team.teamRoomId/leaderDmRoomId, team.admin.matrixUserId/displayName,
+    team.members[].matrixUserId/role/displayName, storage.sharedPrefix;
+    everything else (credentials, desired, ...) is ignored by simply not
+    being read.
 
     Returns:
       {
         'worker_name', 'matrix_id', 'domain', 'role',   # member.*
         'display_name',                                  # member.displayName (self)
         'team_name', 'leader_id', 'admin_id',           # team.*
+        'team_room_id', 'leader_dm_room_id',            # team.teamRoomId/leaderDmRoomId
         'admin_display',                                # team.admin.displayName
         'coordinators': [{matrix_user_id, display_name}, ...],  # members[role=coordinator]
         'roster': [{name, matrix_user_id, role,          # team.members[] (Team Roster)
@@ -203,6 +206,10 @@ def parse_runtime_config(text):
     admin = team.get("admin") or {}
     admin_id = admin.get("matrixUserId") or ""
     admin_display = admin.get("displayName") or ""
+    # room ids: leader-only facts — empty string when absent (same absence
+    # semantics as admin_id); worker/standalone renders never read them
+    team_room_id = team.get("teamRoomId") or ""
+    leader_dm_room_id = team.get("leaderDmRoomId") or ""
 
     members = team.get("members") or []
     if not isinstance(members, list):
@@ -255,6 +262,8 @@ def parse_runtime_config(text):
         "team_name": team.get("name") or "",
         "leader_id": leader_id,
         "admin_id": admin_id,
+        "team_room_id": team_room_id,
+        "leader_dm_room_id": leader_dm_room_id,
         "admin_display": admin_display,
         "coordinators": coordinators,
         "roster": roster,
@@ -323,6 +332,10 @@ def render_coordination(cfg):
         # full roster for @mention routing — rendered from the same
         # runtime.yaml section the worker block reads
         lines.append(f"- **Team**: {cfg['team_name']}")
+        if cfg.get("team_room_id"):
+            lines.append(f"- **Team Room**: {cfg['team_room_id']}")
+        if cfg.get("leader_dm_room_id"):
+            lines.append(f"- **Leader DM Room**: {cfg['leader_dm_room_id']}")
         if cfg["admin_id"]:
             lines.append(f"- **Team Admin**: "
                          f"{_named_mxid(cfg['admin_display'], cfg['admin_id'])} "
