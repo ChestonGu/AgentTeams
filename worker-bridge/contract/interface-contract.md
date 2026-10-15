@@ -64,7 +64,7 @@
 
 ### 1.1 配置文件回退（stateless 沙箱，v2.5）
 
-上表 env 键**全部**可通过配置文件补齐：`/opt/teams/config/runtime.json`。
+上表 env 键中 **`AGENTTEAMS_` 前缀者**可通过配置文件补齐：`/opt/teams/config/runtime.json`（即下文的前缀过滤）；`BRIDGE_SEND_URL`（§4.1）无此前缀，不走文件通道——pod 形态由 operator 从 `spec.runtimeParameter.bridgeSendUrl` 注入（见 §4.1）。
 
 - **格式**：平铺一层 JSON 对象，键 = 环境变量名原样（`{"AGENTTEAMS_WORKER_NAME": "dev-01", ...}`）；仅 `AGENTTEAMS_` 前缀的字符串值生效，其余条目跳过并 stderr 警告。
 - **优先级**：显式 env 恒优先（`setdefault` 语义）——文件只补缺失键。两通道可并存：pod 模式（env 注入）不受影响，stateless 靠文件。
@@ -106,7 +106,7 @@ template/worker-bridge-leader-agent/AGENTS.md ← leader 源模板（§6，v2.7�
 
 skill 文档已写明无 wrapper 时的 `python3 <全路径>` 兜底，两条路都必须可用。
 `agentteams_log.py` 为统一日志模块（§5.5），随各 scripts 目录 + bridge/
-部署（逐字节相同的 12 份副本；`verify/simulator.py` 启动时校验全部部署
+部署（逐字节相同的镜像内多份副本；`verify/simulator.py` 启动时校验全部部署
 副本与 `cli/` 源一致）。
 
 **运行时**（$AGENTTEAMS_FS_ROOT，唯一同步区）：
@@ -176,7 +176,7 @@ POST /api/v1/bridge/send            ← Content-Type: application/json
  "text":    "<消息正文>",            ← 必填；markdown 渲染 + m.mentions 自动解析
  "txn_id":  "<事务 ID>"}            ← 可选；事务 ID（幂等语义见下）
 
-→ {"ok": true,  "event_id": "$..."}   ← 发送成功
+→ {"ok": true,  "event_id": "$..."}   ← 发送成功（event_id 可空：网关未回执时 ok 仍 true 而 event_id 缺席）
 → {"ok": false, "error": "<原因>"}    ← 参数拒绝 / 网关未就绪 / 发送失败
 ```
 
@@ -288,7 +288,7 @@ projectflow check <tid>                             # leader 读回：meta + res
   meta 仍 prepared、未 commit；修复后重跑同一命令（固定 txn 幂等短路，
   已入房的通知不会重发）。
 - **幂等短路**：任务已 assigned 且带 event_id 时直接跳过通知、幂等成功。
-- **手动通道（`--no-notify [--event-id <id>]`）**：零网络——v2.7 前的
+- **手动通道（`--no-notify [--event-id <id>]`）**：零通知网络调用（文件同步 mc pull/push 照常）——v2.7 前的
   唯一形态，通知由外部自发、拿到 event id 再记账；该路径下 notify
   模块根本不加载。
 
