@@ -434,10 +434,15 @@ def cmd_delegate_commit(store, args, sync) -> int:
     meta = store.read_task_meta(args.task_id)
     event_id = args.event_id
     notified = False
+    reply_delivery = False
     if not getattr(args, "no_notify", False):
         # Auto-notification path (default): notify -> commit -> push, the
         # copaw delegate_task atomic order. Any failure below exits with
         # meta still prepared; the fixed txn_id makes a retry idempotent.
+        # Endpoint NOT configured (BRIDGE_SEND_URL empty) is a deployment
+        # form, not a failure (contract §5.4): skip the notify call, commit
+        # without an event_id, and guide reply-delivery below. An endpoint
+        # that IS configured but unreachable stays a hard failure.
         if meta.status == "assigned" and meta.event_id:
             print(f"[commit] {meta.task_id}: already assigned "
                   f"(event_id={meta.event_id}) — notification skipped")
@@ -454,15 +459,17 @@ def cmd_delegate_commit(store, args, sync) -> int:
                   file=sys.stderr)
             return 1
         spec = store.read_task_spec(args.task_id)
-        import notify as _notify  # delayed: --no-notify path never loads it
-        try:
-            event_id = _notify.send_assignment(
-                meta.room_id, args.assignee_mxid.lstrip("@"),
-                meta.task_id, meta.task_title, spec)
-        except _notify.NotifyError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        notified = True
+        reply_delivery = not os.environ.get("BRIDGE_SEND_URL", "").strip()
+        if not reply_delivery:
+            import notify as _notify  # delayed: --no-notify path never loads it
+            try:
+                event_id = _notify.send_assignment(
+                    meta.room_id, args.assignee_mxid.lstrip("@"),
+                    meta.task_id, meta.task_title, spec)
+            except _notify.NotifyError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            notified = True
     snap = _snapshot(_task_paths(store, args.task_id))
     meta = commit_task_assignment(
         store,
@@ -480,6 +487,17 @@ def cmd_delegate_commit(store, args, sync) -> int:
         print("[notify] assignment sent to the Team Room — do NOT send the "
               "assignment message yourself (a duplicate can trigger the "
               "worker twice)")
+    elif reply_delivery:
+        print("[notify] no notification endpoint configured "
+              "(BRIDGE_SEND_URL not set) — assignment recorded, nothing "
+              "was sent")
+        print("[notify] deliver this assignment in YOUR session reply "
+              "this turn: task id + one-line goal + where the spec lives")
+        print("[notify] the reply body MUST contain the assignee's full "
+              "Matrix ID with the @ prefix (e.g. @worker-name:domain) — "
+              "the bridge turns an @ token in reply text into the mention "
+              "that wakes the assignee; without it the assignee is never "
+              "notified")
     return 0
 
 

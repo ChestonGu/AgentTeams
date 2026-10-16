@@ -80,7 +80,11 @@ class NotifyClientTest(unittest.TestCase):
     def test_bridge_send_url_required_when_not_passed(self):
         env = {"BRIDGE_SEND_URL": ""}
         with mock.patch.dict("os.environ", env, clear=False):
-            with self.assertRaisesRegex(notify.NotifyError, "BRIDGE_SEND_URL"):
+            # defensive wording: an empty endpoint points the caller at
+            # reply-delivery instead of just demanding the env var
+            with self.assertRaisesRegex(
+                    notify.NotifyError,
+                    "BRIDGE_SEND_URL is not set.*reply body.*@ prefix"):
                 notify.send_assignment("!team:x", "@w:dom", "t-1", "T", "s")
 
     def test_assignment_text_truncates_with_ellipsis(self):
@@ -125,9 +129,11 @@ class DelegateCommitNotifyTest(unittest.TestCase):
 
     def test_auto_notify_sends_then_records_event_id(self):
         self.delegate_prepared()
-        with mock.patch.object(notify, "send_assignment",
-                               return_value="$evt-9") as send:
-            code, out, err = self.commit(self.args())
+        with mock.patch.dict("os.environ",
+                             {"BRIDGE_SEND_URL": "http://127.0.0.1:8081"}):
+            with mock.patch.object(notify, "send_assignment",
+                                   return_value="$evt-9") as send:
+                code, out, err = self.commit(self.args())
         self.assertEqual(code, 0, err)
         # room, mxid (leading @ stripped), task id, title, spec — in order
         send.assert_called_once_with("!team:x", "alice:example.org", "t-1",
@@ -137,6 +143,8 @@ class DelegateCommitNotifyTest(unittest.TestCase):
         self.assertEqual(meta.event_id, "$evt-9")
         self.assertIn("[commit] t-1: assigned (event_id=$evt-9)", out)
         self.assertIn("[notify]", out)  # no-second-message warning printed
+        self.assertIn("assignment sent to the Team Room", out)
+        self.assertNotIn("no notification endpoint configured", out)
 
     def test_already_assigned_skips_notification(self):
         self.delegate_prepared()
@@ -154,13 +162,48 @@ class DelegateCommitNotifyTest(unittest.TestCase):
         self.delegate_prepared()
         boom = notify.NotifyError(
             "assignment notification failed: conn refused")
-        with mock.patch.object(notify, "send_assignment", side_effect=boom):
-            code, out, err = self.commit(self.args())
+        with mock.patch.dict("os.environ",
+                             {"BRIDGE_SEND_URL": "http://127.0.0.1:8081"}):
+            with mock.patch.object(notify, "send_assignment", side_effect=boom):
+                code, out, err = self.commit(self.args())
         self.assertEqual(code, 1)
         self.assertIn("error:", err)
         meta = self.store.read_task_meta("t-1")
         self.assertEqual(meta.status, "prepared")  # retry-safe: txn idempotent
         self.assertIsNone(meta.event_id)
+
+    def test_no_endpoint_reply_delivery_degrades_gracefully(self):
+        """No BRIDGE_SEND_URL is a deployment form, not a failure (v2.8):
+        no network call, commit still happens (no event id), and stdout
+        guides delivering the assignment in the session reply body."""
+        self.delegate_prepared()
+        with mock.patch.dict("os.environ", {"BRIDGE_SEND_URL": ""}):
+            with mock.patch.object(notify, "send_assignment") as send:
+                code, out, err = self.commit(self.args())
+        self.assertEqual(code, 0, err)
+        send.assert_not_called()  # zero network calls in reply-delivery mode
+        meta = self.store.read_task_meta("t-1")
+        self.assertEqual(meta.status, "assigned")
+        self.assertIsNone(meta.event_id)
+        self.assertIn("[commit] t-1: assigned (event_id=-)", out)
+        self.assertIn("[notify] no notification endpoint configured", out)
+        self.assertIn("nothing was sent", out)
+        self.assertIn("session reply this turn", out)
+        # the @-prefixed full Matrix ID requirement is the load-bearing line
+        self.assertIn("full Matrix ID with the @ prefix", out)
+        self.assertNotIn("assignment sent to the Team Room", out)
+
+    def test_no_endpoint_still_requires_assignee_mxid(self):
+        # unlike --no-notify, reply-delivery keeps the auto-path prechecks
+        self.delegate_prepared()
+        with mock.patch.dict("os.environ", {"BRIDGE_SEND_URL": ""}):
+            with mock.patch.object(notify, "send_assignment") as send:
+                code, out, err = self.commit(self.args(assignee_mxid=""))
+        self.assertEqual(code, 1)
+        send.assert_not_called()
+        self.assertIn("--assignee-mxid is required", err)
+        meta = self.store.read_task_meta("t-1")
+        self.assertEqual(meta.status, "prepared")
 
     def test_no_notify_manual_event_id_is_legacy_path(self):
         self.delegate_prepared()

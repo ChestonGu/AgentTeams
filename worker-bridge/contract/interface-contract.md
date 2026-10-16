@@ -1,7 +1,7 @@
 # AgentTeams opencode Worker 接口契约
 
 > **统一命名注记（2026-09-13）**：runtime 统一为 worker-bridge（原 opencode），旧 opencode 链路退役；adapter 拆分 cimicode-stateless / cimicode-pod。文中 opencode 表述按此映射阅读。
-**版本** v2.7（2026-10-15，见 §8 版本沿革） · 对应实现：`opencode-worker-migration` T1-T11 + `leader-worker-bridge` P0 交付物
+**版本** v2.8（2026-10-16，见 §8 版本沿革） · 对应实现：`opencode-worker-migration` T1-T11 + `leader-worker-bridge` P0 交付物
 **上游基线**：copaw dev-v1.2.2（`AgentTeams/copaw/src/copaw_worker/`、`manager/agent/copaw-worker-agent/`）
 
 两方消费本契约：
@@ -57,7 +57,7 @@
 | `AGENTTEAMS_LOG_DIR` | 否 | — | 同上 | 目录形式（文件名固定 `agentteams.log`），优先级低于上一条 |
 | `AGENTTEAMS_LOG_LEVEL` | 否 | `INFO` | 同上 | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
 | `AGENTTEAMS_LOG_STDERR` | 否 | `1` | 同上 | `0` 关闭 stderr 镜像（文件 sink 不受影响） |
-| `BRIDGE_SEND_URL` | leader 沙箱 ✅ | — | `projectflow delegate-commit`（notify.py） | bridge send 端点（§4.1）基址，如 `http://agentteams-worker-<w>-bridge-svc:8081`（`<w>`=leader worker 名，暴露形态由部署侧定）。**仅 leader 沙箱需要**（delegate-commit 默认自动通知）；worker 恒不需要。缺失/不可达时 delegate-commit 报错退出、任务保持 prepared。**§1.1 runtime.json 回退不覆盖此键**（无 `AGENTTEAMS_` 前缀）——stateless leader 由平台侧以真实 env 注入 |
+| `BRIDGE_SEND_URL` | leader 沙箱 ✅ | — | `projectflow delegate-commit`（notify.py） | bridge send 端点（§4.1）基址，如 `http://agentteams-worker-<w>-bridge-svc:8081`（`<w>`=leader worker 名，暴露形态由部署侧定）。**仅 leader 沙箱需要**（delegate-commit 默认自动通知）；worker 恒不需要。缺失（未设置/空白）时 delegate-commit 走回复送达（记录指派、exit 0、打印引导，见 §5.4）；不可达时仍报错退出、任务保持 prepared。**§1.1 runtime.json 回退不覆盖此键**（无 `AGENTTEAMS_` 前缀）——stateless leader 由平台侧以真实 env 注入 |
 
 > env 三元组（ENDPOINT/AK/SK）与 MC_HOST 二选一：local 模式注入三元组，
 > k8s/cloud 模式注入 MC_HOST。同时存在时三元组优先用于 `mc alias set`。
@@ -272,7 +272,7 @@ projectflow check <tid>                             # leader 读回：meta + res
 6. env 同 §1（`AGENTTEAMS_WORKER_NAME` 注入 leader 名，mc 同步契约要求；
    delegate-commit 自动通知另需 `BRIDGE_SEND_URL`）。
 
-**delegate-commit 通知语义（v2.7，默认自动通知）**：
+**delegate-commit 通知语义（v2.7，默认自动通知；v2.8 补无端点分支）**：
 
 - **自动路径（默认）**：`delegate-commit <pid> <tid> --assignee-mxid <full-mxid>`
   经 `BRIDGE_SEND_URL`（§1）调 bridge send 端点（§4.1），把委派通知发到
@@ -281,12 +281,22 @@ projectflow check <tid>                             # leader 读回：meta + res
   `delegate-{task_id}`（homeserver 幂等，重试不重复入房）。**先发后
   commit**（copaw delegate_task 原子序）。`delegate` 收尾提示语直接引导
   跑此命令并声明"勿自发委派消息"——重复通知可能把 worker 触发两次。
+- **无端点分支（v2.8，回复送达）**：`BRIDGE_SEND_URL` 缺失（未设置/空白）
+  = 部署形态而非故障——跳过 notify（零网络调用），照常 commit（event_id
+  空、exit 0、任务转 assigned），stdout 打三行 `[notify]` 引导块：未发送
+  任何内容 / 本回合以回复正文送达（task id + 一行目标 + spec 位置）/
+  回复正文必须含 assignee 带 `@` 前缀的完整 Matrix ID——bridge 把回复
+  正文 `@` token 转结构化 mention 唤醒对方（与 worker TASK_COMPLETED
+  @leader 同机制）。与 `--no-notify` 的区别：仍走 `--assignee-mxid` 与
+  room_id 前置校验、必输出引导块；leader 模板双模式协议见 leader
+  AGENTS.md "Delegation delivery modes"。
 - **前置**：`meta.room_id`（delegate 时记入，缺则报错要求带 `--room-id`
   重新 delegate）与 `--assignee-mxid`（协作块 Team Workers 名单里的
   full Matrix ID）。
-- **失败保持 prepared**：env 缺失 / 端点不可达 / 发送被拒——命令退出 1，
+- **失败保持 prepared**：端点不可达 / 发送被拒——命令退出 1，
   meta 仍 prepared、未 commit；修复后重跑同一命令（固定 txn 幂等短路，
-  已入房的通知不会重发）。
+  已入房的通知不会重发）。（env 缺失自 v2.8 走上面的无端点分支，
+  不再算失败）
 - **幂等短路**：任务已 assigned 且带 event_id 时直接跳过通知、幂等成功。
 - **手动通道（`--no-notify [--event-id <id>]`）**：零通知网络调用（文件同步 mc pull/push 照常）——v2.7 前的
   唯一形态，通知由外部自发、拿到 event id 再记账；该路径下 notify
@@ -468,3 +478,4 @@ soul_merged/profile_merged）。
 | v2.5 | 2026-09-22 | 新增 **§1.1 配置文件回退**：`/opt/teams/config/runtime.json`（平铺 JSON，键=env 名，仅 `AGENTTEAMS_` 前缀生效）作为 §1 全部 env 键的 fallback 通道——stateless 沙箱平台无法建时注入 env，改由平台侧服务按 operator 同款三源拼值写文件；env 显式恒优先，pod 模式不受影响（文件缺席=正常态）。装载实现在 `mc_sync.load_runtime_config_file()`，import 时执行（早于 `_MC_ALIAS` 模块级求值），CLI 三件（taskflow/agentteams-sync/projectflow）零入口改动全覆盖 |
 | v2.6 | 2026-09-23 | §1 `AGENTTEAMS_FS_ROOT` 行补**沙箱约定值 `/workspace/work`**（pod 模式 operator 注入；runtime entrypoint 按 env `mkdir -p` + `cd`，cwd 与 `shared/` 同根——单旋钮）。工具链缺席缺省 `/root/agentteams-fs` 不变（沙箱内恒被 env/runtime.json 覆盖）；cimicode-runtime / opencode-runtime / cimicode-sandbox 三镜像的 WORKDIR 与 entrypoint 兜底同步迁移；stateless 平台侧改 runtime.json 供值即可，沙箱 cwd 仍归平台管（cimicode-sandbox 无 entrypoint） |
 | v2.7 | 2026-10-15 | Leader 形态接线（dev-v1.2.3-leader 首批）：§4 补路由纪律（会话回复只达触发房、跨房必经工具）+ 新增 **§4.1 出站端点** `POST /api/v1/bridge/send`（请求/响应体、`txn_id` 幂等透传、NO_REPLY 拒发、无鉴权以网络隔离为前提）；§1 新增 `BRIDGE_SEND_URL`（仅 leader 沙箱；§1.1 回退不覆盖，stateless 走平台真实 env）；§5.4 projectflow 转正为随 leader 沙箱部署——delegate-commit **默认自动通知**（`--assignee-mxid`、先发后 commit、txn `delegate-{task_id}` 幂等短路、失败保持 prepared、`--no-notify` 手动通道），"notify 由 agent 自发"旧描述删除；§6 生成器接受 `member.role=team_leader` 并按 role 自动分派 worker/leader 两模板（fail-loud 白名单改写；worker/standalone 渲染逐字节不变，golden 锁定），leader Coordination 渲染 Team/Team Room/Leader DM Room/Team Admin/Team Workers/Coordinator Members/Team Roster，Environment leader 标签 `Leader name:`；§2 bridge 预装补 leader 模板（随镜像打包） |
+| v2.8 | 2026-10-16 | 无出站形态回复送达（105 无出站对照实验 t-nb 结论：无 `BRIDGE_SEND_URL` 时 delegate-commit 报 NotifyError 卡死，人工教一次"回复正文 @ 完整 ID"后零干预通过）：§1 `BRIDGE_SEND_URL` 缺失语义拆分——缺失（未设置/空白）时 delegate-commit 走回复送达（记录指派、exit 0、打印 `[notify]` 引导），不可达时仍报错退出、任务保持 prepared；§5.4 自动路径补**无端点分支**（跳过 notify 零网络调用、event_id 空、仍要求 `--assignee-mxid`、与 `--no-notify` 区别=必输出引导块），"失败保持 prepared"收窄为端点不可达/发送被拒。已配置端点的自动路径与 `--no-notify` 手动通道**字节级不变**；CLI/notify.py 与 leader 模板两份副本同步（notify 缺失文案改防御性引导） |

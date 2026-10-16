@@ -22,9 +22,16 @@ class NotifyError(RuntimeError):
 def bridge_send_url() -> str:
     url = os.environ.get("BRIDGE_SEND_URL", "").rstrip("/")
     if not url:
+        # Defensive only: cmd_delegate_commit short-circuits an empty
+        # BRIDGE_SEND_URL into reply-delivery mode (contract §5.4) before
+        # this module is loaded, so a leader CLI reaching here means the
+        # endpoint vanished mid-session or notify was called directly.
         raise NotifyError(
-            "BRIDGE_SEND_URL is not set — the bridge send endpoint is "
-            "required for assignment notifications")
+            "BRIDGE_SEND_URL is not set — no notification endpoint is "
+            "configured in this deployment; the assignment must be "
+            "delivered in your session reply body with the assignee's "
+            "full Matrix ID written with the @ prefix "
+            "(e.g. @worker-name:domain)")
     return url
 
 
