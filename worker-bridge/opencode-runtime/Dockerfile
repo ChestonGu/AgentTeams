@@ -90,7 +90,14 @@ RUN sed -i "s|\r$||" /opt/agentteams/entrypoint.sh \
 # communication / task-management / file-sharing（task-management scripts 载
 # projectflow(_core) 委派状态机 / notify / mc_sync / agentteams_log；
 # file-sharing scripts 与 worker 树逐字节相同）
+# 底座 skills 树只含共享 skills + task-management/scripts（SKILL.md 按出站
+# 方式拆两变体，单一来源 scripts 不随变体复制）；变体 SKILL.md 入镜像
+# /opt/agentteams/skill-variants/{reply,outbound}/，entrypoint 启动时按
+# BRIDGE_SEND_URL 有无选一落位正式路径（同一镜像双形态，与 delegate-commit
+# 的运行期分岔同源——env 由 operator 从 Worker CR 同一字段注入）
 COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
+COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/reply/task-management/SKILL.md
+COPY worker-bridge/template/worker-bridge-leader-outbound-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
 # projectflow     任务/项目状态机：create / plan-dag / plan-loop / delegate /
 #                 delegate-commit（含自动通知）/ check（shared/projects|tasks/）
 # agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）

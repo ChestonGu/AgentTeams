@@ -11,10 +11,14 @@ Inputs:
 
   --template       source template (default: auto by member.role — the repo
                    copy at template/worker-bridge-agent/AGENTS.md for
-                   worker/standalone, template/worker-bridge-leader-agent/
-                   AGENTS.md for team_leader; the static skeleton: marker
-                   fences + §2-§8 + exactly two placeholders,
-                   {{COORDINATION}} and {{ENVIRONMENT}})
+                   worker/standalone; team_leader further picks the delivery
+                   form from runtime.yaml: template/worker-bridge-leader-
+                   outbound-agent/AGENTS.md when bridge.runtimeParameter.
+                   bridgeSendUrl is set (outbound auto-notify), template/
+                   worker-bridge-leader-reply-agent/AGENTS.md otherwise
+                   (reply-delivery, the flagless default); the static
+                   skeleton: marker fences + §2-§8 + exactly two
+                   placeholders, {{COORDINATION}} and {{ENVIRONMENT}})
   --runtime-config runtime.yaml (MinIO agents/<name>/runtime/runtime.yaml,
                    the controller-maintained MemberRuntimeConfig snapshot —
                    the single source of identity AND team facts)
@@ -91,8 +95,13 @@ _TEMPLATE_BASE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "template")
 DEFAULT_TEMPLATE = os.path.join(
     _TEMPLATE_BASE, "worker-bridge-agent", "AGENTS.md")
+# leader dual delivery form (v2.9): the generator picks between the two by
+# runtime.yaml bridge.runtimeParameter.bridgeSendUrl presence (leader_template_path);
+# reply (no outbound endpoint) is the flagless default
 DEFAULT_LEADER_TEMPLATE = os.path.join(
-    _TEMPLATE_BASE, "worker-bridge-leader-agent", "AGENTS.md")
+    _TEMPLATE_BASE, "worker-bridge-leader-reply-agent", "AGENTS.md")
+DEFAULT_LEADER_OUTBOUND_TEMPLATE = os.path.join(
+    _TEMPLATE_BASE, "worker-bridge-leader-outbound-agent", "AGENTS.md")
 
 PLACEHOLDER_COORDINATION = "{{COORDINATION}}"
 PLACEHOLDER_ENVIRONMENT = "{{ENVIRONMENT}}"
@@ -131,7 +140,8 @@ def parse_runtime_config(text):
     read as plain dicts/lists — no line matching. Fields consumed:
     member.name/runtimeName/matrixUserId/role/displayName, team.name,
     team.teamRoomId/leaderDmRoomId, team.admin.matrixUserId/displayName,
-    team.members[].matrixUserId/role/displayName, storage.sharedPrefix;
+    team.members[].matrixUserId/role/displayName,
+    bridge.runtimeParameter.bridgeSendUrl, storage.sharedPrefix;
     everything else (credentials, desired, ...) is ignored by simply not
     being read.
 
@@ -146,6 +156,8 @@ def parse_runtime_config(text):
         'roster': [{name, matrix_user_id, role,          # team.members[] (Team Roster)
                     display_name, description}, ...],
         'team': bool,                                    # team section present
+        'delivery_outbound',                             # bridge.runtimeParameter.
+                                                          # bridgeSendUrl truthy
         'storage_prefix',                                # storage.sharedPrefix
       }
     Worker identity is required (GenerateError when absent). role defaults
@@ -169,10 +181,12 @@ def parse_runtime_config(text):
     member = doc.get("member") or {}
     team = doc.get("team") or {}
     storage = doc.get("storage") or {}
+    bridge = doc.get("bridge") or {}
     if not isinstance(member, dict) or not isinstance(team, dict) \
-            or not isinstance(storage, dict):
+            or not isinstance(storage, dict) or not isinstance(bridge, dict):
         raise GenerateError(
-            "runtime config member/team/storage sections are not mappings")
+            "runtime config member/team/storage/bridge sections are not "
+            "mappings")
 
     worker_name = member.get("name") or member.get("runtimeName")
     matrix_id = member.get("matrixUserId")
@@ -249,6 +263,19 @@ def parse_runtime_config(text):
             "worker runtime config has no team_leader member in "
             "team.members — cannot render the Coordination block")
 
+    # leader delivery form (v2.9): the controller projects spec.runtimeParameter
+    # verbatim into the runtime.yaml bridge section (runtime_config.go
+    # memberRuntimeConfigBridge) — an outbound leader carries bridgeSendUrl
+    # (delegate-commit auto-notify via BRIDGE_SEND_URL); a reply-delivery
+    # leader has no bridge section at all. Missing/empty -> reply form
+    # (the flagless default). Values are trimmed on the controller side
+    # already; the strip keeps a hand-edited doc honest about whitespace.
+    runtime_parameter = bridge.get("runtimeParameter")
+    if not isinstance(runtime_parameter, dict):
+        runtime_parameter = {}
+    delivery_outbound = bool(
+        str(runtime_parameter.get("bridgeSendUrl") or "").strip())
+
     return {
         "worker_name": worker_name,
         # member.displayName: the agent's own friendly name (controller
@@ -268,6 +295,7 @@ def parse_runtime_config(text):
         "coordinators": coordinators,
         "roster": roster,
         "team": has_team,
+        "delivery_outbound": delivery_outbound,
         "storage_prefix": storage.get("sharedPrefix") or "",
     }
 
@@ -275,6 +303,20 @@ def parse_runtime_config(text):
 def load_runtime_config(path):
     with open(path, encoding="utf-8") as fh:
         return parse_runtime_config(fh.read())
+
+
+def leader_template_path(cfg):
+    """Flagless leader template pick by delivery form (contract §6, v2.9).
+
+    The controller projects spec.runtimeParameter verbatim into the
+    runtime.yaml bridge section; a leader whose bridge.runtimeParameter.
+    bridgeSendUrl is set is an outbound deployment (delegate-commit
+    auto-notify), without it the deployment is reply-delivery — the
+    flagless default (cfg['delivery_outbound'] from parse_runtime_config).
+    Worker/standalone members never route through here."""
+    if cfg.get("delivery_outbound"):
+        return DEFAULT_LEADER_OUTBOUND_TEMPLATE
+    return DEFAULT_LEADER_TEMPLATE
 
 
 def _roster_lines(cfg):
@@ -485,7 +527,10 @@ def main(argv=None):
                          "runtime.yaml) — identity and team facts")
     ap.add_argument("--template", default=None,
                     help="source template path (default: auto by member.role — "
-                         f"{DEFAULT_TEMPLATE} or {DEFAULT_LEADER_TEMPLATE})")
+                         f"{DEFAULT_TEMPLATE}; team_leader further picks by "
+                         "delivery form from runtime.yaml "
+                         f"{DEFAULT_LEADER_TEMPLATE} (reply, default) or "
+                         f"{DEFAULT_LEADER_OUTBOUND_TEMPLATE} (outbound))")
     ap.add_argument("--soul-file", default=None,
                     help="optional SOUL.md path; content appended verbatim "
                          "after the rendered agent.md (copaw prompt order)")
@@ -509,12 +554,14 @@ def main(argv=None):
     try:
         runtime = load_runtime_config(args.runtime_config)
         # template autodispatch: the bridge call chain never passes
-        # --template, so the member's own role picks the source template
-        # (an explicit --template path overrides; an empty value falls
-        # back to autodispatch)
+        # --template, so the member's own role picks the source template;
+        # a team_leader further picks the delivery form by runtime.yaml
+        # bridge.runtimeParameter.bridgeSendUrl presence (an explicit
+        # --template path overrides; an empty value falls back to
+        # autodispatch)
         template_path = args.template or (
-            DEFAULT_LEADER_TEMPLATE if runtime["role"] == "team_leader"
-            else DEFAULT_TEMPLATE)
+            leader_template_path(runtime)
+            if runtime["role"] == "team_leader" else DEFAULT_TEMPLATE)
         try:
             with open(template_path, encoding="utf-8") as fh:
                 template = fh.read()

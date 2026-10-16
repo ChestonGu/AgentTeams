@@ -30,14 +30,22 @@ import generate_agent_md as gen
 REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent", "AGENTS.md")
-LEADER_TEMPLATE = os.path.join(
-    REPO, "template", "worker-bridge-leader-agent", "AGENTS.md")
+# leader dual delivery form (v2.9): AGENTS.md split by outbound method —
+# reply (no notification endpoint; paste the printed assignment text) is
+# the flagless default, outbound (delegate-commit auto-notify) is picked
+# when runtime.yaml carries bridge.runtimeParameter.bridgeSendUrl
+LEADER_TEMPLATE_REPLY = os.path.join(
+    REPO, "template", "worker-bridge-leader-reply-agent", "AGENTS.md")
+LEADER_TEMPLATE_OUTBOUND = os.path.join(
+    REPO, "template", "worker-bridge-leader-outbound-agent", "AGENTS.md")
 RUNTIME_TEAM = os.path.join(FIXTURES, "runtime.yaml")
 RUNTIME_STANDALONE = os.path.join(FIXTURES, "runtime-standalone.yaml")
 RUNTIME_LEADER = os.path.join(FIXTURES, "runtime-leader.yaml")
+RUNTIME_LEADER_OUTBOUND = os.path.join(FIXTURES, "runtime-leader-outbound.yaml")
 GOLDEN_TEAM = os.path.join(FIXTURES, "golden-team.md")
 GOLDEN_STANDALONE = os.path.join(FIXTURES, "golden-standalone.md")
-GOLDEN_LEADER = os.path.join(FIXTURES, "golden-leader.md")
+GOLDEN_LEADER_REPLY = os.path.join(FIXTURES, "golden-leader-reply.md")
+GOLDEN_LEADER_OUTBOUND = os.path.join(FIXTURES, "golden-leader-outbound.md")
 DATE = "2026-09-03"
 
 SOUL_TEXT = "# SOUL\n\nYou are a meticulous backend engineer.\nPrefer minimal diffs.\n"
@@ -70,11 +78,25 @@ class GoldenTest(unittest.TestCase):
         out = gen.generate(cfg_standalone(), read(TEMPLATE), date=DATE)
         self.assertEqual(out, read(GOLDEN_STANDALONE))
 
-    def test_leader_golden(self):
+    def test_leader_reply_golden(self):
+        # 主力形态（测试优先非出站）：runtime-leader.yaml 无 bridge 段
         cfg = gen.load_runtime_config(RUNTIME_LEADER)
         self.assertEqual(cfg["role"], "team_leader")
-        out = gen.generate(cfg, read(LEADER_TEMPLATE), date=DATE)
-        self.assertEqual(out, read(GOLDEN_LEADER))
+        self.assertFalse(cfg["delivery_outbound"])
+        out = gen.generate(cfg, read(LEADER_TEMPLATE_REPLY), date=DATE)
+        self.assertEqual(out, read(GOLDEN_LEADER_REPLY))
+        # 形态纯净性：reply 版通篇不得出现出站（auto-notify）文案
+        self.assertNotIn("auto-notify", out)
+
+    def test_leader_outbound_golden(self):
+        cfg = gen.load_runtime_config(RUNTIME_LEADER_OUTBOUND)
+        self.assertEqual(cfg["role"], "team_leader")
+        self.assertTrue(cfg["delivery_outbound"])
+        out = gen.generate(cfg, read(LEADER_TEMPLATE_OUTBOUND), date=DATE)
+        self.assertEqual(out, read(GOLDEN_LEADER_OUTBOUND))
+        # 形态纯净性：outbound 版不得出现回复送达文案与粘贴标记
+        self.assertNotIn("reply-delivery", out)
+        self.assertNotIn("assignment text begin", out)
 
     def test_persona_seam_then_soul_then_profile(self):
         out = gen.generate(cfg_team(), read(TEMPLATE), date=DATE,
@@ -365,6 +387,52 @@ class ParserTest(unittest.TestCase):
             "  - junk\n")
         self.assertEqual(cfg["leader_id"], "@l1:example.org")
 
+    # ---- leader delivery form (v2.9): bridge.runtimeParameter.bridgeSendUrl
+
+    _LEADER_YAML = (
+        "member:\n"
+        "  name: l1\n"
+        "  matrixUserId: '@l1:example.org'\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  name: t1\n"
+        "  members:\n"
+        "  - matrixUserId: '@l1:example.org'\n"
+        "    role: team_leader\n")
+
+    def test_delivery_outbound_from_bridge_section(self):
+        # 无 bridge 段 / 空串 / 空白 → reply（flagless 默认）；有值 → outbound
+        self.assertFalse(gen.parse_runtime_config(
+            self._LEADER_YAML)["delivery_outbound"])
+        bridge = ("bridge:\n"
+                  "  runtimeParameter:\n"
+                  "    bridgeSendUrl: '%s'\n")
+        self.assertFalse(gen.parse_runtime_config(
+            self._LEADER_YAML + bridge % "")["delivery_outbound"])
+        self.assertFalse(gen.parse_runtime_config(
+            self._LEADER_YAML + bridge % "  ")["delivery_outbound"])
+        self.assertTrue(gen.parse_runtime_config(
+            self._LEADER_YAML
+            + "bridge:\n"
+            "  runtimeParameter:\n"
+            "    bridgeSendUrl: http://worker-leader-bridge-svc:8081\n"
+            "    sandboxImage: agentteams/opencode-runtime-leader\n"
+            )["delivery_outbound"])
+        # bridge 段存在但 runtimeParameter 缺失 → 仍 reply
+        self.assertFalse(gen.parse_runtime_config(
+            self._LEADER_YAML + "bridge:\n  adapterMode: cimicode-stateless\n"
+            )["delivery_outbound"])
+
+    def test_leader_template_auto_pick(self):
+        # 三路选型：role=team_leader 时按 bridgeSendUrl 有无在 reply/outbound
+        # 两模板间选（无出站 = flagless 默认）
+        reply_cfg = gen.load_runtime_config(RUNTIME_LEADER)
+        outbound_cfg = gen.load_runtime_config(RUNTIME_LEADER_OUTBOUND)
+        self.assertEqual(gen.leader_template_path(reply_cfg),
+                         gen.DEFAULT_LEADER_TEMPLATE)
+        self.assertEqual(gen.leader_template_path(outbound_cfg),
+                         gen.DEFAULT_LEADER_OUTBOUND_TEMPLATE)
+
 
 class CoordinationTest(unittest.TestCase):
     """Wording parity with agentteams-controller
@@ -575,10 +643,18 @@ class CliTest(unittest.TestCase):
         self.assertEqual(proc.stdout, read(GOLDEN_TEAM))
 
     def test_leader_template_autodispatch(self):
-        # --template 缺省时按 role 自动选 leader 模板(bridge 调用链不传 template)
+        # --template 缺省时按 role + 出站形态自动选模板(bridge 调用链不传
+        # template)；无 bridge 段 → reply（主力形态）
         proc = self.run_cli("--runtime-config", RUNTIME_LEADER, "--date", DATE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, read(GOLDEN_LEADER))
+        self.assertEqual(proc.stdout, read(GOLDEN_LEADER_REPLY))
+
+    def test_leader_outbound_template_autodispatch(self):
+        # bridge.runtimeParameter.bridgeSendUrl 有 → outbound 模板
+        proc = self.run_cli("--runtime-config", RUNTIME_LEADER_OUTBOUND,
+                            "--date", DATE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, read(GOLDEN_LEADER_OUTBOUND))
 
     def test_output_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -80,8 +80,11 @@ spec replace 滚动。资源命名 `<w>-cimicode*` 固定，跑 opencode-runtime
    bridge（同 worker 身份）。
 2. bridge 编排 turn：调 `bridge/generate_agent_md.py` 生成 system prompt——源模板
    **按 `member.role` 自动分派**（worker/standalone 用
-   `template/worker-bridge-agent/AGENTS.md`，team_leader 用
-   `template/worker-bridge-leader-agent/AGENTS.md`；两模板随 bridge 镜像打包，
+   `template/worker-bridge-agent/AGENTS.md`；team_leader 再按 runtime.yaml
+   `bridge.runtimeParameter.bridgeSendUrl` 有无选形态——有值用
+   `template/worker-bridge-leader-outbound-agent/AGENTS.md`（出站/自动通知），
+   无值用 `template/worker-bridge-leader-reply-agent/AGENTS.md`（回复送达，
+   默认）；三模板随 bridge 镜像打包，
    骨架固化 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两占位符）+ runtime.yaml
    结构化渲染（PyYAML safe_load）+ SOUL/PROFILE 逐字合并，fail-loud。**每个
    turn 现生成**，canonical AGENTS.md 已彻底退役（架构 v2.4）。
@@ -140,7 +143,8 @@ HELPER 残留键新 bridge 不读。
 | `opencode-runtime/` | cimicode 形态的外网模拟件（node:22-slim + npm opencode-ai@1.18.27，同契约） |
 | `bin/` | vendored mc 二进制（两 runtime Dockerfile 共享 COPY 源） |
 | `template/worker-bridge-agent/` | worker 模板（AGENTS.md 源模板 + 5 skills + scripts 部署副本） |
-| `template/worker-bridge-leader-agent/` | leader 模板（AGENTS.md + leader 版 skills 含 projectflow/notify 三件套）——**已接线**：生成器按 role 自动分派（契约 §6）、随 bridge 镜像打包、leader 沙箱镜像的 skills 替换源 |
+| `template/worker-bridge-leader-agent/` | leader 共享底座（leader 版 skills 含 projectflow/notify 三件套，task-management scripts 为单一来源部署副本；v2.9 起 AGENTS.md 与 task-management SKILL.md 移入两个形态变体目录）——leader 沙箱镜像的 skills 替换源 |
+| `template/worker-bridge-leader-reply-agent/` / `template/worker-bridge-leader-outbound-agent/` | leader AGENTS.md + task-management SKILL.md 按出站方式拆双份（reply=回复送达·默认 / outbound=自动通知）——生成器按 runtime.yaml `bridge.runtimeParameter.bridgeSendUrl` 有无三路选型（契约 §6）；AGENTS.md 随 bridge 镜像打包，SKILL.md 变体随 leader 沙箱镜像并装、entrypoint 按 `BRIDGE_SEND_URL` 选一落位 |
 | `cli/taskflow/` | taskflow CLI（worker 侧 check/ack/submit）+ mc 同步后端 + 统一日志模块 |
 | `cli/sync/` | agentteams-sync CLI（pull/push/stat/list） |
 | `cli/projectflow/` | projectflow CLI（leader 侧，core=copaw task.py 全量 vendor；delegate-commit 默认自动通知——notify.py 经 `BRIDGE_SEND_URL` 调 bridge send 端点，契约 §4.1/§5.4） |

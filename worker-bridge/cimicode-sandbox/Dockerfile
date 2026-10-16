@@ -71,6 +71,16 @@ RUN apt-get update \
 #   mc_sync.py 同目录平铺 + import agentteams_log，凭据协议 v5 的
 #   shared/oauth/ 拉取与验收 push/pull 走它，SKILL.md 带 leader 序言）
 COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
+# task-management SKILL.md 形态变体（reply=回复送达 / outbound=自动通知）：
+# 底座 skills 树只带 scripts（单一来源，SKILL.md 已移入两变体目录）。
+# 本镜像无 entrypoint（启动命令由平台决定），无法运行期按 BRIDGE_SEND_URL
+# 选形态——reply 为 flagless 默认直接落位正式路径（与生成器缺省一致），
+# outbound 变体入 /opt/agentteams/skill-variants/ 供出站形态部署层按需替换
+# （cp /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
+#   /opt/agentteams/skills/task-management/SKILL.md 一条命令切换）。
+COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skills/task-management/SKILL.md
+COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/reply/task-management/SKILL.md
+COPY worker-bridge/template/worker-bridge-leader-outbound-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
 
 # ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────
 # projectflow    任务/项目状态机：create / plan-dag / plan-loop / delegate /

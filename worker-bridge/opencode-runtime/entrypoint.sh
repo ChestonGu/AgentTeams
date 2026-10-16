@@ -17,6 +17,10 @@
 # 404 自愈 + taskflow mc pull 兜住。
 # 模型配置也不经本脚本：operator 以 OPENCODE_CONFIG_CONTENT env
 # （secretKeyRef，1.18.27 config/config.ts 直读、合并优先级最高）注入。
+# task-management SKILL.md 形态变体（leader 沙箱镜像）：底座 skills 树只含
+# 共享 skills + scripts，SKILL.md 由下方按 BRIDGE_SEND_URL 有无从
+# /opt/agentteams/skill-variants/{reply,outbound}/ 选形态落位——worker 沙箱
+# 镜像无该目录，整段条件跳过。
 set -eu
 
 WORKDIR="${AGENTTEAMS_FS_ROOT:-/workspace/work}"
@@ -26,6 +30,20 @@ mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 export AGENTTEAMS_FS_ROOT="$WORKDIR"
+
+# task-management SKILL.md 形态变体：BRIDGE_SEND_URL 有无选形态（同一镜像双形态，
+# 与 delegate-commit 的运行期分岔同源——env 由 operator 从 Worker CR 同一字段注入）
+if [ -f /opt/agentteams/skill-variants/outbound/task-management/SKILL.md ]; then
+    if [ -n "${BRIDGE_SEND_URL:-}" ]; then
+        SKILL_VARIANT=outbound
+    else
+        SKILL_VARIANT=reply
+    fi
+    mkdir -p /opt/agentteams/skills/task-management
+    cp "/opt/agentteams/skill-variants/$SKILL_VARIANT/task-management/SKILL.md" \
+       /opt/agentteams/skills/task-management/SKILL.md
+    echo "[opencode] task-management SKILL.md variant: $SKILL_VARIANT"
+fi
 
 # 种子全局配置（opencode 全局配置目录 = $HOME/.config/opencode，配置文件名
 # opencode.json——见 opencode config/config.ts）
