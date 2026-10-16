@@ -1,6 +1,6 @@
 ---
 name: communication
-description: Use before deciding whether to reply, sending requester updates, making @mention decisions, handling assignment notifications, Leader DM requests, or preventing reply loops.
+description: Use before deciding whether to reply, sending requester updates, making @mention decisions, handling assignment notifications, Leader DM requests, preventing reply loops, or composing any requester-facing report — kickoff, progress, acceptance, and final reports all follow the Project Status Report format defined in this skill.
 ---
 
 # Communication
@@ -12,13 +12,13 @@ Your session reply reaches only the room the triggering message came from. There
 | Message | Target | How |
 |---|---|---|
 | Direct answer, question reply, clarification | Current room | Reply directly in the current session |
-| Worker task assignment | Team Room | `projectflow delegate-commit --assignee-mxid ...` sends it automatically — never hand-write it |
-| Requester report (state change, completion, blocker, decision) | Team Room, @requester + @Team Admin | Session reply when the triggering message is in the Team Room (worker completions arrive there) |
+| Worker task assignment | Team Room | `projectflow delegate-commit` records it; the delivery form is defined by `task-management` — reply form: paste the printed assignment text verbatim into your session reply; outbound form: it is sent automatically. Never hand-write, reword, or duplicate it in either form. |
+| Requester report (state change, completion, blocker, decision) | Team Room, @requester + @Team Admin | Session reply when the triggering message is in the Team Room (worker completions arrive there); follow the Report Format Standards below |
 | Human conversation from Leader DM | Leader DM | Reply directly in the DM session |
 
 ## Assignment Notifications
 
-`delegate-commit` delivers the assignment: a structured @mention of the Worker's full Matrix ID, a per-task transaction id so retries never double-send, and the Matrix event id recorded on the task. After a successful commit, do not send a second assignment message — it duplicates the assignment and can trigger the Worker twice.
+`delegate-commit` owns the assignment: a structured @mention of the Worker's full Matrix ID, a per-task transaction id so retries never double-send, and the Matrix event id recorded on the task. After a successful commit plus its delivery step (paste in reply form, automatic in outbound form), do not send a second assignment message — it duplicates the assignment and can trigger the Worker twice.
 
 An assignment intent sentence is not an assignment. "I will assign this to the dev worker", "now delegate the first ready node", "the dev worker should start" — none of these notify anyone.
 
@@ -30,18 +30,95 @@ A Team Room report is mandatory after state-changing project/task actions: node 
 
 Leader DM is direct human conversation, not a report channel. A Leader DM message never satisfies a requester-report requirement — the concise post-delegation DM update is a transition note, not the report.
 
-## Leader DM Project Requests
+Every requester report in the Team Room follows the Report Format Standards below. A state-changing action is not done until its report is sent in the standard format.
 
-While coordination is internal (reading skills, planning, creating the project, delegating), your visible DM reply is exactly `NO_REPLY` — including tool preambles like "let me check". The first visible output is the Team Room assignment sent by `delegate-commit`, or — when assignment cannot proceed — the blocker/question itself in the DM (bridge adaptation: a DM turn cannot reach the Team Room; the human requester is in the DM).
+## Report Format Standards
 
-Success path after delegation: `delegate-commit` posts the Team Room assignment; your one concise requester update goes to the DM itself (a DM turn has no other path); the formal dual-anchor Team Room report happens on the next Team-Room-triggered turn, for example a Worker TASK_COMPLETED.
+Matrix renders Markdown headings, bold, lists, dividers, tables, and code blocks. Use them — never send wall-of-text or raw command output. Keep tables narrow (2-3 columns) so they render on narrow screens.
 
-## Anti-Loop
+Status markers: `✅` completed / accepted, `🔄` in progress / delegated, `⏳` pending / waiting on a human, `❌` blocked / failed, `🔁` loop iteration.
 
-- If your message doesn't require the recipient to *do* something, don't @mention them — no thanks, confirmations, "got it", "noted", "working on it", encouragement, or status symbols.
-- @mention the requester only when: (1) the delegated task is complete, (2) you hit a blocker, (3) you need a decision. @mention a Worker only for a question or a relayed decision — assignments are delivered automatically.
-- If 2+ rounds of @mentions produce no new task, question, or decision, stop replying immediately.
+### The Project Status Report envelope
+
+All project reports share one envelope. Open with the dual-anchor line, then a divider, then the report body:
+
+```markdown
+@requester:full-id @team-admin:full-id <一句话点题，例如：项目已立项并完成首轮派工 / 进度更新 / 终稿已产出，请您验收>
+
+---
+
+## 项目状态报告
+
+**项目名称**：<title>
+**项目 ID**：<projectId>
+**执行模式**：DAG | Loop
+**项目状态**：<marker> <一句话状态>
+**当前焦点**：<当前正在进行或等待的事>
+
+**摘要**：<1-3 句：发生了什么、你的判定、证据（行数/核对结论/修订数）>
+```
+
+Then the sections the report shape requires (below), then next steps. Write the whole report in the language selected by your AGENTS.md Response Language.
+
+### The four report shapes
+
+**1. Kickoff（立项通报）** — after `create-project` plus the first delegation. Envelope header (status `🚀 已启动`), summary of the goal and the plan shape, task table for the full initial graph, progress shape, `**下一步**`.
+
+**2. Progress Update（进度更新）** — after a node status change or wave transition. Envelope header (status `🔄 进行中`), summary of what changed and your acceptance verdict, task table, progress shape, `**下一步**`. Omit deliverable paths when nothing new was delivered.
+
+**3. Acceptance Request（验收请求）** — when a deliverable is ready for the requester's decision. Envelope header (status `⏳ 待您验收`, 当前焦点 = who must act), summary with your verification verdict, `**📄 交付文件**` with the authoritative paths, and when the deliverable is a document add a 内容结构 table (章节 | 内容), then an explicit call to action: 「请您验收：回复"通过"即 <下一步动作>；如需调整，告诉我修改点，我安排返工。」
+
+**4. Final Report（结项报告）** — when the project is complete. Envelope header (status `✅ 已完成`), summary of the whole outcome, `**📄 交付文件**` listing every final deliverable path, task table with all nodes final, notes (omitted when none), and the closing action (publish to knowledge base, archive, or hand-off).
+
+### Task status table
+
+Every report carries the task table — one row per plan node, in execution order:
+
+```markdown
+**任务执行情况**：
+| 任务 | 负责人（角色） | 状态 |
+|---|---|---|
+| -01 编写指南 v1 | dev（编写） | ✅ |
+| -02 主笔修订：新增章节 | qa（主笔） | ✅ |
+| -03 复核把关并产出终稿 | dev（把关） | 🔄 |
+```
+
+Use short task ids (the `-NN` suffix) plus the title; role = what this member did on this node.
+
+### Progress shape
+
+Show the DAG as a one-glance flow line under the task table (Loop projects show the iteration line instead):
+
+```text
+**执行进度**：write-1 ✅ -> review-2 ✅ -> final-3 🔄 -> publish-4 ⏳
+```
+
+### Team introduction
+
+When the requester asks you to introduce the team, present the roster as role sections — not a flat list:
+
+- A bold role header with an emoji per section: `**🧭 组长（我）— @your-id`、`**👤 团队管理员 — display名 (@admin-id)`、`**👨‍💻 开发 — @worker-id`、`**🔍 质检 — @worker-id`.
+- Under each, 1-3 bullets from that member's Coordination-block role and description: what they own, how they collaborate.
+- Close with a short 协作方式 paragraph (how work flows through you) and one inviting sentence.
+
+## Noise Test
 
 Before any @mention, strip all Matrix IDs from the message in your head; send only if what remains carries a concrete completion, blocker, question, decision, or result.
 
+- If your message doesn't require the recipient to *do* something, don't @mention them — no thanks, confirmations, "got it", "noted", "working on it", encouragement, or status symbols.
+- @mention the requester only when: (1) the delegated task is complete, (2) you hit a blocker, (3) you need a decision. @mention a Worker only for a question or a relayed decision — assignments are delivered by the `delegate-commit` path (see Assignment Notifications).
+- If 2+ rounds of @mentions produce no new task, question, or decision, stop replying immediately.
+
 Write human-facing text in the language selected by your AGENTS.md Response Language. In prose around a mention, use the person's display name from the Coordination block, not the bare worker ID.
+
+## Leader DM Project Requests
+
+While coordination is internal (reading skills, planning, creating the project, delegating), your visible DM reply is exactly `NO_REPLY` — including tool preambles like "let me check". The first visible output is the Team Room assignment (delivered per your task-management skill), or — when assignment cannot proceed — the blocker or question itself in the DM (bridge adaptation: a DM turn cannot reach the Team Room; the human requester is in the DM).
+
+Success path after delegation: the assignment reaches the Team Room through its delivery path; your one concise requester update goes to the DM itself (a DM turn has no other path); the formal dual-anchor Team Room report happens on the next Team-Room-triggered turn, for example a Worker TASK_COMPLETED.
+
+## Anti-Loop
+
+- Noisy @mentions cause infinite loops — see the Noise Test above.
+- A Worker's non-mention room chatter never needs your reply; act only on mentions that carry tasks, results, blockers, or questions.
+- Never answer your own report; a report ends your turn.
