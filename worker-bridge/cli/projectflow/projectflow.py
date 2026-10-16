@@ -488,16 +488,20 @@ def cmd_delegate_commit(store, args, sync) -> int:
               "assignment message yourself (a duplicate can trigger the "
               "worker twice)")
     elif reply_delivery:
+        import notify as _notify  # build_assignment_text only — no network here
+        assignment_text = _notify.build_assignment_text(
+            args.assignee_mxid.lstrip("@"), meta.task_id, meta.task_title, spec)
         print("[notify] no notification endpoint configured "
               "(BRIDGE_SEND_URL not set) — assignment recorded, nothing "
               "was sent")
-        print("[notify] deliver this assignment in YOUR session reply "
-              "this turn: task id + one-line goal + where the spec lives")
-        print("[notify] the reply body MUST contain the assignee's full "
-              "Matrix ID with the @ prefix (e.g. @worker-name:domain) — "
-              "the bridge turns an @ token in reply text into the mention "
-              "that wakes the assignee; without it the assignee is never "
-              "notified")
+        print("[notify] deliver the assignment yourself: paste the "
+              "assignment text between the markers below into your "
+              "session reply, verbatim and unshortened — the leading "
+              "@mention wakes the assignee (the bridge converts it to "
+              "the structured mention)")
+        print("[notify] ---- assignment text begin ----")
+        print(assignment_text)
+        print("[notify] ---- assignment text end ----")
     return 0
 
 

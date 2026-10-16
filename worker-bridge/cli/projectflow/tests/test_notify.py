@@ -127,6 +127,18 @@ class DelegateCommitNotifyTest(unittest.TestCase):
             code = projectflow.cmd_delegate_commit(self.store, args, self.sync)
         return code, out.getvalue(), err.getvalue()
 
+    def extract_assignment_block(self, out):
+        """Assignment text between the paste markers: find the two
+        marker lines (they carry the [notify] prefix), join everything
+        strictly between them — that is exactly what print(assignment_text)
+        emitted, so it must equal build_assignment_text byte for byte."""
+        lines = out.split("\n")
+        begin = next(i for i, line in enumerate(lines)
+                     if "assignment text begin" in line)
+        end = next(i for i, line in enumerate(lines)
+                   if "assignment text end" in line)
+        return "\n".join(lines[begin + 1:end])
+
     def test_auto_notify_sends_then_records_event_id(self):
         self.delegate_prepared()
         with mock.patch.dict("os.environ",
@@ -173,9 +185,10 @@ class DelegateCommitNotifyTest(unittest.TestCase):
         self.assertIsNone(meta.event_id)
 
     def test_no_endpoint_reply_delivery_degrades_gracefully(self):
-        """No BRIDGE_SEND_URL is a deployment form, not a failure (v2.8):
+        """No BRIDGE_SEND_URL is a deployment form, not a failure (v2.9):
         no network call, commit still happens (no event id), and stdout
-        guides delivering the assignment in the session reply body."""
+        prints the full assignment text between paste markers for the
+        leader to deliver in the session reply body."""
         self.delegate_prepared()
         with mock.patch.dict("os.environ", {"BRIDGE_SEND_URL": ""}):
             with mock.patch.object(notify, "send_assignment") as send:
@@ -188,10 +201,65 @@ class DelegateCommitNotifyTest(unittest.TestCase):
         self.assertIn("[commit] t-1: assigned (event_id=-)", out)
         self.assertIn("[notify] no notification endpoint configured", out)
         self.assertIn("nothing was sent", out)
-        self.assertIn("session reply this turn", out)
-        # the @-prefixed full Matrix ID requirement is the load-bearing line
-        self.assertIn("full Matrix ID with the @ prefix", out)
+        self.assertIn("---- assignment text begin ----", out)
+        self.assertIn("---- assignment text end ----", out)
+        # the paste block is the auto-arm assignment text, byte for byte
+        self.assertEqual(
+            self.extract_assignment_block(out),
+            notify.build_assignment_text("alice:example.org", "t-1",
+                                         "Build UI", "spec body"))
+        self.assertEqual(
+            self.extract_assignment_block(out),
+            "@alice:example.org You are assigned task **t-1**: Build UI"
+            "\n\nspec body")
         self.assertNotIn("assignment sent to the Team Room", out)
+
+    def test_reply_delivery_text_byte_identical_to_auto_notify(self):
+        """A/B arms differ only in transport: the reply-arm paste block
+        equals build_assignment_text over the auto arm's captured
+        send_assignment arguments (room aside) — the two deployment
+        forms send byte-identical assignment text."""
+        self.delegate_prepared()
+        # Reply arm first: an auto-arm commit (assigned + event_id) would
+        # trip the idempotent short-circuit on the second run before the
+        # block prints. The reverse order is the supported repair flow —
+        # commit_task_assignment backfills the event_id afterwards.
+        with mock.patch.dict("os.environ", {"BRIDGE_SEND_URL": ""}):
+            with mock.patch.object(notify, "send_assignment") as send:
+                code, reply_out, err = self.commit(self.args())
+        self.assertEqual(code, 0, err)
+        send.assert_not_called()
+        with mock.patch.dict("os.environ",
+                             {"BRIDGE_SEND_URL": "http://127.0.0.1:8081"}):
+            with mock.patch.object(notify, "send_assignment",
+                                   return_value="$evt-9") as send:
+                code, out, err = self.commit(self.args())
+        self.assertEqual(code, 0, err)
+        sent = send.call_args.args  # room, mxid, task id, title, spec
+        self.assertEqual(len(sent), 5)
+        self.assertEqual(
+            self.extract_assignment_block(reply_out),
+            notify.build_assignment_text(*sent[1:]))
+
+    def test_reply_delivery_block_truncates_long_spec(self):
+        # the paste block carries the same 500-char spec preview as the
+        # auto-arm notification, ellipsis included
+        long_spec = "x" * 600
+        core.delegate_task(self.store, project_id="p-1", task_id="t-1",
+                           spec=long_spec, room_id="!team:x")
+        with mock.patch.dict("os.environ", {"BRIDGE_SEND_URL": ""}):
+            with mock.patch.object(notify, "send_assignment") as send:
+                code, out, err = self.commit(self.args())
+        self.assertEqual(code, 0, err)
+        send.assert_not_called()
+        block = self.extract_assignment_block(out)
+        self.assertIn("…", block)
+        self.assertLessEqual(len(block.split("\n\n", 1)[1]),
+                             notify.SPEC_PREVIEW_CHARS + 1)
+        self.assertEqual(
+            block,
+            notify.build_assignment_text("alice:example.org", "t-1",
+                                         "Build UI", long_spec))
 
     def test_no_endpoint_still_requires_assignee_mxid(self):
         # unlike --no-notify, reply-delivery keeps the auto-path prechecks
