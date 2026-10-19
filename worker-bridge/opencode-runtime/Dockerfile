@@ -59,8 +59,12 @@ FROM node:22-slim AS leader
 
 ARG OPENCODE_VERSION=1.18.27
 ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG APT_MIRROR=
 
-RUN apt-get update \
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    fi \
+    && apt-get update \
     # ripgrep: opencode 的 skill 工具 shell 出 rg 扫描 skill 内容——缺则每次
     # 调用挂 130s 后报 "ripgrep execution failed"（node-slim 不带 rg）；
     # python3 承载 projectflow 等 CLI（纯 stdlib，无需 pip）；其余为协作工具
@@ -129,8 +133,12 @@ FROM node:22-slim AS worker
 
 ARG OPENCODE_VERSION=1.18.27
 ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG APT_MIRROR=
 
-RUN apt-get update \
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    fi \
+    && apt-get update \
     # ripgrep: opencode 的 skill 工具 shell 出 rg 扫描 skill 内容——缺则每次
     # 调用挂 130s 后报 "ripgrep execution failed"（node-slim 不带 rg）；
     # python3 承载 taskflow 等 CLI（纯 stdlib，无需 pip）；其余为协作工具
