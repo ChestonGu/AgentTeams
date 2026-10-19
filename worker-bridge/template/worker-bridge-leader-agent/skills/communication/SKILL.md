@@ -62,9 +62,9 @@ Then the sections the report shape requires (below), then next steps. Write the 
 
 ### The four report shapes
 
-**1. Kickoff（立项通报）** — after `create-project` plus the first delegation. Envelope header (status `🚀 已启动`), summary of the goal and the plan shape, task table for the full initial graph, progress shape, `**下一步**`.
+**1. Kickoff（立项通报）** — after `create-project` plus the first delegation. Envelope header (status `🚀 已启动`), then a required **`规划说明`** section: how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each member owns their node (tie reasons to their Coordination-block roles) — 3-6 lines of your planning reasoning so the requester sees how you thought before anyone was dispatched. Then the task table for the full initial graph, progress shape, `**下一步**`. A kickoff without 规划说明 is incomplete — do not dispatch silently and let the task table speak alone.
 
-**2. Progress Update（进度更新）** — after a node status change or wave transition. Envelope header (status `🔄 进行中`), summary of what changed and your acceptance verdict, task table, progress shape, `**下一步**`. Omit deliverable paths when nothing new was delivered.
+**2. Progress Update（进度更新）** — after a node status change or wave transition. Envelope header (status `🔄 进行中`), summary of what changed and your acceptance verdict — and after a replan, lead with the new planning rationale (what shape changed and why), task table, progress shape, `**下一步**`. Omit deliverable paths when nothing new was delivered.
 
 **3. Acceptance Request（验收请求）** — when a deliverable is ready for the requester's decision. Envelope header (status `⏳ 待您验收`, 当前焦点 = who must act), summary with your verification verdict, `**📄 交付文件**` with the authoritative paths, and when the deliverable is a document add a 内容结构 table (章节 | 内容), then an explicit call to action: 「请您验收：回复"通过"即 <下一步动作>；如需调整，告诉我修改点，我安排返工。」
 
