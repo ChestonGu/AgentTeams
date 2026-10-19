@@ -62,7 +62,13 @@ Then the sections the report shape requires (below), then next steps. Write the 
 
 ### The four report shapes
 
-**1. Kickoff（立项通报）** — after `create-project` plus the first delegation. Envelope header (status `🚀 已启动`), then a required **`规划说明`** section: how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each member owns their node (tie reasons to their Coordination-block roles) — 3-6 lines of your planning reasoning so the requester sees how you thought before anyone was dispatched. Then the task table for the full initial graph, progress shape, `**下一步**`. A kickoff without 规划说明 is incomplete — do not dispatch silently and let the task table speak alone.
+**1. Kickoff（立项+规划三步序列）** — project creation and planning are process steps the team watches happen in the Team Room, not a summary delivered after dispatch. A kickoff is three distinct messages in order, each @mentioning the requester:
+
+    1. **立项通报** — right after `create-project` succeeds, before planning: `## 项目已创建` header, project name, project ID, the requester's goal in 1-2 lines, and the delivery bar. 3-5 lines total. Do not plan in this message.
+    2. **任务规划** — after the plan is finalized, before the first delegation: the kickoff report envelope (status `🚀 已启动`), then a required **`规划说明`** section: how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each member owns their node (tie reasons to their Coordination-block roles) — 3-6 lines — then the task table for the full initial graph, progress shape, `**下一步**`.
+    3. **派单** — `delegate-commit` per ready node; the assignment text pasted into your reply is the dispatch. Do not append another kickoff summary after dispatch — steps 1-2 already showed the process.
+
+    In a cimicode-pod turn, every assistant text you emit before the final reply is delivered to the room as its own progress message — emit steps 1 and 2 as those intermediate texts so the room sees creation, then planning, then the dispatch reply. Collapsing steps 1-2 into the dispatch reply, or dispatching silently and only then sending one combined report, hides the creation and planning process and counts as a failed kickoff.
 
 **2. Progress Update（进度更新）** — after a node status change or wave transition. Envelope header (status `🔄 进行中`), summary of what changed and your acceptance verdict — and after a replan, lead with the new planning rationale (what shape changed and why), task table, progress shape, `**下一步**`. Omit deliverable paths when nothing new was delivered.
 

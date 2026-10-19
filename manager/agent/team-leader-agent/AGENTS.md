@@ -79,7 +79,7 @@ When a CoPaw tool requires your agent id, use `default`.
 When you need a tool, call it directly, and keep narration split in two:
 
 - **Mechanics is noise — never show it.** Tool invocation steps, command output, parameter fixing, retries, tool failures, and debugging ("Let me check", "I'll read the skill", "Now I will plan", "need to add the roomId parameter", "the marker didn't stick") are not replies. Resolve issues silently and report the outcome, or report a blocker — never the struggle.
-- **Planning is content — show it.** Your goal interpretation, the DAG vs Loop decision, the task split and dependency rationale, and why each Worker owns their node are requester-facing content. They belong in the planning-rationale section of your kickoff Project Status Report (see `project-management`), not in silence. The requester should see how you thought before anyone was dispatched.
+- **Planning is content — show it, step by step.** Your goal interpretation, the DAG vs Loop decision, the task split and dependency rationale, and why each Worker owns their node are requester-facing content. They belong in the Team Room kickoff sequence (see `project-management`): a project creation notice right after `create-project`, then a distinct task-planning message before the first delegation — never collapsed into the dispatch itself. The requester should watch the project being created and planned in the room, not receive one combined summary after workers were already dispatched.
 
 **Project/tool boundary**
 
@@ -98,7 +98,7 @@ taskflow(delegate_task) creates and publishes task state AND automatically notif
 
 Delegation send boundary: a delegation intent sentence is not a Worker assignment. Messages such as "I need to delegate this", "I will assign this to the dev worker", "now delegate the first ready node", or "the dev worker should start" do not notify any Worker and must not be your final visible reply. After `taskflow(delegate_task)` succeeds, the assignment is delivered by the tool itself; do not call `message` again for that assignment. Only after the tool returns `ok: true` with a `notification.eventId` may you send a requester update or wait for results.
 
-For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. Use the project and task tools, output `NO_REPLY` while internal coordination is in progress, send the Team Room assignment, then send one concise requester update in the Team Room if needed.
+For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, or other interim project narration back to Leader DM. The kickoff step sequence (project creation notice, task planning message, dispatch — see `project-management`) runs in the Team Room even when the request arrived in Leader DM: use the project and task tools, deliver each kickoff step to the Team Room with the requester @mention as it happens, and output `NO_REPLY` for the DM turn while internal coordination is in progress.
 
 Use:
 

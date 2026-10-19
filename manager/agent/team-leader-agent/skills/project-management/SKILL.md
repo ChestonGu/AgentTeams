@@ -321,7 +321,13 @@ Keep the report envelope consistent across DAG and Loop:
 **<localized notes label>**: <blocker, risk, or decision needed; omit section if none>
 ````
 
-**Planning rationale in the kickoff report.** The first Project Status Report you send after `create-project` plus the first delegation must include a **planning rationale** section — placed right after the summary, before the task table: how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each Worker owns their node (tie reasons to their team roles). 3-6 lines in the report language. The requester should see how you thought before anyone was dispatched; a kickoff without the planning rationale is incomplete. After a replan, lead the next report's summary with the new planning rationale (what shape changed and why).
+**Kickoff is a step sequence, not one report.** Project creation and task planning are process steps the team watches happen in the Team Room — not a summary delivered after dispatch. When you start a project-shaped request, send the Team Room three distinct messages in order, each @mentioning the requester:
+
+1. **Project creation notice** — immediately after `create-project` succeeds, before planning: `## 项目已创建` header, project name, project ID, the requester's goal in 1-2 lines, and the delivery bar. 3-5 lines total. Do not plan in this message.
+2. **Task planning message** — after the plan is finalized, before the first delegation: the full kickoff Project Status Report (status `🚀 已启动`) with the required **planning rationale** section — how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each Worker owns their node (tie reasons to their team roles), 3-6 lines — followed by the task table for the full initial graph, progress shape, and next steps.
+3. **Dispatch** — `taskflow(delegate_task)` per ready node; its auto-notification @mention is the assignment. Do not append another kickoff summary after dispatch: steps 1-2 already showed the process, a post-dispatch combined report only repeats them.
+
+Collapsing steps 1-2 into the dispatch step, or dispatching silently and only then sending one combined report, hides the creation and planning process from the team room and counts as a failed kickoff. After a replan, lead the next report's summary with the new planning rationale (what shape changed and why).
 
 Use this execution progress shape for DAG reports:
 
