@@ -321,6 +321,8 @@ Keep the report envelope consistent across DAG and Loop:
 **<localized notes label>**: <blocker, risk, or decision needed; omit section if none>
 ````
 
+**Planning rationale in the kickoff report.** The first Project Status Report you send after `create-project` plus the first delegation must include a **planning rationale** section — placed right after the summary, before the task table: how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each Worker owns their node (tie reasons to their team roles). 3-6 lines in the report language. The requester should see how you thought before anyone was dispatched; a kickoff without the planning rationale is incomplete. After a replan, lead the next report's summary with the new planning rationale (what shape changed and why).
+
 Use this execution progress shape for DAG reports:
 
 ```text
