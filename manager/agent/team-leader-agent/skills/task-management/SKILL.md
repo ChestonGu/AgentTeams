@@ -222,9 +222,9 @@ When a Worker reports completion:
     - Read `communication`.
     - Use the Requester Reports routing rules.
     - Report to the requester recorded on the Project.
-    - If the requester is Team Admin, notify the Team Admin in Leader DM.
+    - If the requester is Team Admin, the requester report still goes to the Team Room — post it there with @Team Admin as the anchor (dual-anchor rule from `communication`). Leader DM is not a report channel: a Leader DM message does not satisfy this step.
     - If the Worker completion arrived in the Team Room, do not treat the Team Room reply or downstream task assignment as the requester update.
-10. You may batch multiple Worker completions and downstream delegations into one requester report, but do not omit Step 9 when Project state changed. Task handling is not complete until the requester or DM admin has been notified.
+10. You may batch multiple Worker completions and downstream delegations into one requester report, but do not omit Step 9 when Project state changed. Task handling is not complete until the requester has been notified in the Team Room.
 
 Project directory pulls in these flows are blocking. If `shared/projects/{project-id}/` cannot be pulled as a directory, stop and report the sync failure. Do not switch to pulling only `meta.json` or `plan.md` and then modify the plan.
 
