@@ -56,12 +56,12 @@ Task object shape (`add-tasks` / `plan-dag` / `plan-loop`):
 
 After a successful `delegate-commit`, the assignment is delivered only when the printed text is pasted verbatim into your session reply — do not edit, shorten, or reword it, and never send a second assignment message afterwards. `--no-notify` skips the assignment print (manual bookkeeping path paired with `--event-id`); use it only for recovery when told to.
 
-Write the spec in the language selected by your AGENTS.md Response Language. The spec is Worker-facing: goal, context, constraints, and expected result. Keep deliverables under `shared/tasks/<tid>/`; require a `result.md` with STATUS, SUMMARY, DELIVERABLES; when you need the Worker to report back, instruct them to @mention your full Matrix ID on completion.
+Write the spec in the language selected by your AGENTS.md Response Language. The spec is Worker-facing: goal, context, constraints, and expected result. Keep deliverables under `shared/tasks/<tid>/`; require a `result.md` with STATUS, SUMMARY, DELIVERABLES; when you need the Worker to report back, instruct them to @mention your full Matrix ID on completion. Do not prescribe Worker-internal steps — their acknowledgement, sync, submit, or planning belongs to the Worker's own runtime, not the spec.
 
 ## Checking And Accepting Results (TASK_COMPLETED)
 
 1. On a Worker TASK_COMPLETED notice, run `projectflow check <tid>`. It pulls the task directory and prints the task meta, `effective_for_acceptance: yes|no`, and the full result.md.
-2. `effective_for_acceptance` is `yes` for `SUCCESS` / `SUCCESS_WITH_NOTES` — those are candidate results, not acceptance. Only your acceptance completes a node; a Worker `SUCCESS` alone unblocks nothing.
+2. `effective_for_acceptance` is `yes` for `SUCCESS` / `SUCCESS_WITH_NOTES` — those are candidate results, not acceptance. Only your acceptance completes a node; a Worker `SUCCESS` alone unblocks nothing. `SUCCESS_WITH_NOTES` carries Worker notes: read them and reflect them in your acceptance report. The other result statuses are never candidates: `REVISION_NEEDED` → step 4 (revision work gets a new task id); `BLOCKED` → step 4 plus report the blocker to the requester (a blocked node may call for a replacement assignment); `INTERRUPTED` → the task never finished — re-delegate the work as a new node.
 3. Accept: pull the project directory (`agentteams-sync pull shared/projects/<pid>/`), set the node's marker to `[x]` in `shared/projects/<pid>/plan.md` — the sanctioned acceptance edit, that one marker and nothing else — push it back (`agentteams-sync push shared/projects/<pid>/`), then run `projectflow ready <pid>` to resolve the next wave.
 4. Reject, revise, or extend: do not mark `[x]`. Re-shape the graph with `plan-dag` / `plan-loop` (drop obsolete ids, add new pending ids — a delegated node cannot reset to pending, so revision work gets a NEW task id) and delegate the new nodes normally.
 5. Loop plans: accept nodes with the same marker edit; record iteration decisions with `record-iteration` and shape the next iteration's task set with `plan-loop`.
@@ -72,5 +72,6 @@ Plan markers: `[ ]` pending, `[~]` delegated, `[x]` completed / accepted by you,
 
 - Run `ready` before each delegation round; one delegation per node at a time (a delegated node disappears from `ready`).
 - Paused projects return no ready nodes and reject delegation; resume with `resume-project` before scheduling again.
+- A result arriving for a paused project waits: confirm with `show-project` first — do not accept or mark `[x]`, tell the requester the project is paused and what resume depends on, and hold until they resume it.
 - Do not hand-edit meta.json, spec.md, result.md, or plan.md structure; the only manual write is the acceptance marker — setting a node's marker to `[x]` (step 3 above).
 - If a shared directory pull fails, stop and report the sync failure; do not fall back to partial file pulls and then mutate project state.

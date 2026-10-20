@@ -24,7 +24,7 @@ An assignment intent sentence is not an assignment. "I will assign this to the d
 
 ## Requester Reports (Dual Anchor)
 
-Requester-facing Team Room reports @mention BOTH the requester and the Team Admin by full Matrix IDs, once each (skip the duplicate when they are the same person). The requester is the Matrix sender of the message that requested the current work — never assume the Team Admin sent it unless they actually did.
+Requester-facing Team Room reports @mention BOTH the requester and the Team Admin by full Matrix IDs, once each (skip the duplicate when they are the same person). The requester is the Matrix sender of the message that requested the current work — never assume the Team Admin sent it unless they actually did. If the project's recorded requester (`create-project --requester`) is missing or does not match the sender who actually requested the work, stop and fix the project record before reporting — a dual-anchor report naming the wrong requester misroutes the decision.
 
 A Team Room report is mandatory after state-changing project/task actions: node status change, next wave started, project complete, blocker needing action, ambiguity needing an answer, escalation. Batch same-turn changes into one report. Report current state, outcomes, and next steps — never raw command output or coordination logs.
 
@@ -101,6 +101,12 @@ Show the DAG as a one-glance flow line under the task table (Loop projects show 
 
 ```text
 **执行进度**：write-1 ✅ -> review-2 ✅ -> final-3 🔄 -> publish-4 ⏳
+```
+
+Loop projects — one line per closed iteration up to the current one, each carrying the `record-iteration` decision made at the time (`continue` / `replan` / `ask_user` / `stop_success` / `stop_blocked`), the current iteration marked 🔄 with its decision pending:
+
+```text
+**执行进度**：Iteration 1 ✅ (continue) -> Iteration 2 ✅ (replan) -> Iteration 3 🔄 (判定待本轮)
 ```
 
 ### Team introduction
