@@ -163,7 +163,18 @@ class MentionFilter:
         if role == "unknown" and not self.allow_unknown:
             return FilterDecision(False, "unknown_sender", role, mentions)  # 未知发送者默认拒绝
         if is_group and role not in self.allowed_roles and not (role == "unknown" and self.allow_unknown):
-            return FilterDecision(False, "sender_not_allowed", role, mentions)  # 角色不在白名单（如 worker 互 @）
+            # worker 发送者仅对"本 bridge 也是 worker"阻断（worker 互 @）；
+            # worker → leader 的任务汇报（TASK_COMPLETED @组长）是合法协作流，放行。
+            #（role_for(self) 会命中 self 短路，故显式比对 self 与 leader。）
+            resolver = self.role_resolver
+            self_is_leader = bool(
+                resolver is not None
+                and resolver.leader
+                and self.user_id
+                and self._normalize_user_id(resolver.leader) == self._normalize_user_id(self.user_id)
+            )
+            if not (role == "worker" and self_is_leader):
+                return FilterDecision(False, "sender_not_allowed", role, mentions)  # 角色不在白名单
         return FilterDecision(True, "accepted", role, mentions)
 
     def should_handle(

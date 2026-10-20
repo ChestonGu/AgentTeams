@@ -45,6 +45,28 @@ def test_mention_filter_blocks_peer_workers():
     assert decision.role == "worker"
 
 
+def test_mention_filter_allows_worker_report_to_leader():
+    """worker → leader 的任务汇报（@组长）放行——阻断的只是 worker 互 @；
+    角色映射正确化后 worker sender 不再落 human 兜底误放行。"""
+    mention_filter = MentionFilter(
+        user_id="@rd7-lead:matrix.local",
+        role_resolver=RoleResolver(
+            self_user_id="@rd7-lead:matrix.local",
+            leader="@rd7-lead:matrix.local",
+            admin="@admin:matrix.local",
+            workers={"@rd7-dev:matrix.local", "@rd7-qa:matrix.local"},
+        ),
+    )
+
+    decision = mention_filter.evaluate(
+        "@rd7-lead TASK_COMPLETED：result.md 已提交",
+        "@rd7-qa:matrix.local",
+    )
+
+    assert decision.accepted is True
+    assert decision.role == "worker"
+
+
 def test_mention_filter_rejects_unknown_sender():
     mention_filter = MentionFilter(
         user_id="@worker-a:matrix.local",
