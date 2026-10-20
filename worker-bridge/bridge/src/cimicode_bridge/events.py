@@ -13,6 +13,7 @@ class RuntimeEventKind(str, Enum):
     TURN_STARTED = "turn_started"            # turn 开始
     TEXT_DELTA = "text_delta"                # 文本增量
     TEXT_DONE = "text_done"                  # 一段文本完成（part 全量替换）
+    PROGRESS = "progress"                    # turn 中途叙述（非终态回复，实时单发）
     TOOL_STARTED = "tool_started"            # 工具调用开始
     TOOL_FINISHED = "tool_finished"          # 工具调用结束
     ARTIFACT_PUBLISHED = "artifact_published"  # 产物发布

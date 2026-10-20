@@ -141,35 +141,30 @@ class CimicodePodAdapter:
         return None
 
     @staticmethod
-    def _completed_assistant_texts(messages: list[dict[str, Any]], baseline_id: str) -> list[str]:
-        """baseline 之后（按列表位置）已完成的 assistant 文本（按时间序）。
+    async def _abandon(post_task: "asyncio.Task[Any] | None") -> None:
+        """放弃仍在跑的 POST 后台任务：取消并吞掉结果（调用方已另行定终态）。"""
+        if post_task is None or post_task.done():
+            return
+        post_task.cancel()
+        try:
+            await post_task
+        except asyncio.CancelledError:
+            pass
+        except BaseException:  # noqa: BLE001 — 放弃路径不关心失败原因，只防泄漏
+            pass
 
-        一个 opencode turn 可能产出多条 assistant 消息（工具调用之间穿插
-        进度叙述）；最后一条是 turn 的正式回复，之前的按 progress_texts
-        透出给房间。
-
-        必须按位置截断而非只排除 baseline 那一条 id：baseline 之前的同
-        session 历史回复也是已完成 assistant——只排 id 会让每 turn 的
-        progress 回放全部历史并随对话单调增长（progress=0,1,2,3...）。
-        baseline_id 为空（新 session 无 assistant）时收集全部；非空却在
-        列表中找不到时保守返回空——progress 宁可缺失也不回放历史。
-        """
-        if baseline_id:
-            messages = CimicodePodAdapter._slice_after_baseline(messages, baseline_id) or []
-        texts: list[str] = []
-        for message in messages:
-            info = message.get("info") or message
-            if str(info.get("role")) != "assistant":
-                continue
-            message_id = str(info.get("id") or "")
-            if not message_id:
-                continue
-            if (info.get("time") or {}).get("completed") is None:
-                continue
-            text = CimicodePodAdapter._extract_text(message)
-            if text.strip():
-                texts.append(text)
-        return texts
+    async def _post_turn(self, session_id: str, agent_md: str, user_message: str) -> Any:
+        """提交 turn 消息（服务端阻塞整 turn 才返回）。HTTP 非 2xx 在任务内
+        raise_for_status——异常经轮询循环的 post_task.exception() 快速上报，
+        不会退化成"死等超时"。"""
+        response = await self._http().post(
+            f"{self.base_url}/session/{session_id}/message",
+            json={"system": agent_md, "parts": [{"type": "text", "text": user_message}]},
+            # POST 服务端阻塞整 turn——给独立长超时（轮询另有自己的窗口）
+            timeout=self.timeout_seconds + 30.0,
+        )
+        response.raise_for_status()
+        return response
 
     @staticmethod
     def _extract_text(message: dict[str, Any]) -> str:
@@ -183,33 +178,96 @@ class CimicodePodAdapter:
                 texts.append(str(part["text"]))
         return "\n".join(texts)
 
-    async def _poll_reply(self, session_id: str, baseline_id: str) -> RuntimeEvent:
+    async def _poll_reply(
+        self,
+        session_id: str,
+        baseline_id: str,
+        on_event: Any | None = None,
+        post_task: "asyncio.Task[Any] | None" = None,
+    ) -> RuntimeEvent:
         """轮询直到 baseline 之后出现已完成的 assistant 消息（或超时）。
 
-        阻塞 POST 返回后仍需轮询：POST 的响应体不带完成语义，完成/失败
-        信号在消息列表的 info.time.completed / info.error 上。
+        POST 由调用方包成后台任务传入：阻塞 POST 期间并发轮询消息列表，
+        turn 中途的 assistant 前置叙述通过 on_event 以 PROGRESS 事件实时
+        透出（hold-last：最新一条持有不发——它可能是 turn 的终态回复；
+        出现更新一条时才把前一条定性为过程叙述发出，终态回复永不重复）。
+        on_event=None 时退回批量模式：不发实时事件，全部前置叙述随完成
+        事件的 progress_texts 一次性透出（旧行为，兼容既有调用方/测试）。
+
+        完成信号 = POST 已返回 且 baseline 后出现已完成 assistant 消息
+        （POST 响应体不带完成语义，完成/失败信号在消息列表的
+        info.time.completed / info.error 上）。
+
+        按位置截断而非只排除 baseline 那一条 id：baseline 之前的同 session
+        历史回复也是已完成 assistant——只排 id 会让每 turn 的 progress
+        回放全部历史并随对话单调增长。baseline 非空却不在列表中（session
+        状态异常）时本轮跳过——progress 宁可缺失也不回放历史。
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.timeout_seconds
+        emitted = 0   # 已实时发出的前置叙述数（按位置计数，hold-last 基准）
+        post_done = post_task is None
         while True:
+            if post_task is not None and post_task.done():
+                exc = post_task.exception()
+                if exc is not None:
+                    # POST 失败即报——turn 大概率未启动；文案与同步路径的
+                    # 异常分支一一对应（HTTP 状态码 / 超时 / 其他故障）。
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        logger.error(
+                            "cimicode-pod HTTP error: %s %s",
+                            exc.response.status_code, exc.response.text[:400],
+                        )
+                        return RuntimeEvent(
+                            kind=RuntimeEventKind.RUNTIME_ERROR,
+                            text=f"cimicode-pod HTTP {exc.response.status_code}",
+                        )
+                    if isinstance(exc, httpx.TimeoutException):
+                        # 阻塞 POST 放弃 ≠ turn 死亡：opencode 侧通常仍在跑
+                        # （会话状态完好，后续 turn 可继续）。文案带这层语义。
+                        logger.error(
+                            "cimicode-pod turn POST timed out after %.0fs; "
+                            "the turn may still be running server-side", self.timeout_seconds,
+                        )
+                        return RuntimeEvent(kind=RuntimeEventKind.RUNTIME_ERROR, text=(
+                            f"cimicode-pod turn timed out after {self.timeout_seconds}s "
+                            "(task still running server-side; ask again to re-attach)"
+                        ))
+                    logger.error("cimicode-pod adapter failure: %s", exc)
+                    return RuntimeEvent(
+                        kind=RuntimeEventKind.RUNTIME_ERROR,
+                        text=f"cimicode-pod adapter failure: {exc}",
+                    )
+                post_done = True
             await asyncio.sleep(self.poll_interval_seconds)
             fresh = self._slice_after_baseline(await self._messages(session_id), baseline_id)
             if fresh is None:
                 # baseline 非空却不在列表里（session 状态异常）——本轮跳过，
                 # 继续等 deadline 兜底；绝不扫全表（会把历史回复当新完成）。
                 continue
-            for message in reversed(fresh):
+            completed: list[tuple[str, str, dict[str, Any]]] = []  # (id, text, info) 时间序
+            for message in fresh:
                 info = message.get("info") or message
                 if str(info.get("role")) != "assistant":
                     continue
                 message_id = str(info.get("id") or "")
                 if not message_id:
                     continue
-                time_info = info.get("time") or {}
-                if time_info.get("completed") is None:
+                if (info.get("time") or {}).get("completed") is None:
                     continue
+                completed.append((message_id, CimicodePodAdapter._extract_text(message), info))
+            # hold-last 实时透出：最新一条持有（可能是终态回复），其余按
+            # 位置逐条以 PROGRESS 发出；发出的内容不再进 progress_texts。
+            while on_event is not None and len(completed) > emitted + 1:
+                text = completed[emitted][1]
+                if text.strip() and text.strip() != "NO_REPLY":
+                    await on_event(RuntimeEvent(kind=RuntimeEventKind.PROGRESS, text=text))
+                emitted += 1
+            if completed:
+                message_id, text, info = completed[-1]  # 最新一条定终态（与旧语义一致）
                 error = info.get("error")
                 if isinstance(error, dict):
+                    await self._abandon(post_task)
                     data = error.get("data") or {}
                     detail = str(data.get("message") or error.get("name") or "cimicode-pod turn failed")
                     return RuntimeEvent(
@@ -217,13 +275,26 @@ class CimicodePodAdapter:
                         text=f"cimicode-pod turn failed: {detail}",
                         data={"session_id": session_id, "message_id": message_id},
                     )
-                text = CimicodePodAdapter._extract_text(message)
-                return RuntimeEvent(
-                    kind=RuntimeEventKind.TURN_COMPLETED,
-                    text=text,
-                    data={"session_id": session_id, "message_id": message_id},
-                )
+                if post_done:
+                    # 余量兜底：实时模式漏发的（及 on_event=None 批量模式的
+                    # 全部）前置叙述随完成事件补发；过滤口径与旧批量一致。
+                    texts = [t for _, t, _ in completed]
+                    remainder = [
+                        t for t in texts[emitted:-1]
+                        if t.strip() and t.strip() != "NO_REPLY" and t.strip() != text
+                    ]
+                    result_data: dict[str, Any] = {"session_id": session_id, "message_id": message_id}
+                    if remainder:
+                        result_data["progress_texts"] = remainder
+                    return RuntimeEvent(
+                        kind=RuntimeEventKind.TURN_COMPLETED,
+                        text=text,
+                        data=result_data,
+                    )
+                # 最新完成消息已出现但 POST 未返回——turn 可能仍在续写，
+                # 继续轮询直到 POST 收口（终态判定以 POST 返回为准）。
             if loop.time() >= deadline:
+                await self._abandon(post_task)
                 return RuntimeEvent(
                     kind=RuntimeEventKind.TURN_INTERRUPTED,
                     text="cimicode-pod turn timed out waiting for assistant completion",
@@ -237,9 +308,10 @@ class CimicodePodAdapter:
         agent_md: str,
         user_message: str,
         turn_id: str = "",   # 可选日志关联（Matrix event_id；Gateway v2 下 turnId 由平台生成）
-        on_event: Any | None = None,  # 契约兼容：app 固定传参；轮询形态无流式，接受但忽略
+        on_event: Any | None = None,  # async on_event(RuntimeEvent)：轮询期间以 PROGRESS 实时透出 turn 中途叙述（None=批量模式，随完成事件补发）
     ) -> list[RuntimeEvent]:
-        """提交 turn：会话自愈 → 阻塞 POST（agent.md 走消息体 system 字段）→ 轮询完成。
+        """提交 turn：会话自愈 → 阻塞 POST 后台跑（agent.md 走消息体 system
+        字段）+ 并发轮询（前置叙述实时透出，完成信号在消息列表上）。
 
         三段式上下文已由调用方折进 user_message（契约 §4）；
         sandbox 绑定由 base_url 本身承载（单 pod 无独立沙箱）。
@@ -256,25 +328,19 @@ class CimicodePodAdapter:
                 "cimicode-pod action: post message session=%s turn=%s system_bytes=%d user_message=%r",
                 resolved, turn_id, len(agent_md.encode("utf-8")), user_message[:300],
             )
-            response = await self._http().post(
-                f"{self.base_url}/session/{resolved}/message",
-                json={"system": agent_md, "parts": [{"type": "text", "text": user_message}]},
-                # POST 服务端阻塞整 turn——给独立长超时（轮询另有自己的窗口）
-                timeout=self.timeout_seconds + 30.0,
+            # 阻塞 POST 转后台任务：轮询与 POST 并发进行，turn 中途的
+            # assistant 前置叙述经 on_event 实时发出（PROGRESS），房间内
+            # 可见顺序与工具的即时副作用（如 delegate-commit 的派单通知）
+            # 保持一致——旧路径 POST 跑完才补发全部 progress，会把顺序
+            # 颠倒成"派单先于立项/规划"。
+            post_task: asyncio.Task[Any] = asyncio.create_task(
+                self._post_turn(resolved, agent_md, user_message)
             )
-            response.raise_for_status()
-            completed = await self._poll_reply(resolved, baseline)
-            if completed.kind == RuntimeEventKind.TURN_COMPLETED:
-                # 把 turn 中途的 assistant 进度叙述（工具调用之间的插话）
-                # 随完成事件透出——调用方先发 progress 再发正式回复。
-                texts = self._completed_assistant_texts(await self._messages(resolved), baseline)
-                progress = [t for t in texts[:-1] if t.strip() and t.strip() != completed.text]
-                if progress:
-                    completed = RuntimeEvent(
-                        kind=RuntimeEventKind.TURN_COMPLETED,
-                        text=completed.text,
-                        data={**(completed.data or {}), "progress_texts": progress},
-                    )
+            try:
+                completed = await self._poll_reply(resolved, baseline, on_event=on_event, post_task=post_task)
+            except BaseException:
+                await self._abandon(post_task)
+                raise
             logger.info(
                 "cimicode-pod action: turn finished session=%s turn=%s outcome=%s elapsed=%.1fs progress=%d reply=%r",
                 resolved, turn_id, completed.kind.value, time.monotonic() - turn_started,

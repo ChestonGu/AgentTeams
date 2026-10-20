@@ -797,11 +797,32 @@ class BridgeApp:
                         room_id, stream_event_id, "\n\n".join(streamed_parts)
                     )
 
+            async def _runtime_event(event: Any) -> None:
+                """统一运行时事件回调（按 kind 分发）：
+                TEXT_DELTA/TEXT_DONE（stateless SSE 流式段落）→ _stream_edit
+                锚点/编辑路径；PROGRESS（pod 轮询发现的 turn 中途叙述）→
+                即时单发进群——与工具即时副作用（如 delegate-commit 派单
+                通知）的群内先后顺序保持一致，kickoff 序列不再被批量补发
+                颠倒成"派单先于立项/规划"。"""
+                kind = getattr(event.kind, "value", event.kind)
+                if kind == "progress":
+                    text = (event.text or "").strip()
+                    if not text or text == "NO_REPLY":
+                        return
+                    if self.matrix_gateway:
+                        await self.matrix_gateway.send_text(room_id, text)
+                        logger.info(
+                            "progress live room=%s event_id=%s body=%r",
+                            room_id, event_id, text[:200],
+                        )
+                    return
+                await _stream_edit(event)
+
             events = await self.runtime_client.chat(
                 session_id=self.config.runtime.session_id,
                 agent_md=agent_md,
                 user_message=user_message,
-                on_event=_stream_edit if hasattr(self.runtime_client, "chat") else None,
+                on_event=_runtime_event if hasattr(self.runtime_client, "chat") else None,
             )
             response_text = ""
             progress_texts: list[str] = []

@@ -187,6 +187,39 @@ async def _progress_texts_surfaced():
     assert completed.data["progress_texts"] == ["checking tasks...", "running tests..."]
 
 
+async def _progress_emitted_live_in_order():
+    """on_event 实时模式：turn 中途叙述以 PROGRESS 事件在 chat() 返回前
+    逐条发出（hold-last：最新一条持有不发光，终态回复不重复），完成事件
+    不再携带 progress_texts 余量——群内可见顺序与工具即时副作用一致
+    （105 rd6 实测旧批量路径把 kickoff 颠倒成"派单先于立项/规划"）。
+    """
+    fake = FakeCimicodePod(
+        scripted={"text": "final reply", "progress": ["checking tasks...", "running tests..."]},
+        delay_polls=1,
+    )
+    base_url = await fake.start()
+    received: list[RuntimeEvent] = []
+
+    async def on_event(event: RuntimeEvent) -> None:
+        received.append(event)
+
+    try:
+        adapter = _adapter(base_url)
+        events = await _run_chat(adapter, on_event=on_event)
+        await adapter.close()
+    finally:
+        await fake.stop()
+
+    # 实时事件：两条前置叙述都发了，且都在 chat() 返回前（收到即算）
+    assert [e.kind for e in received] == [RuntimeEventKind.PROGRESS, RuntimeEventKind.PROGRESS]
+    assert [e.text for e in received] == ["checking tasks...", "running tests..."]
+    # 完成事件：终态回复唯一，余量兜底为空（全部已实时发过）
+    completed = next(e for e in events if e.kind == RuntimeEventKind.TURN_COMPLETED)
+    assert completed.text == "final reply"
+    assert not (completed.data or {}).get("progress_texts")
+    assert "final reply" not in [e.text for e in received]  # 终态回复不经 PROGRESS 重复
+
+
 async def _error_becomes_runtime_error():
     fake = FakeCimicodePod(
         scripted={"error": {"name": "UsageLimit", "data": {"message": "quota exceeded"}}},
@@ -283,6 +316,10 @@ def test_happy_path_full_turn():
 
 def test_progress_texts_surfaced():
     asyncio.run(_progress_texts_surfaced())
+
+
+def test_progress_emitted_live_in_order():
+    asyncio.run(_progress_emitted_live_in_order())
 
 
 def test_error_becomes_runtime_error():
