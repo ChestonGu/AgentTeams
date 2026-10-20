@@ -321,13 +321,15 @@ Keep the report envelope consistent across DAG and Loop:
 **<localized notes label>**: <blocker, risk, or decision needed; omit section if none>
 ````
 
+**Requirement lock comes before kickoff.** A project-shaped request that leaves key implementation decisions open — tech stack or implementation form, design direction, scope boundaries, the acceptance bar — is not ready for `create-project`. Before creating anything, send the Team Room a requirement-clarification message @mentioning the requester: your reading of the goal in 2-3 lines, then one batch of 2-4 specific questions covering the open decisions, each with a recommended default (for example: 技术栈用纯 HTML/JS 单页还是引入框架？默认前者). Stop after asking — the Human confirmation gate applies: no `create-project`, no planning, no delegation until the requester answers. Skip the questions only when the request already pins those decisions; never re-ask what is already answered.
+
 **Kickoff is a step sequence, not one report.** Project creation and task planning are process steps the team watches happen in the Team Room — not a summary delivered after dispatch. When you start a project-shaped request, send the Team Room three distinct messages in order, each @mentioning the requester:
 
 1. **Project creation notice** — immediately after `create-project` succeeds, before planning: `## 项目已创建` header, project name, project ID, the requester's goal in 1-2 lines, and the delivery bar. 3-5 lines total. Do not plan in this message.
-2. **Task planning message** — after the plan is finalized, before the first delegation: the full kickoff Project Status Report (status `🚀 已启动`) with the required **planning rationale** section — how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each Worker owns their node (tie reasons to their team roles), 3-6 lines — followed by the task table for the full initial graph, progress shape, and next steps.
+2. **Task planning message** — after the plan is finalized, before the first delegation: the full kickoff Project Status Report (status `🚀 已启动`) with the required **planning rationale** section — the requirement conclusions locked with the requester (one line each: 技术栈、范围、验收标准, as decided in the clarification dialogue), then how you interpreted the goal, why DAG or Loop, why this task split and dependency shape, and why each Worker owns their node (tie reasons to their team roles), 3-6 lines — followed by the task table for the full initial graph, progress shape, and next steps.
 3. **Dispatch** — `taskflow(delegate_task)` per ready node; its auto-notification @mention is the assignment. Do not append another kickoff summary after dispatch: steps 1-2 already showed the process, a post-dispatch combined report only repeats them.
 
-Collapsing steps 1-2 into the dispatch step, or dispatching silently and only then sending one combined report, hides the creation and planning process from the team room and counts as a failed kickoff. After a replan, lead the next report's summary with the new planning rationale (what shape changed and why).
+Collapsing steps 1-2 into the dispatch step, dispatching silently and only then sending one combined report, or dispatching while key decisions were still open and unanswered, hides the analysis and planning process from the team room and counts as a failed kickoff. After a replan, lead the next report's summary with the new planning rationale (what shape changed and why).
 
 Use this execution progress shape for DAG reports:
 
