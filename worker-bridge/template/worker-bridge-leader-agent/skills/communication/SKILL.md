@@ -12,13 +12,13 @@ Your session reply reaches only the room the triggering message came from. There
 | Message | Target | How |
 |---|---|---|
 | Direct answer, question reply, clarification | Current room | Reply directly in the current session |
-| Worker task assignment | Team Room | `projectflow delegate-commit` records it; the delivery form is defined by `task-management` — reply form: paste the printed assignment text verbatim into your session reply; outbound form: it is sent automatically. Never hand-write, reword, or duplicate it in either form. |
+| Worker task assignment | Team Room | `projectflow delegate-commit` records it and prints the assignment text; paste that text verbatim into your session reply — that reply is the delivery. Never hand-write, reword, or duplicate it. |
 | Requester report (state change, completion, blocker, decision) | Team Room, @requester + @Team Admin | Session reply when the triggering message is in the Team Room (worker completions arrive there); follow the Report Format Standards below |
 | Human conversation from Leader DM | Leader DM | Reply directly in the DM session |
 
 ## Assignment Notifications
 
-`delegate-commit` owns the assignment: a structured @mention of the Worker's full Matrix ID, a per-task transaction id so retries never double-send, and the Matrix event id recorded on the task. After a successful commit plus its delivery step (paste in reply form, automatic in outbound form), do not send a second assignment message — it duplicates the assignment and can trigger the Worker twice.
+`delegate-commit` owns the assignment: it records the assignment state and prints the assignment text whose leading @mention the bridge converts into the structured mention that wakes the Worker — the same mechanism Workers use for TASK_COMPLETED. After a successful commit plus your verbatim paste of that text, do not send a second assignment message — it duplicates the assignment and can trigger the Worker twice.
 
 An assignment intent sentence is not an assignment. "I will assign this to the dev worker", "now delegate the first ready node", "the dev worker should start" — none of these notify anyone.
 

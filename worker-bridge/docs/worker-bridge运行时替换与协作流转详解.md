@@ -521,7 +521,7 @@ class RuntimeAdapter:
 只需两件事：
 
 1. **基础镜像** = [opencode/cimicode-sandbox/Dockerfile](../cimicode-sandbox/Dockerfile)，从现 sandbox 镜像裁剪：
-   - **预置**：5 个 worker skills 全文（communication / file-sharing / mcporter / organization / task-management，SKILL.md+scripts）→ `/opt/agentteams/skills/`；协作 CLI 到 PATH（`taskflow`、`agentteams-sync`）；运行依赖 python3.12 / mc / jq / git / procps。leader 场景追加 leader 模板的 project-management / team-coordination 两件（Dockerfile 注释标明）。
+   - **预置**：5 个 worker skills 全文（communication / file-sharing / mcporter / organization / task-management，SKILL.md+scripts）→ `/opt/agentteams/skills/`；协作 CLI 到 PATH（`taskflow`、`agentteams-sync`）；运行依赖 python3.12 / mc / jq / git / procps。（stateless leader 变体曾在此镜像加 leader stage，已随出站形态删除——leader 统一 pod 形态 `opencode-runtime-leader` 沙箱。）
    - **裁剪掉**：sandbox_helper(:4097)、opencode、bash.ts、ripgrep、entrypoint 守护（启动命令 cimicode 自己定）。
 2. **建沙箱时注入 env 契约**（镜像零凭据）：
 

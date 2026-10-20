@@ -29,8 +29,8 @@
 #     -t agentteams/opencode-runtime:<tag> .
 #
 # 多 stage（docker 不带 --target 时构建最后 stage，worker 故意放末位——
-# 默认构建产出与单 stage 时代字节一致；stage 划分同
-# cimicode-sandbox/Dockerfile）：
+# 默认构建产出与单 stage 时代字节一致；cimicode-sandbox 已回退单 stage，
+# 仅本目录保留 leader/worker 双 stage——leader 只剩 pod 形态）：
 #   --target leader   leader 变体：skills 整树替换为 leader 版 + projectflow
 #                     包装器替代 taskflow（105 pod 形态 leader 沙箱经
 #                     operator runtimeParameter.sandboxImage 选此变体镜像
@@ -91,19 +91,15 @@ RUN sed -i "s|\r$||" /opt/agentteams/entrypoint.sh \
     && chmod +x /opt/agentteams/entrypoint.sh
 
 # ── 2. skills 全套（leader 3 件）+ 协作协议 CLI（全局命令包装到 PATH）─────
-# communication / task-management / file-sharing（task-management scripts 载
-# projectflow(_core) 委派状态机 / notify / mc_sync / agentteams_log；
-# file-sharing scripts 与 worker 树逐字节相同）
-# 底座 skills 树只含共享 skills + task-management/scripts（SKILL.md 按出站
-# 方式拆两变体，单一来源 scripts 不随变体复制）；变体 SKILL.md 入镜像
-# /opt/agentteams/skill-variants/{reply,outbound}/，entrypoint 启动时按
-# BRIDGE_SEND_URL 有无选一落位正式路径（同一镜像双形态，与 delegate-commit
-# 的运行期分岔同源——env 由 operator 从 Worker CR 同一字段注入）
+# communication / task-management / file-sharing（task-management 含
+# SKILL.md + scripts：projectflow(_core) 委派状态机 / notify / mc_sync /
+# agentteams_log；file-sharing scripts 与 worker 树逐字节相同）。
+# 指派交付单一形态：delegate-commit 从不自己发送——打印指派文本，leader
+# 会话回复原样粘贴送达（与 worker 消息同一通道），无形态变体
 COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
-COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/reply/task-management/SKILL.md
-COPY worker-bridge/template/worker-bridge-leader-outbound-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
 # projectflow     任务/项目状态机：create / plan-dag / plan-loop / delegate /
-#                 delegate-commit（含自动通知）/ check（shared/projects|tasks/）
+#                 delegate-commit（打印 paste-ready 指派文本，回复粘贴送达）/
+#                 check（shared/projects|tasks/）
 # agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）
 # （不创建 taskflow 包装器：worker 形态的 taskflow.py 不在 leader 树中。
 #   AGENTS.md 指令通篇直呼裸 projectflow 命令，必须 PATH 可达——终审 F1

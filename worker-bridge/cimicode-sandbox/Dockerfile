@@ -3,11 +3,8 @@
 # =============================================================================
 # 用途：无状态 cimicode 运行时自建沙箱的基础镜像。cimicode 使用过程中自行
 # 创建沙箱（team 侧不做任何管控），沙箱内必须预置：
-#   1. 全套 worker skills（agent 可读的 SKILL.md 文档 + scripts CLI；
-#      leader 变体 stage 换 leader 版 skills——见下方多 stage 说明）
-#   2. taskflow / agentteams-sync 全局命令（协作协议的命令行入口；
-#      leader 变体 stage 包装 projectflow / agentteams-sync——leader 树
-#      载 projectflow 而非 taskflow，包装方式与 worker stage 对称）
+#   1. 全套 worker skills（agent 可读的 SKILL.md 文档 + scripts CLI）
+#   2. taskflow / agentteams-sync 全局命令（协作协议的命令行入口）
 #   3. 运行依赖：python3 / mc(MinIO 客户端) / jq / git / procps
 #
 # 不包含（对比 opencode 测试沙箱的裁剪项）：
@@ -24,12 +21,9 @@
 # 构建上下文 = 仓库根：
 #   docker build -f worker-bridge/cimicode-sandbox/Dockerfile -t <registry>/cimicode-sandbox:<tag> .
 #
-# 多 stage（docker 不带 --target 时构建最后 stage，worker 故意放末位——
-# 历史 default 构建产出与单 stage 时代字节一致）：
-#   --target leader   leader 沙箱变体（skills 整树替换为 leader 版，105
-#                     stateless 平台部署层为 leader 沙箱选此变体镜像；
-#                     亦可用 make build-cimicode-sandbox-leader）
-#   --target worker / 默认   worker 变体（现状不变）
+# 单 stage worker 镜像（stateless leader 变体镜像已随出站形态一并删除——
+# leader 统一走 pod 形态 opencode-runtime-leader 沙箱，见 opencode-runtime/
+# Dockerfile 的 leader stage）。
 #
 # 运行时配置契约（镜像内不含任何凭据；两个通道，显式 env 恒优先）：
 #   ① 沙箱 env 注入（平台支持时）
@@ -48,63 +42,8 @@
 # =============================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-# leader stage —— leader 沙箱变体，与 worker stage 两处不同：
-#   ① skills COPY 源 = leader 树（整树替换 worker 版）
-#   ② CLI 包装 RUN：创建 projectflow 包装器而非 taskflow（leader 树载
-#     projectflow，leader 文档从不调用 taskflow），agentteams-sync 同 worker
-# ─────────────────────────────────────────────────────────────────────────────
-FROM python:3.12-slim AS leader
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates curl jq git procps \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL -o /usr/local/bin/mc \
-        https://dl.min.io/client/mc/release/linux-amd64/mc \
-    && chmod +x /usr/local/bin/mc
-
-# ── 1. skills 全套（leader 3 件）─────────────────────────────────────────
-# communication / task-management / file-sharing
-# （task-management scripts 5 文件：projectflow(_core) 委派状态机含
-#   delegate-commit 自动通知 / notify / mc_sync / agentteams_log；
-#   file-sharing scripts 与 worker 树逐字节相同——agentteams_sync.py 需要
-#   mc_sync.py 同目录平铺 + import agentteams_log，凭据协议 v5 的
-#   shared/oauth/ 拉取与验收 push/pull 走它，SKILL.md 带 leader 序言）
-COPY worker-bridge/template/worker-bridge-leader-agent/skills /opt/agentteams/skills
-# task-management SKILL.md 形态变体（reply=回复送达 / outbound=自动通知）：
-# 底座 skills 树只带 scripts（单一来源，SKILL.md 已移入两变体目录）。
-# 本镜像无 entrypoint（启动命令由平台决定），无法运行期按 BRIDGE_SEND_URL
-# 选形态——reply 为 flagless 默认直接落位正式路径（与生成器缺省一致），
-# outbound 变体入 /opt/agentteams/skill-variants/ 供出站形态部署层按需替换
-# （cp /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
-#   /opt/agentteams/skills/task-management/SKILL.md 一条命令切换）。
-COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skills/task-management/SKILL.md
-COPY worker-bridge/template/worker-bridge-leader-reply-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/reply/task-management/SKILL.md
-COPY worker-bridge/template/worker-bridge-leader-outbound-agent/skills/task-management/SKILL.md /opt/agentteams/skill-variants/outbound/task-management/SKILL.md
-
-# ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────
-# projectflow    任务/项目状态机：create / plan-dag / plan-loop / delegate /
-#                delegate-commit（含自动通知）/ check（shared/projects|tasks/）
-# agentteams-sync 共享文件拉推（mc 后端；push 有协议文件排除护栏）——
-#   file-sharing scripts 随 leader skills 树进镜像，包装到全局 PATH
-# （不创建 taskflow 包装器：worker 形态的 taskflow.py 不在 leader 树中）
-RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scripts/projectflow.py "$@"\n' > /usr/local/bin/projectflow \
-    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
-    && chmod +x /usr/local/bin/projectflow /usr/local/bin/agentteams-sync \
-    && chmod +x /opt/agentteams/skills/*/scripts/*.py || true
-
-# ── 3. 约定 ──────────────────────────────────────────────────────────────
-ENV AGENTTEAMS_SKILLS_ROOT=/opt/agentteams/skills
-# 协作工作区约定路径（cimicode 挂载任务工作区到这里； Skills 与任务文件同树
-# 可读）。/workspace/work 与 pod 形态的 FS_ROOT 约定值对齐——本镜像无
-# entrypoint（启动命令由平台决定），FS_ROOT 经 env / runtime.json 供值。
-WORKDIR /workspace/work
-
-# 无 ENTRYPOINT：cimicode 自行决定沙箱启动命令（通常 sleep infinity / 长驻 shell）
-
-# ─────────────────────────────────────────────────────────────────────────────
-# worker stage —— 默认 target（末位 stage：不带 --target 的构建产出与改前
-# 字节一致，指令序与单 stage 时代相同，仅 FROM 增加 stage 名）
+# worker stage —— 单一 stage：stateless leader 变体已随出站形态删除，leader
+# 统一走 pod 形态沙箱镜像 opencode-runtime-leader（见 opencode-runtime/Dockerfile）
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS worker
 
@@ -118,9 +57,6 @@ RUN apt-get update \
 
 # ── 1. skills 全套（worker 5 件）─────────────────────────────────────────
 # communication / file-sharing / mcporter / organization / task-management
-# （leader 角色不在此 stage 叠加 skill——上面的 leader stage 把 skills 整树
-#   换成 leader 版 2 件，105 stateless 平台部署层为 leader 沙箱选 leader
-#   变体镜像，见 Makefile build-cimicode-sandbox-leader）
 COPY worker-bridge/template/worker-bridge-agent/skills /opt/agentteams/skills
 
 # ── 2. 协作协议 CLI（全局命令包装到 PATH）───────────────────────────────

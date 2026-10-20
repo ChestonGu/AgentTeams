@@ -80,12 +80,11 @@ spec replace 滚动。资源命名 `<w>-cimicode*` 固定，跑 opencode-runtime
    bridge（同 worker 身份）。
 2. bridge 编排 turn：调 `bridge/generate_agent_md.py` 生成 system prompt——源模板
    **按 `member.role` 自动分派**（worker/standalone 用
-   `template/worker-bridge-agent/AGENTS.md`；team_leader 再按 runtime.yaml
-   `bridge.runtimeParameter.bridgeSendUrl` 有无选形态——有值用
-   `template/worker-bridge-leader-outbound-agent/AGENTS.md`（出站/自动通知），
-   无值用 `template/worker-bridge-leader-reply-agent/AGENTS.md`（回复送达，
-   默认）；三模板随 bridge 镜像打包，
-   骨架固化 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两占位符）+ runtime.yaml
+   `template/worker-bridge-agent/AGENTS.md`；team_leader 用
+   `template/worker-bridge-leader-agent/AGENTS.md`；两模板随 bridge 镜像打包，
+   骨架固化 + 仅 `{{COORDINATION}}`/`{{ENVIRONMENT}}` 两占位符；stale
+   runtime.yaml 残留的 `bridge.runtimeParameter.bridgeSendUrl` 被忽略）+
+   runtime.yaml
    结构化渲染（PyYAML safe_load）+ SOUL/PROFILE 逐字合并，fail-loud。**每个
    turn 现生成**，canonical AGENTS.md 已彻底退役（架构 v2.4）。
 3. adapter 按裁决顺序选中 `cimicode-pod`，POST `/session` 懒建会话 →
@@ -137,19 +136,18 @@ HELPER 残留键新 bridge 不读。
 
 | 目录 | 内容 |
 |---|---|
-| `bridge/` | bridge 进程本体（`src/` FastAPI：matrix 防护、turn 编排、adapter 裁决、自愈轮询、出站 send 端点——契约 §4.1）+ `generate_agent_md.py`（agent.md 生成工具，按 role 分派 worker/leader 模板）+ `agentteams_log.py`（统一日志）+ `tests/` |
-| `operator/` | worker-bridge-operator（runtime 无关供给器，watch Worker CR 分派供给/推迟/GC，**不写 Worker CR**）+ `deploy/operator.yaml` 模板 + `tests/`（22 用例） |
+| `bridge/` | bridge 进程本体（`src/` FastAPI：matrix 防护、turn 编排、adapter 裁决、自愈轮询）+ `generate_agent_md.py`（agent.md 生成工具，按 role 分派 worker/leader 模板）+ `agentteams_log.py`（统一日志）+ `tests/` |
+| `operator/` | worker-bridge-operator（runtime 无关供给器，watch Worker CR 分派供给/推迟/GC，**不写 Worker CR**）+ `deploy/operator.yaml` 模板 + `tests/`（27 用例） |
 | `cimicode-runtime/` | cimicode 本体镜像构建上下文（内网 coder-cimicode 基础镜像） |
-| `opencode-runtime/` | cimicode 形态的外网模拟件（node:22-slim + npm opencode-ai@1.18.27，同契约） |
+| `opencode-runtime/` | cimicode 形态的外网模拟件（node:22-slim + npm opencode-ai@1.18.27，同契约；`--target leader` 变体镜像 `agentteams/opencode-runtime-leader` = leader 沙箱，skills 整树换 leader 版 + projectflow 包装器） |
 | `bin/` | vendored mc 二进制（两 runtime Dockerfile 共享 COPY 源） |
 | `template/worker-bridge-agent/` | worker 模板（AGENTS.md 源模板 + 5 skills + scripts 部署副本） |
-| `template/worker-bridge-leader-agent/` | leader 共享底座（leader 版 skills 含 projectflow/notify 三件套，task-management scripts 为单一来源部署副本；v2.9 起 AGENTS.md 与 task-management SKILL.md 移入两个形态变体目录）——leader 沙箱镜像的 skills 替换源 |
-| `template/worker-bridge-leader-reply-agent/` / `template/worker-bridge-leader-outbound-agent/` | leader AGENTS.md + task-management SKILL.md 按出站方式拆双份（reply=回复送达·默认 / outbound=自动通知）——生成器按 runtime.yaml `bridge.runtimeParameter.bridgeSendUrl` 有无三路选型（契约 §6）；AGENTS.md 随 bridge 镜像打包，SKILL.md 变体随 leader 沙箱镜像并装、entrypoint 按 `BRIDGE_SEND_URL` 选一落位 |
+| `template/worker-bridge-leader-agent/` | leader 模板单一目录（AGENTS.md + leader 版 skills 含 projectflow/notify 三件套，task-management scripts 为单一来源部署副本）——bridge 生成器与 leader 沙箱镜像共用的替换源 |
 | `cli/taskflow/` | taskflow CLI（worker 侧 check/ack/submit）+ mc 同步后端 + 统一日志模块 |
 | `cli/sync/` | agentteams-sync CLI（pull/push/stat/list） |
-| `cli/projectflow/` | projectflow CLI（leader 侧，core=copaw task.py 全量 vendor；delegate-commit 默认自动通知——notify.py 经 `BRIDGE_SEND_URL` 调 bridge send 端点，契约 §4.1/§5.4） |
-| `contract/` | `interface-contract.md` v2.7（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.3（统一形态传输契约） |
-| `cimicode-sandbox/` | stateless 形态 cimicode 自用沙箱的基础镜像（leader 变体 `--target leader` → `agentteams/cimicode-sandbox-leader`，skills 整树替换为 leader 版，worker target 字节不变） |
+| `cli/projectflow/` | projectflow CLI（leader 侧，core=copaw task.py 全量 vendor；delegate-commit 打印 paste-ready 指派文本——回复粘贴送达，契约 §5.4） |
+| `contract/` | `interface-contract.md` v3.0（协作契约）/ `controller-handover.md` / `adapter-contract.md` v1.3（统一形态传输契约） |
+| `cimicode-sandbox/` | stateless 形态 cimicode 自用沙箱的基础镜像（单 worker stage——stateless leader 变体已随出站形态删除） |
 | `docs/` | 设计与操作文档（见 §8 索引） |
 
 冒烟/模拟器等测试资产（`verify/`、smoke 记录）留在源分支
@@ -164,8 +162,8 @@ make VERSION=v1.2.3-cimi CIMICODE_BASE_IMAGE=<内网registry>/coder-cimicode:x b
                                                      # 本体：内网生产镜像（BASE_IMAGE 空则守卫 fail-loud）
 make VERSION=v1.2.3-cimi build-opencode-runtime      # 模拟件：外网验证契约用（agentteams/opencode-runtime）
 make VERSION=v1.2.3-cimi build-cimicode-bridge       # bridge（agentteams/cimicode-bridge，上下文=仓库根；打包 worker+leader 两份源模板）
+make VERSION=v1.2.3-cimi build-opencode-runtime-leader # leader 沙箱变体（agentteams/opencode-runtime-leader，--target leader）
 make VERSION=v1.2.3-cimi build-worker-bridge-operator # operator（agentteams/worker-bridge-operator）
-make VERSION=v1.2.3-cimi build-cimicode-sandbox-leader # leader 沙箱变体（agentteams/cimicode-sandbox-leader，--target leader）
 ```
 
 ### 5.2 部署 operator
@@ -234,10 +232,13 @@ spec:
 controller 消化 CR（建房、身份、runtime.yaml 投影、bridge pod），operator 只认
 Worker CR——**加 worker 不需要碰 operator**。leader 两种走法：copaw runtime
 （`runtime: copaw`）照旧；或 **worker-bridge leader**——`role: team_leader` 的
-Worker CR 走 `cimicode-stateless` 形态（leader 沙箱引用
-`agentteams/cimicode-sandbox-leader` 变体镜像 + 平台侧注入 `BRIDGE_SEND_URL`
-指向该 leader 的 bridge send 端点，`projectflow delegate-commit` 自动委派
-通知），worker 留 cimicode-pod 用 worker 镜像——operator/controller 零改动。
+Worker CR 走 `cimicode-pod` 形态，`spec.runtimeParameter.sandboxImage` 指向
+`agentteams/opencode-runtime-leader` 变体镜像（skills 整树为 leader 版 +
+projectflow 包装器；不带键 = 全局 `CIMICODE_IMAGE`，行为与 worker 一致）。
+指派交付走回复送达：`projectflow delegate-commit` 打印 paste-ready 指派文本，
+leader 把它原样粘进自己的会话回复（开头 `@mxid` 由 bridge 转结构化 mention
+唤醒 assignee，与 worker 的 TASK_COMPLETED 同通道）——leader 消息与 worker
+消息同一链路，无专用发送端点。
 
 ### 5.4 生效验证
 
@@ -267,12 +268,12 @@ mention 触发一轮 turn 即为端到端验证。
 ## 6. 本地验证
 
 ```bash
-# 单测（共 271 个；开发机需 pip install pyyaml）
+# 单测（共 266 个；开发机需 pip install pyyaml）
 cd cli/taskflow && python -m unittest discover -s tests   # 47 个（taskflow + mc_sync + 统一日志）
 cd cli/sync && python -m unittest discover -s tests       # 10 个（agentteams-sync）
-cd cli/projectflow && python -m unittest discover -s tests # 33 个（leader core + CLI + notify 自动通知 + 与 worker 闭环）
-cd bridge && python -m pytest tests -q        # 159 个（进程单测 109 含 send 端点 + 生成器 50 含 leader 分派）
-cd ../operator && python -m pytest tests -q    # 22 个（svc/模型注入+哈希 drift/GC/推迟；不写 CR）
+cd cli/projectflow && python -m unittest discover -s tests # 30 个（leader core + CLI + 指派文本/回复粘贴送达 + 与 worker 闭环）
+cd bridge && python -m pytest tests -q        # 152 个（进程单测 + 生成器含 leader 单模板分派/stale bridgeSendUrl 忽略）
+cd ../operator && python -m pytest tests -q    # 27 个（svc/模型注入+哈希 drift/GC/推迟/runtimeParameter 单键；不写 CR）
 
 # agent.md 生成工具（bridge 调用形态；runtime.yaml/SOUL/PROFILE 从 MinIO 拉下后传路径）
 python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
@@ -296,7 +297,7 @@ python bridge/generate_agent_md.py --runtime-config <runtime.yaml> \
 | 文档 | 内容 |
 |---|---|
 | [contract/adapter-contract.md](contract/adapter-contract.md) | 统一形态传输契约 v1.3（REST 双标定、模型注入、接线推导与自愈三通道、runtimeParameter 绑定袋、已知限制）——**接口权威** |
-| [contract/interface-contract.md](contract/interface-contract.md) | 协作契约 v2.7（env/镜像布局/消息与出站端点/命令/统一日志/agent.md 生成契约） |
+| [contract/interface-contract.md](contract/interface-contract.md) | 协作契约 v3.0（env/镜像布局/消息/命令/统一日志/agent.md 生成契约） |
 | [docs/worker-bridge-pod模式与operator部署详解.md](docs/worker-bridge-pod模式与operator部署详解.md) | pod 模式实测形态 + operator 部署使用全流程 + 105 实测坑——**部署权威** |
 | [docs/worker-bridge运行时替换与协作流转详解.md](docs/worker-bridge运行时替换与协作流转详解.md) | 运行时替换设计与协作流转 |
 | [docs/worker-bridge-worker运行时迁移方案.md](docs/worker-bridge-worker运行时迁移方案.md) | 迁移史（D0 总原则） |

@@ -59,7 +59,6 @@ LOCAL_CIMICODE_BRIDGE = agentteams/worker-bridge:$(VERSION)
 LOCAL_CIMICODE_RUNTIME = agentteams/cimicode-runtime:$(VERSION)
 LOCAL_OPENCODE_RUNTIME = agentteams/opencode-runtime:$(VERSION)
 LOCAL_OPENCODE_RUNTIME_LEADER = agentteams/opencode-runtime-leader:$(VERSION)
-LOCAL_CIMICODE_SANDBOX_LEADER = agentteams/cimicode-sandbox-leader:$(VERSION)
 LOCAL_WORKER_BRIDGE_OPERATOR = agentteams/worker-bridge-operator:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
@@ -117,7 +116,7 @@ LINES          ?= 50
 # ---------- Phony targets ----------
 
 .PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        build-qwenpaw-worker build-cimicode-bridge build-cimicode-runtime build-opencode-runtime build-opencode-runtime-leader build-cimicode-sandbox-leader build-worker-bridge-operator \
+        build-qwenpaw-worker build-cimicode-bridge build-cimicode-runtime build-opencode-runtime build-opencode-runtime-leader build-worker-bridge-operator \
         tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker push-cimicode-bridge \
         push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
@@ -237,10 +236,7 @@ build-cimicode-bridge: ## Build cimicode-bridge Worker image
 #   opencode-runtime-leader  leader 变体 opencode pod 镜像（opencode-runtime 的
 #                        --target leader stage——skills 整树替换为 leader 版 +
 #                        projectflow 包装器；105 pod 形态 leader 沙箱经
-#                        runtimeParameter.sandboxImage 选此变体）
-#   cimicode-sandbox-leader  leader 变体沙箱镜像（cimicode-sandbox 的 --target
-#                        leader stage——skills 整树替换为 leader 版；105
-#                        stateless 平台部署层为 leader 沙箱选此变体，代码零改动）
+#                        runtimeParameter.sandboxImage 选此变体——leader 唯一形态）
 #   worker-bridge-operator  per-worker cimicode pod 供给器
 CIMICODE_BASE_IMAGE ?=
 # opencode-runtime 构建参数（外网 npm 包钉版本；内网构建换 NPM_REGISTRY 镜像源）
@@ -276,17 +272,6 @@ build-opencode-runtime-leader: ## Build opencode-runtime leader-variant image (-
 		--target leader \
 		-f worker-bridge/opencode-runtime/Dockerfile \
 		-t $(LOCAL_OPENCODE_RUNTIME_LEADER) \
-		.
-
-# 部署约定：leader 沙箱必须引用本镜像名 agentteams/cimicode-sandbox-leader
-# （105 stateless 平台 sandbox 配置 / leader Worker CR 侧），不是
-# cimicode-sandbox:leader tag 形态——镜像名即变体选择，代码零改动。
-build-cimicode-sandbox-leader: ## Build cimicode-sandbox leader-variant image (--target leader: leader skills replace worker's)
-	@echo "==> Building cimicode-sandbox leader image: $(LOCAL_CIMICODE_SANDBOX_LEADER)"
-	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
-		--target leader \
-		-f worker-bridge/cimicode-sandbox/Dockerfile \
-		-t $(LOCAL_CIMICODE_SANDBOX_LEADER) \
 		.
 
 build-worker-bridge-operator: ## Build worker-bridge-operator image

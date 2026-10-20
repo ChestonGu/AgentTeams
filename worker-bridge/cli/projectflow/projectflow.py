@@ -421,8 +421,9 @@ def cmd_delegate(store, args, sync) -> int:
     print(meta_json(meta))
     print("[next] run "
           f"'projectflow delegate-commit {args.project_id} {meta.task_id} "
-          f"--assignee-mxid <full-mxid>' — it notifies the worker "
-          "automatically; do NOT send the assignment yourself")
+          f"--assignee-mxid <full-mxid>' — it prints the paste-ready "
+          "assignment text; paste it into your session reply, do NOT "
+          "reword or resend it")
     return 0
 
 
@@ -433,19 +434,14 @@ def cmd_delegate_commit(store, args, sync) -> int:
     sync.pull_task(args.task_id)
     meta = store.read_task_meta(args.task_id)
     event_id = args.event_id
-    notified = False
-    reply_delivery = False
     if not getattr(args, "no_notify", False):
-        # Auto-notification path (default): notify -> commit -> push, the
-        # copaw delegate_task atomic order. Any failure below exits with
-        # meta still prepared; the fixed txn_id makes a retry idempotent.
-        # Endpoint NOT configured (BRIDGE_SEND_URL empty) is a deployment
-        # form, not a failure (contract §5.4): skip the notify call, commit
-        # without an event_id, and guide reply-delivery below. An endpoint
-        # that IS configured but unreachable stays a hard failure.
+        # Default path: the command never sends anything itself — commit,
+        # then print the paste-ready assignment text; delivery is the
+        # leader's session reply (contract §5.4). The --no-notify manual
+        # path (--event-id supplied) skips the checks and the print.
         if meta.status == "assigned" and meta.event_id:
             print(f"[commit] {meta.task_id}: already assigned "
-                  f"(event_id={meta.event_id}) — notification skipped")
+                  f"(event_id={meta.event_id}) — nothing to do")
             print(meta_json(meta))
             return 0
         if not (meta.room_id or "").strip():
@@ -453,23 +449,12 @@ def cmd_delegate_commit(store, args, sync) -> int:
                   file=sys.stderr)
             return 1
         if not (getattr(args, "assignee_mxid", "") or "").strip():
-            print("error: --assignee-mxid is required for auto-notification "
+            print("error: --assignee-mxid is required "
                   "(full Matrix ID from the Coordination Team Workers list); "
                   "or pass --no-notify --event-id for the manual path",
                   file=sys.stderr)
             return 1
         spec = store.read_task_spec(args.task_id)
-        reply_delivery = not os.environ.get("BRIDGE_SEND_URL", "").strip()
-        if not reply_delivery:
-            import notify as _notify  # delayed: --no-notify path never loads it
-            try:
-                event_id = _notify.send_assignment(
-                    meta.room_id, args.assignee_mxid.lstrip("@"),
-                    meta.task_id, meta.task_title, spec)
-            except _notify.NotifyError as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                return 1
-            notified = True
     snap = _snapshot(_task_paths(store, args.task_id))
     meta = commit_task_assignment(
         store,
@@ -483,17 +468,12 @@ def cmd_delegate_commit(store, args, sync) -> int:
     print(f"[commit] {meta.task_id}: {meta.status} "
           f"(event_id={meta.event_id or '-'})")
     print(meta_json(meta))
-    if notified:
-        print("[notify] assignment sent to the Team Room — do NOT send the "
-              "assignment message yourself (a duplicate can trigger the "
-              "worker twice)")
-    elif reply_delivery:
+    if not getattr(args, "no_notify", False):
         import notify as _notify  # build_assignment_text only — no network here
         assignment_text = _notify.build_assignment_text(
             args.assignee_mxid.lstrip("@"), meta.task_id, meta.task_title, spec)
-        print("[notify] no notification endpoint configured "
-              "(BRIDGE_SEND_URL not set) — assignment recorded, nothing "
-              "was sent")
+        print("[notify] no notification endpoint configured — assignment "
+              "recorded, nothing was sent")
         print("[notify] deliver the assignment yourself: paste the "
               "assignment text between the markers below into your "
               "session reply, verbatim and unshortened — the leading "

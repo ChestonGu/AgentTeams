@@ -34,13 +34,10 @@ whose spec.runtime is "worker-bridge" it dispatches on spec.adapterMode
 
 Per-worker pod-form knobs (optional, Worker CR spec.runtimeParameter —
 the same string bag the stateless binding reads; the pod form recognizes
-exactly two keys, and workers carry neither, so a keyless CR provisions
+exactly one key, and workers carry none, so a keyless CR provisions
 byte-identical objects as before):
     sandboxImage   → override that worker's sandbox image (leader variant
                      image rides this channel; absent = global CIMICODE_IMAGE)
-    bridgeSendUrl  → inject pod env BRIDGE_SEND_URL, the leader sandbox's
-                     projectflow delegate-commit auto-notification egress
-                     (bridge send endpoint, interface-contract §4.1)
 Unknown keys are ignored (lenient-bag semantics, as in the stateless path).
 
 The runtime image is form-agnostic: CIMICODE_IMAGE may point at either
@@ -402,8 +399,8 @@ class StackOperator:
             pod_env["AGENTTEAMS_TEAM"] = team
         if matrix_user:
             pod_env["AGENTTEAMS_MATRIX_USER_ID"] = matrix_user
-        # per-worker 追加明文 env（runtimeParameter.bridgeSendUrl →
-        # BRIDGE_SEND_URL 经此进入；team/matrix_user 之后、secretKeyRef 之前）
+        # per-worker 追加明文 env（team/matrix_user 之后、secretKeyRef 之前；
+        # 当前无调用方传值，保留通道供后续 per-worker 明文键）
         pod_env.update(extra_env or {})
         container_env = env_list(pod_env)
         secret_name = self.cimicode_secret_name(worker)
@@ -643,14 +640,11 @@ class StackOperator:
         # 可选 per-worker 供给旋钮（CR spec.runtimeParameter，契约 v1.3 袋）：
         #   sandboxImage  → 覆盖该 worker 的沙箱镜像（leader 变体走此通道；
         #                   不带键 = 全局 CIMICODE_IMAGE，行为与历史逐字节一致）
-        #   bridgeSendUrl → 注入沙箱 env BRIDGE_SEND_URL（leader 沙箱的
-        #                   projectflow delegate-commit 自动通知出口；不带键不注入）
-        # 未知键忽略（stateless 绑定袋的既有语义，pod 形态只认这两个键）。
+        # 未知键忽略（stateless 绑定袋的既有语义，pod 形态只认这一个键）。
         rp = worker_obj.get("spec", {}).get("runtimeParameter") or {}
         if not isinstance(rp, dict):
             rp = {}
         image_override = str(rp.get("sandboxImage") or "").strip() or None
-        bridge_send_url = str(rp.get("bridgeSendUrl") or "").strip()
         effective_image = image_override or self.cfg.cimicode_image
         if not effective_image:
             log.error(
@@ -715,7 +709,6 @@ class StackOperator:
                 with_fs_secret=with_fs_secret,
                 model_config=model_config,
                 image=image_override,
-                extra_env={"BRIDGE_SEND_URL": bridge_send_url} if bridge_send_url else None,
             )
         )
         # 不 patch Worker CR：bridge 从 svc 命名契约自行推导接线（见模块
