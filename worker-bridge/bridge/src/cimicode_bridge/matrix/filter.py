@@ -23,12 +23,17 @@ class FilterDecision:
 
 @dataclass
 class RoleResolver:
-    """依据 COORDINATION_* 配置把 Matrix 用户 ID 解析为协作角色。"""
+    """把 Matrix 用户 ID 解析为协作角色。
+
+    输入来源两级：COORDINATION_* env（本地开发显式配置）> runtime.yaml
+    team 段花名册（controller 建队时投影，bridge 每 turn 重拉后刷新）。
+    """
 
     self_user_id: str | None = None   # 自身 MXID → "self"
     leader: str | None = None         # Leader MXID → "leader"
     admin: str | None = None          # 管理员 MXID → "admin"
     workers: set[str] = field(default_factory=set)  # 其他 worker MXID 集合 → "worker"
+    humans: set[str] = field(default_factory=set)   # 人类成员（coordinator）MXID 集合 → "human"
 
     def role_for(self, sender: str | None) -> str:
         """返回发送者的角色；无任何映射配置时视为 human（本地开发兼容）。"""
@@ -43,8 +48,10 @@ class RoleResolver:
             return "admin"
         if normalized in {MentionFilter._normalize_user_id(item) for item in self.workers}:
             return "worker"
+        if normalized in {MentionFilter._normalize_user_id(item) for item in self.humans}:
+            return "human"
         # 未配置任何角色映射的本地模式：把 sender 当人类用户，方便联调
-        if not self.leader and not self.admin and not self.workers:
+        if not self.leader and not self.admin and not self.workers and not self.humans:
             return "human"
         return "unknown"
 

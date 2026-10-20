@@ -161,7 +161,8 @@ class BridgeApp:
         if mode:
             self.config.runtime.adapter = mode
             self._last_adapter_mode = mode
-        # 收侧过滤器：本地配置 + COORDINATION_* env 角色映射
+        # 收侧过滤器：本地配置 + 角色映射（env 显式 > runtime.yaml 花名册，
+        # 见 _refresh_role_resolver；此处先建空壳，下一行立即按 bootstrap 填充）
         self.mention_filter = MentionFilter(
             require_mention=self.config.filter.require_mention,
             allow_unknown=self.config.filter.allow_unknown,
@@ -169,11 +170,9 @@ class BridgeApp:
             user_id=os.getenv("AGENTTEAMS_WORKER_MATRIX_USER_ID"),
             role_resolver=RoleResolver(
                 self_user_id=os.getenv("AGENTTEAMS_WORKER_MATRIX_USER_ID"),
-                leader=os.getenv("COORDINATION_LEADER"),
-                admin=os.getenv("COORDINATION_ADMIN"),
-                workers=set(filter(None, os.getenv("COORDINATION_WORKERS", "").split(","))),
             ),
         )
+        self._refresh_role_resolver(self.worker_files)
         self.phase = "bootstrap"
         # 群聊视野 buffer 容量（config.history.max_entries）
         self.history_manager = HistoryManager(capacity=self.config.history.max_entries)
@@ -197,6 +196,50 @@ class BridgeApp:
         pod 上 AGENTTEAMS_WORKER_MATRIX_USER_ID env 并不设置）。
         """
         self.mention_filter.user_id = user_id
+        if self.mention_filter.role_resolver is not None:
+            self.mention_filter.role_resolver.self_user_id = user_id
+
+    def _refresh_role_resolver(self, files: WorkerBootstrapConfig | None) -> None:
+        """按两级来源重建 mention 门禁的角色映射（env 显式 > runtime.yaml 花名册）。
+
+        COORDINATION_LEADER/ADMIN/WORKERS env 保持最高优先（本地开发/
+        排障显式配置，与 runtime 接线 env > runtime.yaml 的既有约定一致）；
+        生产路径无人注入这些 env，权威来源是 runtime.yaml team 段花名册
+        （controller 建队时投影，随成员变化更新）。每 turn 重拉与自愈
+        轮询落地 bootstrap 后都调这里——花名册变化下一 turn 即生效，
+        无需重启 bridge。
+        """
+        if self.mention_filter is None:
+            return
+        previous = self.mention_filter.role_resolver
+        env_leader = os.getenv("COORDINATION_LEADER")
+        env_admin = os.getenv("COORDINATION_ADMIN")
+        env_workers = set(filter(None, os.getenv("COORDINATION_WORKERS", "").split(",")))
+        roster = files.coordination_roster if files is not None else None
+        if env_leader or env_admin or env_workers:
+            source = "env"
+            leader, admin, workers = env_leader, env_admin, env_workers
+            humans = set(roster.humans) if roster is not None else set()
+        elif roster is not None:
+            source = "runtime.yaml team roster"
+            leader = roster.leader
+            admin = roster.admin
+            workers = set(roster.workers)
+            humans = set(roster.humans)
+        else:
+            source = "unconfigured (local human fallback)"
+            leader, admin, workers, humans = None, None, set(), set()
+        self.mention_filter.role_resolver = RoleResolver(
+            self_user_id=(previous.self_user_id if previous is not None else None),
+            leader=leader,
+            admin=admin,
+            workers=workers,
+            humans=humans,
+        )
+        logger.info(
+            "role mapping refreshed source=%s leader=%s admin=%s workers=%d humans=%d",
+            source, leader or "-", admin or "-", len(workers), len(humans),
+        )
 
     def _apply_env_overrides(self) -> None:
         """部署级 runtime 路由覆盖（pod env）。
@@ -497,6 +540,7 @@ class BridgeApp:
                     self.worker_files = refetched
                     if not self.matrix_access_token:
                         self.matrix_access_token = refetched.matrix_access_token
+                    self._refresh_role_resolver(refetched)
                     # bridge 段（runtime.yaml）应用 + adapter 形态重判（显式
                     # env 仍最高优先，见 _resolve_adapter_mode）。
                     self._apply_bridge_section(refetched)
@@ -688,6 +732,8 @@ class BridgeApp:
             if fresh is not None and fresh.runtime_yaml:
                 turn_files = fresh
                 self.worker_files = fresh
+                # 花名册随 turn 刷新：成员增删/角色变化下一 turn 即生效
+                self._refresh_role_resolver(fresh)
             else:
                 logger.warning("per-turn bootstrap pull failed; falling back to boot-time cache")
         if turn_files is None or not turn_files.runtime_yaml:

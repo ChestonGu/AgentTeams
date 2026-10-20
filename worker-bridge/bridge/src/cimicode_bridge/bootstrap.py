@@ -12,6 +12,27 @@ from minio import Minio
 
 logger = logging.getLogger(__name__)
 
+# team.members[].role 的角色分类（controller member_reconcile.go 的
+# MemberRole 投影值）：team_leader → leader；worker → worker；
+# 其余（coordinator 等，人类成员）→ humans。admin 单独走 team.admin 段。
+TEAM_ROLE_LEADER = "team_leader"
+TEAM_ROLE_WORKER = "worker"
+
+
+@dataclass(frozen=True)
+class TeamRoster:
+    """runtime.yaml team 段的花名册视图（mention 门禁角色映射的数据源）。
+
+    全部字段已归一化为可空形态：无 team 段的 standalone worker 拿到
+    None（见 coordination_roster），而不是全空的 roster——区分"未入队"
+    与"入队但某角色缺席"。
+    """
+
+    leader: str | None = None         # team_leader 成员的 MXID
+    admin: str | None = None          # team.admin.matrixUserId
+    workers: frozenset[str] = frozenset()  # role=worker 成员 MXID 集
+    humans: frozenset[str] = frozenset()   # 其余成员（coordinator 等）MXID 集
+
 
 def managed_runtime_type(runtime_yaml: str) -> str:
     """从 MemberRuntimeConfig 快照读取 member.runtime（解析失败返回空串）。
@@ -188,6 +209,60 @@ class WorkerBootstrapConfig:
     def bridge_adapter_mode(self) -> str:
         """bridge 段声明的 adapter 形态（cimicode-stateless / cimicode-pod）。"""
         return self.runtime_bridge_section.get("adapter_mode", "")
+
+    @property
+    def coordination_roster(self) -> TeamRoster | None:
+        """从 runtime.yaml team 段提取协作花名册（无 team 段返回 None）。
+
+        controller 建队时把全员花名册（members[].role + matrixUserId，
+        leader/admin/worker/coordinator）投影进 team 段——这是 mention
+        门禁角色映射的权威数据源（app._refresh_role_resolver 消费）。
+        解析失败返回 None（保持未配置语义，触发 RoleResolver 的本地
+        human 兜底），不让单条 YAML 瑕疵阻断收侧过滤。
+        """
+        if not self.runtime_yaml:
+            return None
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+            team = doc.get("team")
+            if not isinstance(team, dict):
+                return None
+            leader: str | None = None
+            workers: set[str] = set()
+            humans: set[str] = set()
+            members = team.get("members")
+            if isinstance(members, list):
+                for member in members:
+                    if not isinstance(member, dict):
+                        continue
+                    mxid = str(member.get("matrixUserId") or "").strip()
+                    role = str(member.get("role") or "").strip()
+                    if not mxid:
+                        continue
+                    if role == TEAM_ROLE_LEADER and leader is None:
+                        leader = mxid
+                    elif role == TEAM_ROLE_WORKER:
+                        workers.add(mxid)
+                    else:
+                        humans.add(mxid)
+            admin = ""
+            admin_section = team.get("admin")
+            if isinstance(admin_section, dict):
+                admin = str(admin_section.get("matrixUserId") or "").strip()
+            # admin 身份优先于 coordinator 重复条目（humanMembers 常含 admin）
+            humans.discard(leader or "")
+            humans.discard(admin)
+            return TeamRoster(
+                leader=leader,
+                admin=admin or None,
+                workers=frozenset(workers),
+                humans=frozenset(humans),
+            )
+        except Exception as exc:
+            logger.warning("failed to parse team roster from runtime.yaml: %s", exc)
+            return None
 
 
 class S3Bootstrap:

@@ -110,6 +110,94 @@ def test_s3_bootstrap_reads_precreated_gateway_session():
     assert bootstrap.gateway_sandbox_id == "sandbox-from-s3"
 
 
+RD7_RUNTIME_YAML = """
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+member:
+  name: rd7-dev
+  matrixUserId: "@rd7-dev:matrix.local"
+  role: worker
+team:
+  admin:
+    matrixUserId: "@admin:matrix.local"
+  leaderName: rd7-lead
+  members:
+  - name: rd7-lead
+    matrixUserId: "@rd7-lead:matrix.local"
+    role: team_leader
+  - name: rd7-dev
+    matrixUserId: "@rd7-dev:matrix.local"
+    role: worker
+  - name: rd7-qa
+    matrixUserId: "@rd7-qa:matrix.local"
+    role: worker
+  - name: admin
+    matrixUserId: "@admin:matrix.local"
+    role: coordinator
+  teamRoomId: "!room:matrix.local"
+"""
+
+
+def test_coordination_roster_parses_team_section():
+    """team 段花名册 → TeamRoster：leader/admin/worker 分类 + admin 去重
+    （admin 同时挂 coordinator 条目时不重复计 humans）。"""
+    bootstrap = WorkerBootstrapConfig(openclaw={}, runtime_yaml=RD7_RUNTIME_YAML)
+
+    roster = bootstrap.coordination_roster
+
+    assert roster is not None
+    assert roster.leader == "@rd7-lead:matrix.local"
+    assert roster.admin == "@admin:matrix.local"
+    assert roster.workers == frozenset({"@rd7-dev:matrix.local", "@rd7-qa:matrix.local"})
+    assert roster.humans == frozenset()  # admin 从 humans 剔除（admin 段优先）
+
+
+def test_coordination_roster_none_without_team_section():
+    """standalone worker（无 team 段）→ None（保持本地 human 兜底语义）。"""
+    bootstrap = WorkerBootstrapConfig(openclaw={}, runtime_yaml="member:\n  role: worker\n")
+
+    assert bootstrap.coordination_roster is None
+
+
+def test_role_resolver_maps_roster_roles_end_to_end():
+    """r7 缺陷回归：dev/qa bridge 的 RoleResolver 须把 leader 解析为
+    leader（而非 human 兜底）——花名册喂进去后整条 evaluate 链生效。"""
+    bootstrap = WorkerBootstrapConfig(openclaw={}, runtime_yaml=RD7_RUNTIME_YAML)
+    roster = bootstrap.coordination_roster
+    mention_filter = MentionFilter(
+        user_id="@rd7-dev:matrix.local",
+        role_resolver=RoleResolver(
+            self_user_id="@rd7-dev:matrix.local",
+            leader=roster.leader,
+            admin=roster.admin,
+            workers=set(roster.workers),
+            humans=set(roster.humans),
+        ),
+    )
+
+    leader_decision = mention_filter.evaluate("@rd7-dev 实现完成", "@rd7-lead:matrix.local")
+    admin_decision = mention_filter.evaluate("@rd7-dev 继续任务", "@admin:matrix.local")
+    peer_decision = mention_filter.evaluate("@rd7-dev 帮我查一下", "@rd7-qa:matrix.local")
+
+    assert leader_decision.accepted is True and leader_decision.role == "leader"
+    assert admin_decision.accepted is True and admin_decision.role == "admin"
+    # worker 互 @ 依旧阻断（花名册正确化不放宽协作语义）
+    assert peer_decision.accepted is False and peer_decision.role == "worker"
+
+
+def test_role_resolver_human_member_via_humans_set():
+    """humanMembers 里的非 admin 协作者（coordinator）→ role=human 放行。"""
+    resolver = RoleResolver(
+        leader="@rd7-lead:matrix.local",
+        humans={"@alice:matrix.local"},
+    )
+    mention_filter = MentionFilter(user_id="@rd7-dev:matrix.local", role_resolver=resolver)
+
+    decision = mention_filter.evaluate("@rd7-dev 收到需求", "@alice:matrix.local")
+
+    assert decision.accepted is True and decision.role == "human"
+
+
 def test_stateless_submit_envelope_strict_no_bag_leak():
     """Gateway v2 × runtime.yaml 新约定：参数面就是 runtime.yaml 袋——bridge
     抽固定字段自用（sessionId 进信封、eid 进 Header），袋内追加键/内部绑定
