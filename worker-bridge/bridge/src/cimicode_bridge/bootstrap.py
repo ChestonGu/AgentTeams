@@ -211,6 +211,85 @@ class WorkerBootstrapConfig:
         return self.runtime_bridge_section.get("adapter_mode", "")
 
     @property
+    def member_role(self) -> str:
+        """runtime.yaml member.role（team_leader / worker / ...；缺失空串）。
+
+        媒体归档的归档者门控数据源（对齐 copaw _should_archive_media：
+        只有 team_leader 归档群聊媒体）。
+        """
+        if not self.runtime_yaml:
+            return ""
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+            member = doc.get("member")
+            if not isinstance(member, dict):
+                return ""
+            return str(member.get("role") or "").strip()
+        except Exception as exc:
+            logger.warning("failed to parse member role from runtime.yaml: %s", exc)
+            return ""
+
+    def _team_section(self) -> dict[str, Any]:
+        """runtime.yaml team 段（无/解析失败返回空 dict）。"""
+        if not self.runtime_yaml:
+            return {}
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+            team = doc.get("team")
+            return team if isinstance(team, dict) else {}
+        except Exception as exc:
+            logger.warning("failed to parse team section from runtime.yaml: %s", exc)
+            return {}
+
+    def is_dm_room(self, room_id: str) -> bool:
+        """房间是否本成员的 DM（personalRoomId / leaderDmRoomId 命中）。
+
+        copaw 语义：DM 媒体不进团队归档（群聊才归档）。
+        """
+        team = self._team_section()
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+        except Exception:
+            doc = {}
+        member = doc.get("member") if isinstance(doc, dict) else None
+        dm_ids = {
+            str((member or {}).get("personalRoomId") or "").strip(),
+            str(team.get("leaderDmRoomId") or "").strip(),
+        }
+        dm_ids.discard("")
+        return str(room_id or "").strip() in dm_ids
+
+    def team_object_key(self, shared_rel_path: str) -> str:
+        """把 shared/ 相对路径映射为 bucket 内对象 key。
+
+        storage.sharedPrefix 形如 ``teams/t-l1/shared``：
+        ``shared/knowledge/matrix/x`` → ``teams/t-l1/shared/knowledge/matrix/x``
+        （与 copaw FileSync 的 shared remote 一致）。缺 sharedPrefix
+        （standalone）时路径原样返回（全局 shared/ 前缀）。
+        """
+        prefix = ""
+        try:
+            import yaml
+
+            doc = yaml.safe_load(self.runtime_yaml) or {}
+            storage = doc.get("storage")
+            if isinstance(storage, dict):
+                prefix = str(storage.get("sharedPrefix") or "").strip().strip("/")
+        except Exception as exc:
+            logger.warning("failed to parse storage prefix from runtime.yaml: %s", exc)
+            prefix = ""
+        if not shared_rel_path.startswith("shared/"):
+            return "/".join(part for part in (prefix, shared_rel_path) if part)
+        rest = shared_rel_path[len("shared/"):]
+        return f"{prefix}/{rest}" if prefix else shared_rel_path
+
+    @property
     def coordination_roster(self) -> TeamRoster | None:
         """从 runtime.yaml team 段提取协作花名册（无 team 段返回 None）。
 

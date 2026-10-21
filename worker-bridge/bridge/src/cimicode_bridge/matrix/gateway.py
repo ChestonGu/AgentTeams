@@ -60,6 +60,7 @@ class MatrixGateway:
             config=AsyncClientConfig(store_sync_tokens=False),
         )
         self.client.access_token = access_token
+        self.homeserver = homeserver.rstrip("/")            # 媒体下载直调用
         self.sync_timeout_seconds = sync_timeout_seconds   # 长轮询超时（秒）
         self.on_message = on_message                       # 文本消息回调（room,sender,event_id,content）
         self.on_authenticated = on_authenticated           # 认证完成回调（whoami 后、首次 sync 前）
@@ -198,6 +199,42 @@ class MatrixGateway:
                 **content,
             },
         )
+
+    async def download_media(self, mxc_url: str) -> bytes | None:
+        """下载 mxc:// 媒体本体（httpx 直调 v3/download，对齐 copaw _download_mxc）。
+
+        失败仅 warning 返回 None——归档是尽力而为路径，绝不向上抛。
+        """
+        if not mxc_url.startswith("mxc://"):
+            return None
+        try:
+            rest = mxc_url[6:]
+            server, media_id = rest.split("/", 1)
+            url = f"{self.homeserver}/_matrix/media/v3/download/{server}/{media_id}"
+            headers = {"Authorization": f"Bearer {self.client.access_token}"}
+            import httpx
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as http:
+                resp = await http.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.content
+        except Exception as exc:
+            logger.warning("media download failed for %s: %s", mxc_url, exc)
+            return None
+
+    async def send_notice(self, room_id: str, body: str) -> None:
+        """发送 m.notice（系统通报：归档路径告知，对齐 copaw 纯文本形态）。
+
+        不走 markdown 渲染与 mention 解析（内容不含 @）；失败仅 warning。
+        """
+        try:
+            await self.client.room_send(
+                room_id,
+                "m.room.message",
+                {"msgtype": "m.notice", "body": body},
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            logger.warning("notice send failed in %s: %s", room_id, exc)
 
     async def send_text(self, room_id: str, body: str, *,
                         content: dict[str, Any] | None = None) -> str | None:

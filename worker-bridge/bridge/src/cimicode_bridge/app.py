@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 import hashlib
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, ClassVar
@@ -29,6 +28,11 @@ from cimicode_bridge.controller.client import fetch_worker_runtime_env, refresh_
 from cimicode_bridge.log import setup_logging
 from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
 from cimicode_bridge.matrix.gateway import MatrixGateway
+from cimicode_bridge.media_archive import (
+    MediaArchiver,
+    media_shared_rel_path,
+    spawn_media_archive,
+)
 from cimicode_bridge.prompt import GenerateAgentMdError, build_agent_md_via_generator
 from cimicode_bridge.runtime.registry import build_runtime_adapter
 from cimicode_bridge.session import HistoryManager, SessionManager
@@ -39,18 +43,9 @@ from cimicode_bridge.store.redis import RedisStore
 logger = logging.getLogger(__name__)
 
 # 媒体记账：与 copaw matrix_channel 同公式的确定性归档路径（房间/事件/
-# 文件名三原料全在 Matrix 事件里，无需下载即可推出 leader 将写入的位置）。
-# bridge worker 不归档（team leader/copaw 负责），只把路径带进群聊视野。
-_MEDIA_SANITIZE_RE = re.compile(r"[^\w.\-]+")
-
-
-def _media_shared_rel_path(room_id: str, event_id: str, body: str) -> str:
-    """shared/knowledge/matrix/<房间8>/<事件8>_<净化文件名>（对齐 copaw 公式）。"""
-    eid = (event_id or "")[:8].lstrip("$")
-    room_key = (room_id or "")[:8].lstrip("!")
-    safe = _MEDIA_SANITIZE_RE.sub("_", body or "").strip("._")[:120]
-    safe = safe or f"matrix_media_{eid}"
-    return f"shared/knowledge/matrix/{room_key}/{eid}_{safe}"
+# 文件名三原料全在 Matrix 事件里，无需下载即可推出归档位置）。
+# 公式本体在 media_archive.py；此处别名保持既有 import 兼容。
+_media_shared_rel_path = media_shared_rel_path
 
 
 def _media_history_line(
@@ -124,6 +119,22 @@ class BridgeApp:
 
     # 自愈轮询间隔（秒）
     RECOVERY_POLL_SECONDS: ClassVar = 15.0
+
+    @property
+    def media_archiver(self) -> MediaArchiver | None:
+        """媒体归档器（lazy）：S3 客户端就绪后按需装配；本地模式返回 None。
+
+        归档门禁（角色/DM/开关/msgtype）在 MediaArchiver.should_archive，
+        未装配时 spawn_media_archive 静默跳过——等价 copaw 缺 MinIO env
+        的静默禁用。
+        """
+        if self.s3_bootstrap is None:
+            return None
+        cached = getattr(self, "_media_archiver", None)
+        if cached is None:
+            cached = MediaArchiver(s3=self.s3_bootstrap)
+            self._media_archiver = cached
+        return cached
 
     async def _fetch_runtime_env(self, worker: str, controller_url: str) -> dict[str, str]:
         """读本 worker 的 runtime 接线 env（controller/client 的薄委托，便于测试替换）。"""
@@ -688,14 +699,23 @@ class BridgeApp:
         msgtype = str(content.get("msgtype", "m.text"))
         if msgtype in ("m.image", "m.file", "m.audio", "m.video"):
             # 媒体上传：只进群聊视野（记账行带确定性归档路径），永不触发
-            # turn。归档由 team leader（copaw 侧）执行；后续 mention 触发
-            # turn 时 agent 顺着路径 filesync 拉取。短路必须在 mention
-            # filter 之前——文件名里的 "@xxx" 不是 mention。
+            # turn。归档由 leader bridge 在此处拉起（对齐 copaw matrix_channel
+            # 的 team_leader 归档语义：群聊 image/file 下载→shared 归档→
+            # m.notice 告知路径；worker bridge 跳过，DM 跳过）。短路必须在
+            # mention filter 之前——文件名里的 "@xxx" 不是 mention。
             self.history_manager.record_ambient(
                 room_id,
                 sender,
                 _media_history_line(msgtype, body, room_id, event_id),
                 event_id=event_id,
+            )
+            spawn_media_archive(
+                self,
+                room_id=room_id,
+                event_id=event_id,
+                body=body,
+                msgtype=msgtype,
+                mxc_url=str(content.get("url") or ""),
             )
             return
         decision = self.mention_filter.evaluate(body, sender, content=content)
