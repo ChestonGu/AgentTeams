@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agentteams_log  # noqa: E402
 from mc_sync import McSyncError  # noqa: E402
+import status_report  # noqa: E402
 from taskflow_core import (  # noqa: E402
     RESULT_STATUSES,
     FileSystemTaskStore,
@@ -155,8 +156,10 @@ def cmd_check(store: FileSystemTaskStore, args: argparse.Namespace, sync: SyncBa
     meta = store.read_task_meta(args.task_id)
     result_line = "<none>"
     effective = "-"
+    check_result = None
     try:
         result = check_task(store, task_id=args.task_id)
+        check_result = result
         result_line = f"{result.status} — {result.summary}"
         effective = "yes" if is_effective_result(result) else "no"
     except TaskflowError:
@@ -174,6 +177,9 @@ def cmd_check(store: FileSystemTaskStore, args: argparse.Namespace, sync: SyncBa
     print(f"result: {result_line}")
     if effective != "-":
         print(f"effective_for_acceptance: {effective}")
+    status_report.report_event("taskflow", "check_task", args.root,
+                               task=meta, result=check_result,
+                               actor=args.actor)
     return 0
 
 
@@ -204,6 +210,8 @@ def cmd_ack(store: FileSystemTaskStore, args: argparse.Namespace, sync: SyncBack
     print(f"--- spec: shared/tasks/{meta.task_id}/spec.md ---")
     print(spec.rstrip())
     print("--- end of spec ---")
+    status_report.report_event("taskflow", "ack_task", args.root,
+                               task=meta, actor=args.actor)
     return 0
 
 
@@ -240,6 +248,8 @@ def cmd_submit(store: FileSystemTaskStore, args: argparse.Namespace, sync: SyncB
     print("[result.md]")
     print(render_task_result(result).rstrip())
     print(f"[sync] {sync.describe()}")
+    status_report.report_event("taskflow", "submit_task", args.root,
+                               task=meta, result=result, actor=args.actor)
     return 0
 
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -17,6 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import status_report  # noqa: E402
 import taskflow as tf_cli  # noqa: E402
 from taskflow import main  # noqa: E402
 
@@ -329,6 +332,133 @@ class RollbackTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("rolled back to 'in_progress'", err)
         self.assertEqual(self.read_meta()["status"], "in_progress")
+
+
+def parse_status_events(err: str) -> list:
+    """Extract STATUS_EVENT envelopes from captured stderr JSONL lines."""
+    events = []
+    for line in err.splitlines():
+        if "STATUS_EVENT " not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = entry.get("msg", "")
+        if msg.startswith("STATUS_EVENT "):
+            events.append(json.loads(msg[len("STATUS_EVENT "):]))
+    return events
+
+
+class _EventCollector(logging.Handler):
+    """Collect logging records straight off the status_report logger.
+
+    The agentteams_log stderr handler binds sys.stderr once per process, so
+    redirect_stderr cannot intercept it inside one test process — collect
+    from the logger instead.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+class StatusReportTests(unittest.TestCase):
+    """STATUS_EVENT envelopes on ack/submit/check (status_report.py)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = make_workspace(Path(self._tmp.name))
+        self.collector = _EventCollector()
+        status_report.logger.addHandler(self.collector)
+
+    def tearDown(self) -> None:
+        status_report.logger.removeHandler(self.collector)
+        self._tmp.cleanup()
+
+    def events(self) -> list:
+        prefix = "STATUS_EVENT "
+        return [
+            json.loads(message[len(prefix):])
+            for message in self.collector.messages
+            if message.startswith(prefix)
+        ]
+
+    def test_ack_emits_status_event(self) -> None:
+        code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        events = self.events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["event"], "taskflow.ack_task")
+        self.assertEqual(event["taskId"], "t-1")
+        self.assertEqual(event["projectId"], "p-1")
+        self.assertEqual(event["taskStatus"], "in_progress")
+        self.assertEqual(event["actor"], "@worker-a:example.org")
+        self.assertEqual(event["task"]["task_title"], "Write the module")
+        self.assertEqual(event["task"]["status"], "in_progress")
+        self.assertTrue(event["task"]["acknowledged_at"])
+        self.assertTrue(event["timestamp"])
+        # No project meta in this bare workspace: block omitted, not empty.
+        self.assertNotIn("project", event)
+        self.assertNotIn("projectStatus", event)
+        # Snapshot covers the one task of p-1 with its new status.
+        self.assertEqual(event["projectTasks"],
+                         [{"taskId": "t-1", "title": "Write the module",
+                           "assignedTo": "worker-a", "status": "in_progress",
+                           "dependsOn": []}])
+
+    def test_submit_emits_status_event_with_result(self) -> None:
+        run_cli(self.root, "ack", "t-1")
+        code, _, err = run_cli(
+            self.root, "submit", "t-1",
+            "--status", "SUCCESS", "--summary", "parser module delivered",
+            "--deliverables", "parser.py",
+        )
+        self.assertEqual(code, 0, err)
+        events = self.events()
+        self.assertEqual([e["event"] for e in events][-1:], ["taskflow.submit_task"])
+        event = events[-1]
+        self.assertEqual(event["taskStatus"], "submitted")
+        self.assertEqual(event["result"]["status"], "SUCCESS")
+        self.assertEqual(event["result"]["deliverables"],
+                         ["shared/tasks/t-1/parser.py"])
+        self.assertEqual(event["projectTasks"][0]["status"], "submitted")
+
+    def test_check_emits_status_event(self) -> None:
+        code, _, err = run_cli(self.root, "check", "t-1")
+        self.assertEqual(code, 0, err)
+        events = self.events()
+        self.assertEqual([e["event"] for e in events], ["taskflow.check_task"])
+        self.assertEqual(events[0]["taskStatus"], "assigned")
+        self.assertNotIn("result", events[0])
+
+    def test_team_and_actor_from_env(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENTTEAMS_TEAM": "t-42"}):
+            code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        event = self.events()[-1]
+        self.assertEqual(event["team"], "t-42")
+        # --actor wins over the env default.
+        self.assertEqual(event["actor"], "@worker-a:example.org")
+
+    def test_webhook_failure_is_swallowed(self) -> None:
+        env = {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://127.0.0.1:1/status"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch("urllib.request.urlopen",
+                           side_effect=OSError("connection refused")):
+            code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.events()), 1)
+
+    def test_error_commands_emit_nothing(self) -> None:
+        code, _, err = run_cli(self.root, "ack", "t-1",
+                               actor="@someone-else:example.org")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.events(), [])
 
 
 if __name__ == "__main__":

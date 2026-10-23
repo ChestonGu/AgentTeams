@@ -59,6 +59,7 @@ from mc_sync import (  # noqa: E402
     _looks_like_missing_object_error,
     filesync_from_env,
 )
+import status_report  # noqa: E402
 from projectflow_core import (  # noqa: E402
     FileSystemTaskStore,
     TaskflowError,
@@ -69,6 +70,8 @@ from projectflow_core import (  # noqa: E402
     create_project,
     delegate_task,
     is_effective_result,
+    parse_dag_tasks,
+    parse_loop_plan,
     parse_plan_type,
     pause_project,
     plan_dag,
@@ -85,6 +88,14 @@ DEFAULT_FS_ROOT = "/root/agentteams-fs"
 
 # The leader owns every protocol file: nothing is excluded on push.
 LEADER_PUSH_EXCLUDES: list[str] = []
+
+# STATUS_EVENT names for the shared lifecycle helper (copaw-named actions,
+# see status_report.py).
+LIFECYCLE_EVENTS = {
+    "pause": "pause_project",
+    "resume": "resume_project",
+    "complete": "complete_project",
+}
 
 # Set by main() so command functions can log without threading a logger.
 LOG = None
@@ -284,6 +295,8 @@ def cmd_create_project(store, args, sync) -> int:
     _log("project_created", project=meta.project_id, title=meta.title)
     print(f"[create] project {meta.project_id}: active")
     print(meta_json(meta))
+    status_report.report_event("projectflow", "create_project", args.root,
+                               project=meta)
     return 0
 
 
@@ -305,6 +318,8 @@ def _cmd_lifecycle(store, args, sync, fn, verb) -> int:
                         lambda: sync.push_project(args.project_id))
     print(f"[{verb}] project {meta.project_id}: {meta.status}")
     print(meta_json(meta))
+    status_report.report_event("projectflow", LIFECYCLE_EVENTS.get(verb, verb),
+                               args.root, project=meta)
     return 0
 
 
@@ -336,7 +351,17 @@ def cmd_plan_dag(store, args, sync) -> int:
     def run():
         plan_dag(store, project_id=args.project_id, tasks=tasks)
 
-    return _cmd_plan_mutation(store, args, sync, run, "plan-dag")
+    code = _cmd_plan_mutation(store, args, sync, run, "plan-dag")
+    if code == 0:
+        # Full node graph + the nodes whose dependencies are satisfied, read
+        # back from the freshly written plan (the store copy just pushed).
+        plan = store.read_project_plan(args.project_id)
+        status_report.report_event(
+            "projectflow", "plan_dag", args.root,
+            project=store.read_project_meta(args.project_id),
+            tasks=parse_dag_tasks(plan),
+            ready_nodes=ready_nodes(store, project_id=args.project_id))
+    return code
 
 
 def cmd_plan_loop(store, args, sync) -> int:
@@ -356,7 +381,13 @@ def cmd_plan_loop(store, args, sync) -> int:
             tasks=tasks,
         )
 
-    return _cmd_plan_mutation(store, args, sync, run, "plan-loop")
+    code = _cmd_plan_mutation(store, args, sync, run, "plan-loop")
+    if code == 0:
+        status_report.report_event(
+            "projectflow", "plan_loop", args.root,
+            project=store.read_project_meta(args.project_id),
+            loop=parse_loop_plan(store.read_project_plan(args.project_id)))
+    return code
 
 
 def cmd_record_iteration(store, args, sync) -> int:
@@ -370,7 +401,13 @@ def cmd_record_iteration(store, args, sync) -> int:
             next_action=args.next_action,
         )
 
-    return _cmd_plan_mutation(store, args, sync, run, "record-iteration")
+    code = _cmd_plan_mutation(store, args, sync, run, "record-iteration")
+    if code == 0:
+        status_report.report_event(
+            "projectflow", "record_loop_iteration", args.root,
+            project=store.read_project_meta(args.project_id),
+            loop=parse_loop_plan(store.read_project_plan(args.project_id)))
+    return code
 
 
 def cmd_show_plan(store, args, sync) -> int:
@@ -442,6 +479,10 @@ def cmd_delegate_commit(store, args, sync) -> int:
     print(f"[commit] {meta.task_id}: {meta.status} "
           f"(event_id={meta.event_id or '-'})")
     print(meta_json(meta))
+    # delegate-commit is the step that marks the task assigned — the moment
+    # copaw's single-shot delegate_task reports.
+    status_report.report_event("taskflow", "delegate_task", args.root,
+                               task=meta)
     return 0
 
 
@@ -458,8 +499,10 @@ def cmd_check(store, args, sync) -> int:
     print(f"assigned_to: {meta.assigned_to}")
     print(f"room_id: {meta.room_id or '-'}")
     print(f"submitted_at: {meta.submitted_at or '-'}")
+    check_result = None
     try:
         result = check_task(store, task_id=args.task_id)
+        check_result = result
         effective = "yes" if is_effective_result(result) else "no"
         print(f"effective_for_acceptance: {effective}")
         print("--- result.md ---")
@@ -467,6 +510,8 @@ def cmd_check(store, args, sync) -> int:
         print("--- end of result ---")
     except TaskflowError:
         print("result: <none>")
+    status_report.report_event("taskflow", "check_task", args.root,
+                               task=meta, result=check_result)
     return 0
 
 

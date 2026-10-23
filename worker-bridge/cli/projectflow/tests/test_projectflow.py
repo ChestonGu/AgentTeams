@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
@@ -314,6 +315,123 @@ class CliTest(unittest.TestCase):
         self.bootstrap_project()
         out = self.worker_cli("delegate", "p-1", "t-1", "--spec", "s")
         self.assertEqual(out.returncode, 2, out.stderr)  # argparse: no such cmd
+
+    # -- STATUS_EVENT envelopes (status_report.py) --------------------------
+
+    def status_events(self, proc):
+        """Parse STATUS_EVENT envelopes from a CLI subprocess's stderr JSONL."""
+        events = []
+        for line in proc.stderr.splitlines():
+            if "STATUS_EVENT " not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = entry.get("msg", "")
+            if msg.startswith("STATUS_EVENT "):
+                events.append(json.loads(msg[len("STATUS_EVENT "):]))
+        return events
+
+    def test_status_events_leader_flow(self):
+        env = {"AGENTTEAMS_TEAM": "t-sim"}
+        proc = self.leader("create-project", "p-1", "--title", "Sim project",
+                           env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "projectflow.create_project")
+        self.assertEqual(event["team"], "t-sim")
+        self.assertEqual(event["actor"], "@alice:example.org")
+        self.assertEqual(event["projectId"], "p-1")
+        self.assertEqual(event["projectStatus"], "active")
+        self.assertEqual(event["project"]["title"], "Sim project")
+        self.assertNotIn("task", event)
+
+        # add-tasks is not a reported action (not in the copaw whitelist).
+        proc = self.leader("add-tasks", "p-1", "--tasks-json", TASKS_JSON,
+                           env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.status_events(proc), [])
+
+        proc = self.leader("plan-dag", "p-1", "--tasks-json", TASKS_JSON,
+                           env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "projectflow.plan_dag")
+        self.assertEqual([t["task_id"] for t in event["tasks"]], ["t-1", "t-2"])
+        self.assertEqual(event["tasks"][0]["status"], "pending")
+        self.assertEqual([t["task_id"] for t in event["readyNodes"]], ["t-1"])
+        self.assertEqual(event["projectStatus"], "active")
+
+        # delegate (prepare) is transient — delegate-commit is the reported step.
+        proc = self.leader("delegate", "p-1", "t-1", "--spec", "Write.",
+                           "--room-id", "!r:example.org", env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.status_events(proc), [])
+        proc = self.leader("delegate-commit", "p-1", "t-1", "--event-id", "$ev1",
+                           env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "taskflow.delegate_task")
+        self.assertEqual(event["taskStatus"], "assigned")
+        self.assertEqual(event["task"]["event_id"], "$ev1")
+        # Leader store holds the project meta: backfilled block + snapshot.
+        self.assertEqual(event["projectStatus"], "active")
+        self.assertEqual(event["projectTasks"][0]["taskId"], "t-1")
+        self.assertEqual(event["projectTasks"][0]["status"], "assigned")
+
+        proc = self.leader("pause-project", "p-1", env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "projectflow.pause_project")
+        self.assertEqual(event["projectStatus"], "paused")
+        proc = self.leader("resume-project", "p-1", env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.status_events(proc)[0]["event"],
+                         "projectflow.resume_project")
+
+        proc = self.leader("complete-project", "p-1", env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "projectflow.complete_project")
+        self.assertEqual(event["projectStatus"], "completed")
+
+    def test_status_events_worker_and_leader_check(self):
+        """Both CLIs of the closure feed the same event stream."""
+        env = {"AGENTTEAMS_TEAM": "t-sim"}
+        self.bootstrap_project()
+        self.leader("delegate", "p-1", "t-1", "--spec", "Write READY.",
+                    "--room-id", "!r:example.org")
+        self.leader("delegate-commit", "p-1", "t-1", "--event-id", "$ev1")
+
+        proc = self.worker_cli("ack", "t-1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "taskflow.ack_task")
+
+        # AGENTTEAMS_TEAM propagates to the worker subprocess env as well.
+        with mock.patch.dict(os.environ, {"AGENTTEAMS_TEAM": "t-sim"}):
+            proc = self.worker_cli("check", "t-1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["team"], "t-sim")
+
+        proc = self.worker_cli("submit", "t-1", "--status", "SUCCESS",
+                               "--summary", "Done.",
+                               "--deliverables", "workspace/out.md")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "taskflow.submit_task")
+        self.assertEqual(event["result"]["status"], "SUCCESS")
+        self.assertEqual(event["result"]["deliverables"],
+                         ["shared/tasks/t-1/workspace/out.md"])
+
+        proc = self.leader("check", "t-1", env_extra=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        event = self.status_events(proc)[0]
+        self.assertEqual(event["event"], "taskflow.check_task")
+        self.assertEqual(event["taskStatus"], "submitted")
+        self.assertEqual(event["result"]["status"], "SUCCESS")
 
 
 if __name__ == "__main__":

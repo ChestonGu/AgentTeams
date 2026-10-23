@@ -154,15 +154,19 @@ class CliIntegrationTest(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         entries = read_lines(log_path)
-        events = [e["event"] for e in entries]
+        # The log file mixes audit entries (with an "event" key) with plain
+        # log lines (e.g. the STATUS_EVENT report message) — filter to the
+        # audit trail before asserting on it.
+        audits = [e for e in entries if "event" in e]
+        events = [e["event"] for e in audits]
         self.assertEqual(events[0], "cmd_start")
         self.assertIn("status_change", events)
         self.assertEqual(events[-1], "cmd_end")
-        change = next(e for e in entries if e["event"] == "status_change")
+        change = next(e for e in audits if e["event"] == "status_change")
         self.assertEqual(change["task"], "t-1")
         self.assertEqual(change["from"], "assigned")
         self.assertEqual(change["to"], "in_progress")
-        end = entries[-1]
+        end = audits[-1]
         self.assertEqual(end["exit"], 0)
         self.assertEqual(end["command"], "ack")
         self.assertEqual(end["task"], "t-1")
