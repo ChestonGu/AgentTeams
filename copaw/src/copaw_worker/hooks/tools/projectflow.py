@@ -14,6 +14,7 @@ import urllib.request
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
+from copaw_worker.hooks.tools.status_report import report_tool_event
 from copaw_worker.task import (
     FileSystemTaskStore,
     TaskflowError,
@@ -384,6 +385,21 @@ async def projectflow(
     dryRun: bool = False,
 ) -> ToolResponse:
     """Manage AgentTeams project execution plans with action-specific payload fields."""
+    result = await _projectflow_impl(action=action, payload=payload, dryRun=dryRun)
+    await report_tool_event(
+        "projectflow",
+        action,
+        payload=payload,
+        result=result,
+    )
+    return result
+
+
+async def _projectflow_impl(
+    action: str,
+    payload: dict[str, Any] | str | None = None,
+    dryRun: bool = False,
+) -> ToolResponse:
     payload_data: dict[str, Any] = {}
     try:
         store = _store()
