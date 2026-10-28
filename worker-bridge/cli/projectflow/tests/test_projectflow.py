@@ -7,12 +7,16 @@ Two layers:
     reads the result. That closure is the whole point of the vendoring:
     identical protocol bytes on both sides.
 """
+import contextlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -432,6 +436,117 @@ class CliTest(unittest.TestCase):
         self.assertEqual(event["event"], "taskflow.check_task")
         self.assertEqual(event["taskStatus"], "submitted")
         self.assertEqual(event["result"]["status"], "SUCCESS")
+
+    # -- webhook config resolution (env > shared/config/webhook.json) -------
+
+    class _SinkHandler(BaseHTTPRequestHandler):
+        received = []  # (path, headers-dict, body-bytes); reset per test
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            CliTest._SinkHandler.received.append(
+                (self.path, dict(self.headers), body))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    def _start_sink(self):
+        server = HTTPServer(("127.0.0.1", 0), CliTest._SinkHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def _write_webhook_config(self, config: dict) -> None:
+        config_dir = self.root / "shared" / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "webhook.json").write_text(json.dumps(config))
+
+    def test_webhook_url_from_shared_config_file_posts_envelope(self):
+        CliTest._SinkHandler.received = []
+        server = self._start_sink()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/status"
+            self._write_webhook_config({"AGENTTEAMS_STATUS_WEBHOOK_URL": url})
+            proc = self.leader("create-project", "p-1", "--title", "Sink")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(len(CliTest._SinkHandler.received), 1)
+            path, _, body = CliTest._SinkHandler.received[0]
+            self.assertEqual(path, "/status")
+            event = json.loads(body.decode("utf-8"))
+            self.assertEqual(event["event"], "projectflow.create_project")
+            # The log line is still emitted alongside the webhook delivery.
+            self.assertEqual(len(self.status_events(proc)), 1)
+        finally:
+            server.shutdown()
+
+    def test_webhook_env_wins_over_shared_config_file(self):
+        CliTest._SinkHandler.received = []
+        file_sink = self._start_sink()
+        env_sink = self._start_sink()
+        try:
+            file_url = f"http://127.0.0.1:{file_sink.server_address[1]}/file"
+            env_url = f"http://127.0.0.1:{env_sink.server_address[1]}/env"
+            self._write_webhook_config({"AGENTTEAMS_STATUS_WEBHOOK_URL": file_url})
+            proc = self.leader(
+                "create-project", "p-1", "--title", "Env",
+                env_extra={"AGENTTEAMS_STATUS_WEBHOOK_URL": env_url})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            # Delivery went to the env sink only; the file sink was never
+            # contacted and the event is still logged.
+            paths = [received[0] for received in CliTest._SinkHandler.received]
+            self.assertEqual(paths, ["/env"])
+            self.assertEqual(len(self.status_events(proc)), 1)
+        finally:
+            file_sink.shutdown()
+            env_sink.shutdown()
+
+    def test_webhook_bad_config_file_degrades_to_log_only(self):
+        self._write_webhook_config(
+            {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://127.0.0.1:9/status"})
+        (self.root / "shared" / "config" / "webhook.json").write_text("{not-json")
+        proc = self.leader("create-project", "p-1", "--title", "Bad")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(self.status_events(proc)), 1)
+
+
+class PullConfigTests(unittest.TestCase):
+    """McLeaderSyncBackend.pull_config — webhook file channel (leader side).
+
+    Same contract as the taskflow backend: pull shared/config/ before a
+    command; missing remote dir silent, other failures warn, never raise.
+    """
+
+    def _backend(self, fs):
+        import projectflow as pf
+        return pf.McLeaderSyncBackend(Path("/w"), fs=fs)
+
+    def test_pulls_shared_config_dir(self) -> None:
+        fs = mock.MagicMock()
+        self._backend(fs).pull_config()
+        fs.pull_shared_path.assert_called_once_with("shared/config/")
+
+    def test_missing_remote_dir_is_silent(self) -> None:
+        import subprocess as sp
+        fs = mock.MagicMock()
+        fs.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc",
+            stderr="mc.bin: <ERROR> Unable to stat source. Object does not exist.")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._backend(fs).pull_config()  # must not raise
+        self.assertEqual(err.getvalue(), "")
+
+    def test_other_errors_warn_but_never_raise(self) -> None:
+        import subprocess as sp
+        fs = mock.MagicMock()
+        fs.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc", stderr="mc.bin: <ERROR> connection refused")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._backend(fs).pull_config()  # must not raise
+        self.assertIn("shared/config pull failed", err.getvalue())
 
 
 if __name__ == "__main__":

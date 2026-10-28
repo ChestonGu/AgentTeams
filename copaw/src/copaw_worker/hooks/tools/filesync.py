@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from copaw_worker.sync import FileSync
+from copaw_worker.sync import FileSync, _looks_like_missing_object_error
+
+logger = logging.getLogger(__name__)
 
 
 class FilesyncToolError(ValueError):
@@ -107,6 +111,30 @@ def create_sync() -> FileSync:
         shared_dir=workspace_dir / "shared",
         global_shared_dir=workspace_dir / "global-shared",
     )
+
+
+def pull_shared_config() -> None:
+    """Best-effort refresh of shared/config/ before a protocol tool runs.
+
+    shared/ is mirrored wholesale only at startup (mirror_all); the resident
+    sync_loop pulls controller files only ("excluding shared data"), so a
+    webhook.json dropped into the team's shared storage later never reaches
+    a running worker. Every taskflow/projectflow call refreshes the tiny
+    config dir first — same contract as the worker-bridge CLIs. A missing
+    remote dir (team has no config) is the normal case and stays silent;
+    other failures warn once and never fail the tool call.
+    """
+    try:
+        create_sync().pull_shared_path("shared/config/")
+    except FilesyncToolError:
+        # standalone workers have no filesync environment at all
+        logger.debug("shared/config pull skipped: no filesync environment")
+    except subprocess.CalledProcessError as exc:
+        detail = getattr(exc, "stderr", None) or getattr(exc, "stdout", None)
+        if not _looks_like_missing_object_error(detail):
+            logger.warning("shared/config pull failed: %s", detail)
+    except Exception:
+        logger.debug("shared/config pull skipped", exc_info=True)
 
 
 def _coerce_payload(payload: dict[str, Any] | str | None) -> dict[str, Any]:

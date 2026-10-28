@@ -15,7 +15,7 @@ import yaml
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from copaw_worker.hooks.tools.filesync import create_sync
+from copaw_worker.hooks.tools.filesync import create_sync, pull_shared_config
 from copaw_worker.hooks.tools.status_report import report_tool_event
 from copaw_worker.task import (
     DagTask,
@@ -452,6 +452,7 @@ async def _taskflow_impl(
     try:
         store = _store()
         payload_data = _coerce_payload(payload)
+        pull_shared_config()
 
         if action == "delegate_task":
             project_id = _required_str(payload_data, "projectId")

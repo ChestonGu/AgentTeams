@@ -14,6 +14,7 @@ import urllib.request
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
+from copaw_worker.hooks.tools.filesync import pull_shared_config
 from copaw_worker.hooks.tools.status_report import report_tool_event
 from copaw_worker.task import (
     FileSystemTaskStore,
@@ -404,6 +405,7 @@ async def _projectflow_impl(
     try:
         store = _store()
         payload_data = _coerce_payload(payload)
+        pull_shared_config()
 
         if action == "create_project":
             project_id = _required_str(payload_data, "projectId")

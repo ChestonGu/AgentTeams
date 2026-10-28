@@ -1811,3 +1811,93 @@ async def test_validate_delegate_task_returns_task_without_writing(
     assert not (workspace / "shared" / "tasks" / "st-01" / "meta.json").exists()
     plan = (workspace / "shared" / "projects" / "tp-01" / "plan.md").read_text()
     assert "delegated" not in plan
+
+
+class TestPullSharedConfig:
+    """Every protocol tool call refreshes shared/config/ first (webhook channel).
+
+    shared/ is only mirrored wholesale at startup; the sync loop pulls
+    controller files only, so the per-call config pull is what carries a
+    webhook.json dropped into team storage to a running worker.
+    """
+
+    @pytest.mark.asyncio
+    async def test_projectflow_and_taskflow_pull_config_first(
+        self, tmp_path, monkeypatch
+    ):
+        working_dir = tmp_path / "worker" / ".copaw"
+        monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+        _set_actor(monkeypatch, "@worker-a:domain")
+        _mock_sync(monkeypatch)
+        calls = {"projectflow": 0, "taskflow": 0}
+        monkeypatch.setattr(
+            projectflow_tool, "pull_shared_config",
+            lambda: calls.__setitem__("projectflow", calls["projectflow"] + 1),
+        )
+        monkeypatch.setattr(
+            taskflow_tool, "pull_shared_config",
+            lambda: calls.__setitem__("taskflow", calls["taskflow"] + 1),
+        )
+
+        response = await projectflow(
+            action="create_project",
+            payload={"projectId": "pc-01", "title": "Config pull check"},
+        )
+        assert _response_json(response)["ok"] is True
+        assert calls["projectflow"] == 1
+
+        task_dir = working_dir / "workspaces" / "default" / "shared" / "tasks" / "pc-01-01"
+        task_dir.mkdir(parents=True)
+        (task_dir / "meta.json").write_text(json.dumps({
+            "task_id": "pc-01-01",
+            "project_id": "pc-01",
+            "task_title": "Step",
+            "assigned_to": "@worker-a:domain",
+            "room_id": "!team:domain",
+            "status": "assigned",
+            "depends_on": [],
+        }))
+        (task_dir / "spec.md").write_text("# Spec\n\nDo the thing.\n")
+        response = await taskflow(action="ack_task", payload={"taskId": "pc-01-01"})
+        assert _response_json(response)["ok"] is True
+        assert calls["taskflow"] == 1
+
+    def test_pulls_shared_config_dir(self, monkeypatch):
+        import copaw_worker.hooks.tools.filesync as filesync_tool
+        mock = MagicMock()
+        monkeypatch.setattr(filesync_tool, "create_sync", lambda: mock)
+        filesync_tool.pull_shared_config()
+        mock.pull_shared_path.assert_called_once_with("shared/config/")
+
+    def test_missing_remote_dir_is_silent(self, monkeypatch, caplog):
+        import subprocess as sp
+        import copaw_worker.hooks.tools.filesync as filesync_tool
+        mock = MagicMock()
+        mock.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc",
+            stderr="mc.bin: <ERROR> Unable to stat source. Object does not exist.")
+        monkeypatch.setattr(filesync_tool, "create_sync", lambda: mock)
+        with caplog.at_level("WARNING"):
+            filesync_tool.pull_shared_config()  # must not raise
+        assert "shared/config pull failed" not in caplog.text
+
+    def test_other_errors_warn_but_never_raise(self, monkeypatch, caplog):
+        import subprocess as sp
+        import copaw_worker.hooks.tools.filesync as filesync_tool
+        mock = MagicMock()
+        mock.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc", stderr="mc.bin: <ERROR> connection refused")
+        monkeypatch.setattr(filesync_tool, "create_sync", lambda: mock)
+        with caplog.at_level("WARNING"):
+            filesync_tool.pull_shared_config()  # must not raise
+        assert "shared/config pull failed" in caplog.text
+
+    def test_standalone_without_filesync_env_is_silent(self, monkeypatch, caplog):
+        import copaw_worker.hooks.tools.filesync as filesync_tool
+        def raise_missing_env():
+            raise filesync_tool.FilesyncToolError(
+                "missing filesync environment: AGENTTEAMS_WORKER_NAME")
+        monkeypatch.setattr(filesync_tool, "create_sync", raise_missing_env)
+        with caplog.at_level("WARNING"):
+            filesync_tool.pull_shared_config()  # must not raise
+        assert "shared/config pull failed" not in caplog.text

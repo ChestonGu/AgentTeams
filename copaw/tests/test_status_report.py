@@ -340,3 +340,107 @@ async def test_webhook_failure_swallowed(monkeypatch, caplog):
             result=_tool_response({"ok": True, "project": {"projectId": "p-1"}}),
         )
     assert len(_logged_events(caplog)) == 1
+
+
+def _write_webhook_config(monkeypatch, tmp_path: Path, config: dict) -> Path:
+    working_dir = tmp_path / "worker" / "copaw-worker"
+    config_dir = working_dir / "workspaces" / "default" / "shared" / "config"
+    config_dir.mkdir(parents=True)
+    path = config_dir / "webhook.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_webhook_url_and_token_from_shared_config_file(monkeypatch, tmp_path, caplog):
+    request_calls: list[urllib.request.Request] = []
+
+    def fake_urlopen(request, timeout=None):
+        request_calls.append(request)
+        response = MagicMock()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    _write_webhook_config(
+        monkeypatch,
+        tmp_path,
+        {
+            "AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status",
+            "AGENTTEAMS_STATUS_WEBHOOK_TOKEN": "file-token",
+        },
+    )
+    with caplog.at_level(logging.INFO, logger=status_report.logger.name):
+        await report_tool_event(
+            "projectflow",
+            "create_project",
+            payload={"projectId": "p-1"},
+            result=_tool_response({"ok": True, "project": {"projectId": "p-1"}}),
+        )
+    assert len(request_calls) == 1
+    request = request_calls[0]
+    assert request.full_url == "http://file-sink:9099/status"
+    assert request.get_header("Authorization") == "Bearer file-token"
+    # The log line is still emitted alongside the webhook delivery.
+    assert len(_logged_events(caplog)) == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_env_wins_over_shared_config_file(monkeypatch, tmp_path, caplog):
+    request_calls: list[urllib.request.Request] = []
+
+    def fake_urlopen(request, timeout=None):
+        request_calls.append(request)
+        response = MagicMock()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("AGENTTEAMS_STATUS_WEBHOOK_URL", "http://env-sink:9099/status")
+    _write_webhook_config(
+        monkeypatch,
+        tmp_path,
+        {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status"},
+    )
+    with caplog.at_level(logging.INFO, logger=status_report.logger.name):
+        await report_tool_event(
+            "taskflow",
+            "ack_task",
+            payload={"taskId": "t-1"},
+            result=_tool_response({"ok": True, "task": {"task_id": "t-1", "status": "in_progress"}}),
+        )
+    assert [r.full_url for r in request_calls] == ["http://env-sink:9099/status"]
+
+
+@pytest.mark.asyncio
+async def test_webhook_bad_config_file_degrades_to_log_only(monkeypatch, tmp_path, caplog):
+    request_calls: list[urllib.request.Request] = []
+
+    def fake_urlopen(request, timeout=None):
+        request_calls.append(request)
+        response = MagicMock()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    path = _write_webhook_config(
+        monkeypatch, tmp_path, {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status"}
+    )
+    path.write_text("{not-json", encoding="utf-8")
+    with caplog.at_level(logging.INFO, logger=status_report.logger.name):
+        # Must not raise and must still log the event.
+        await report_tool_event(
+            "projectflow",
+            "create_project",
+            payload={"projectId": "p-1"},
+            result=_tool_response({"ok": True, "project": {"projectId": "p-1"}}),
+        )
+    assert request_calls == []
+    assert len(_logged_events(caplog)) == 1

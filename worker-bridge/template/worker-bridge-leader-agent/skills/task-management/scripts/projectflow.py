@@ -127,6 +127,9 @@ class SyncBackend:
     def verify_result(self, task_id: str) -> None:  # noqa: D102
         pass
 
+    def pull_config(self) -> None:  # noqa: D102
+        pass
+
     def describe(self) -> str:
         return "local-only"
 
@@ -173,6 +176,23 @@ class McLeaderSyncBackend(SyncBackend):
 
     def verify_result(self, task_id: str) -> None:
         self._fs.stat_shared_path(f"shared/tasks/{task_id}/result.md")
+
+    def pull_config(self) -> None:
+        """Best-effort refresh of shared/config/ before a command runs.
+
+        Same contract as the taskflow backend: no resident sync loop in pod
+        sandboxes, so every CLI run pulls the tiny team config dir first
+        (status webhook's webhook.json copy). Missing remote dir is normal
+        and silent; other failures warn on stderr and never fail the
+        command — must_exist=False semantics plus total swallow.
+        """
+        try:
+            self._fs.pull_shared_path("shared/config/")
+        except subprocess.CalledProcessError as exc:
+            detail = getattr(exc, "stderr", None) or getattr(exc, "stdout", None)
+            if not _looks_like_missing_object_error(detail):
+                print(f"mc_sync: shared/config pull failed: {detail}",
+                      file=sys.stderr)
 
     def describe(self) -> str:
         try:
@@ -622,6 +642,7 @@ def main(argv: list[str] | None = None) -> int:
     code = 1
     try:
         sync = make_sync_backend(args.sync, Path(args.root))
+        sync.pull_config()
         if args.command == "create-project":
             code = cmd_create_project(store, args, sync)
         elif args.command == "show-project":

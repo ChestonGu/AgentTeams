@@ -84,6 +84,9 @@ class SyncBackend:
     def verify_result(self, task_id: str) -> None:  # noqa: D102
         pass
 
+    def pull_config(self) -> None:  # noqa: D102
+        pass
+
     def describe(self) -> str:
         return "local-only"
 
@@ -321,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                 "worker identity missing: set AGENTTEAMS_MATRIX_USER_ID or pass --actor"
             )
         sync = make_sync_backend(args.sync, Path(args.root))
+        sync.pull_config()
         if args.command == "check":
             code = cmd_check(store, args, sync)
         elif args.command == "ack":

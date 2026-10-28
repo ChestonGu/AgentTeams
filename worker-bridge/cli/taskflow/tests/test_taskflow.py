@@ -221,6 +221,9 @@ class RecordingBackend(tf_cli.NoSyncBackend):
     def verify_result(self, task_id: str) -> None:
         self._maybe_fail(("verify", task_id))
 
+    def pull_config(self) -> None:
+        self._maybe_fail(("config",))
+
     def describe(self) -> str:
         return "fake"
 
@@ -253,7 +256,7 @@ class SyncContractTests(unittest.TestCase):
         backend = RecordingBackend()
         code, _, err = run_with_backend(self.root, backend, "check", "t-1")
         self.assertEqual(code, 0, err)
-        self.assertEqual(backend.calls, [("pull", "t-1")])
+        self.assertEqual(backend.calls, [("config",), ("pull", "t-1")])
 
     def test_ack_pulls_then_pushes_with_copaw_excludes(self) -> None:
         backend = RecordingBackend()
@@ -261,7 +264,7 @@ class SyncContractTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(
             backend.calls,
-            [("pull", "t-1"), ("push", "t-1", ("spec.md", "base/"))],
+            [("config",), ("pull", "t-1"), ("push", "t-1", ("spec.md", "base/"))],
         )
 
     def test_submit_never_pulls_but_pushes_and_verifies(self) -> None:
@@ -276,7 +279,7 @@ class SyncContractTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(
             backend.calls,
-            [("push", "t-1", ("spec.md", "base/")), ("verify", "t-1")],
+            [("config",), ("push", "t-1", ("spec.md", "base/")), ("verify", "t-1")],
         )
 
 
@@ -454,11 +457,107 @@ class StatusReportTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(len(self.events()), 1)
 
+    def _write_webhook_config(self, config: dict) -> None:
+        config_dir = self.root / "shared" / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "webhook.json").write_text(json.dumps(config))
+
+    def _capture_webhook(self) -> list:
+        """Collect urlopen requests; any POST succeeding with a 200."""
+        calls: list = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(request)
+            response = mock.MagicMock()
+            response.status = 200
+            response.__enter__ = mock.MagicMock(return_value=response)
+            response.__exit__ = mock.MagicMock(return_value=False)
+            return response
+
+        return calls, mock.patch("urllib.request.urlopen", side_effect=fake_urlopen)
+
+    def test_webhook_url_and_token_from_shared_config_file(self) -> None:
+        self._write_webhook_config({
+            "AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status",
+            "AGENTTEAMS_STATUS_WEBHOOK_TOKEN": "file-token",
+        })
+        calls, patcher = self._capture_webhook()
+        with patcher:
+            code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].full_url, "http://file-sink:9099/status")
+        self.assertEqual(calls[0].get_header("Authorization"), "Bearer file-token")
+        body = json.loads(calls[0].data.decode("utf-8"))
+        self.assertEqual(body["event"], "taskflow.ack_task")
+        # The log line is still emitted alongside the webhook delivery.
+        self.assertEqual(len(self.events()), 1)
+
+    def test_webhook_env_wins_over_shared_config_file(self) -> None:
+        self._write_webhook_config(
+            {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status"})
+        calls, patcher = self._capture_webhook()
+        with patcher, mock.patch.dict(
+                os.environ, {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://env-sink:9099/status"}):
+            code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([c.full_url for c in calls], ["http://env-sink:9099/status"])
+
+    def test_webhook_bad_config_file_degrades_to_log_only(self) -> None:
+        self._write_webhook_config(
+            {"AGENTTEAMS_STATUS_WEBHOOK_URL": "http://file-sink:9099/status"})
+        (self.root / "shared" / "config" / "webhook.json").write_text("{not-json")
+        calls, patcher = self._capture_webhook()
+        with patcher:
+            code, _, err = run_cli(self.root, "ack", "t-1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.events()), 1)
+
     def test_error_commands_emit_nothing(self) -> None:
         code, _, err = run_cli(self.root, "ack", "t-1",
                                actor="@someone-else:example.org")
         self.assertEqual(code, 1)
         self.assertEqual(self.events(), [])
+
+
+class PullConfigTests(unittest.TestCase):
+    """McSyncBackend.pull_config — the webhook file channel reaches the sandbox.
+
+    Pod sandboxes have no resident sync loop, so the CLI pulls
+    shared/config/ (webhook.json target) before every command; a missing
+    remote dir is the normal no-config case and must stay silent.
+    """
+
+    def _backend(self, fs):
+        import mc_sync
+        return mc_sync.McSyncBackend(Path("/w"), fs=fs)
+
+    def test_pulls_shared_config_dir(self) -> None:
+        fs = mock.MagicMock()
+        self._backend(fs).pull_config()
+        fs.pull_shared_path.assert_called_once_with("shared/config/")
+
+    def test_missing_remote_dir_is_silent(self) -> None:
+        import subprocess as sp
+        fs = mock.MagicMock()
+        fs.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc",
+            stderr="mc.bin: <ERROR> Unable to stat source. Object does not exist.")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._backend(fs).pull_config()  # must not raise
+        self.assertEqual(err.getvalue(), "")
+
+    def test_other_errors_warn_but_never_raise(self) -> None:
+        import subprocess as sp
+        fs = mock.MagicMock()
+        fs.pull_shared_path.side_effect = sp.CalledProcessError(
+            1, "mc", stderr="mc.bin: <ERROR> connection refused")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._backend(fs).pull_config()  # must not raise
+        self.assertIn("shared/config pull failed", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -37,7 +37,12 @@ Delivery:
 - optional webhook: $AGENTTEAMS_STATUS_WEBHOOK_URL POSTs the same envelope
   (optional bearer $AGENTTEAMS_STATUS_WEBHOOK_TOKEN; 3s timeout, failures
   logged and swallowed) — in the stateless form the sandbox stderr is not
-  visible to the cluster, so the webhook is the realtime outbound channel;
+  visible to the cluster, so the webhook is the realtime outbound channel.
+  The target resolves per event, per key: explicit env first (including
+  values mc_sync seeded from /opt/teams/config/runtime.json), then the
+  team-shared <root>/shared/config/webhook.json (flat JSON, same key
+  names; refreshed by mc_sync on every CLI run). A missing or unreadable
+  file degrades silently to log-only reporting;
 - reporting never changes CLI behaviour: report_event catches its own
   errors and never raises into the command.
 
@@ -103,11 +108,33 @@ def report_event(
             ready_nodes=ready_nodes, loop=loop, result=result, actor=actor,
         )
         logger.info("STATUS_EVENT %s", json.dumps(event, ensure_ascii=False))
-        url = (os.getenv(_WEBHOOK_URL_ENV) or "").strip()
+        config = _webhook_file_config(root)
+        url = ((os.getenv(_WEBHOOK_URL_ENV) or "").strip()
+               or config.get(_WEBHOOK_URL_ENV, "").strip())
         if url:
-            _post_webhook(url, event)
+            token = ((os.getenv(_WEBHOOK_TOKEN_ENV) or "").strip()
+                     or config.get(_WEBHOOK_TOKEN_ENV, "").strip())
+            _post_webhook(url, event, token)
     except Exception:
         logger.exception("status report failed for %s.%s", tool, action)
+
+
+def _webhook_file_config(root: Path | str) -> dict[str, str]:
+    """Team-shared webhook config fallback: <root>/shared/config/webhook.json.
+
+    Flat JSON keyed by env names, e.g. {"AGENTTEAMS_STATUS_WEBHOOK_URL":
+    "http://..."}; the local copy is refreshed by mc_sync on every CLI run.
+    Only string values apply. Any read/parse error or a non-object body
+    degrades to an empty mapping (log-only reporting).
+    """
+    try:
+        path = Path(root) / "shared" / "config" / "webhook.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def _build_event(
@@ -214,10 +241,9 @@ def _snapshot_project_tasks(
     return rows or None
 
 
-def _post_webhook(url: str, event: dict[str, Any]) -> None:
+def _post_webhook(url: str, event: dict[str, Any], token: str = "") -> None:
     body = json.dumps(event, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    token = os.getenv(_WEBHOOK_TOKEN_ENV, "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")

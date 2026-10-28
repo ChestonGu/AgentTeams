@@ -573,6 +573,24 @@ class McSyncBackend:
     def verify_result(self, task_id: str) -> None:
         self._fs.stat_shared_path(f"shared/tasks/{task_id}/result.md")
 
+    def pull_config(self) -> None:
+        """Best-effort refresh of shared/config/ before a command runs.
+
+        Pod sandboxes have no resident sync loop (copaw workers pull_all on
+        an interval), so the CLI is what keeps the team config dir current —
+        this is how the status webhook's webhook.json copy reaches the
+        sandbox. A missing remote dir (team has no config) is the normal
+        case and stays silent; other pull failures warn on stderr and never
+        fail the command.
+        """
+        try:
+            self._fs.pull_shared_path("shared/config/")
+        except subprocess.CalledProcessError as exc:
+            detail = getattr(exc, "stderr", None) or getattr(exc, "stdout", None)
+            if not _looks_like_missing_object_error(detail):
+                print(f"mc_sync: shared/config pull failed: {detail}",
+                      file=sys.stderr)
+
     def describe(self) -> str:
         remote = "<unresolved>"
         try:

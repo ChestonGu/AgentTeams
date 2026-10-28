@@ -21,6 +21,11 @@ Delivery rules:
   POSTed there as JSON (optional bearer token via
   ``AGENTTEAMS_STATUS_WEBHOOK_TOKEN``). Delivery waits at most a few
   seconds and every failure is logged and swallowed.
+- The webhook target resolves per event, per key: explicit env first,
+  then the team-shared ``shared/config/webhook.json`` in the local
+  workspace copy (flat JSON, same key names; refreshed by the regular
+  filesync pull). A missing or unreadable file degrades silently to
+  log-only reporting.
 - Reporting must never change tool behavior: ``report_tool_event``
   catches its own errors and never raises into the tool call.
 """
@@ -249,10 +254,9 @@ def _snapshot_project_tasks(project_id: str | None) -> list[dict[str, Any]] | No
     return rows or None
 
 
-def _post_webhook(url: str, event: dict[str, Any]) -> None:
+def _post_webhook(url: str, event: dict[str, Any], token: str = "") -> None:
     body = json.dumps(event, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    token = os.getenv(_WEBHOOK_TOKEN_ENV, "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -263,6 +267,24 @@ def _post_webhook(url: str, event: dict[str, Any]) -> None:
             logger.debug("status webhook responded %s", response.status)
     except Exception as exc:
         logger.warning("status webhook delivery failed: %s", exc)
+
+
+def _webhook_file_config() -> dict[str, str]:
+    """Team-shared webhook config fallback: shared/config/webhook.json.
+
+    Flat JSON keyed by env names, e.g. {"AGENTTEAMS_STATUS_WEBHOOK_URL":
+    "http://..."}; the local copy is refreshed by the regular filesync
+    pull. Only string values apply. Any read/parse error or a non-object
+    body degrades to an empty mapping (log-only reporting).
+    """
+    try:
+        path = _shared_dir() / "config" / "webhook.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 async def report_tool_event(
@@ -281,8 +303,12 @@ async def report_tool_event(
             return
         event = _build_event(tool, action, _coerce_payload_dict(payload), data)
         logger.info("STATUS_EVENT %s", json.dumps(event, ensure_ascii=False))
-        url = os.getenv(_WEBHOOK_URL_ENV, "").strip()
+        config = _webhook_file_config()
+        url = (os.getenv(_WEBHOOK_URL_ENV, "").strip()
+               or config.get(_WEBHOOK_URL_ENV, "").strip())
         if url:
-            await asyncio.to_thread(_post_webhook, url, event)
+            token = (os.getenv(_WEBHOOK_TOKEN_ENV, "").strip()
+                     or config.get(_WEBHOOK_TOKEN_ENV, "").strip())
+            await asyncio.to_thread(_post_webhook, url, event, token)
     except Exception:
         logger.exception("status report failed for %s.%s", tool, action)
