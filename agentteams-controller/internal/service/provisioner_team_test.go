@@ -545,7 +545,7 @@ func TestArchiveTeamRoomsMarksRoomNamesDeleted(t *testing.T) {
 	}
 
 	want := []roomNameCall{
-		{roomID: "!team:localhost", name: "Team: alpha [deleted]", token: "team-admin-token"},
+		{roomID: "!team:localhost", name: "alpha [deleted]", token: "team-admin-token"},
 		{roomID: "!leader-dm:localhost", name: "Leader DM: lead [deleted]", token: "team-admin-token"},
 	}
 	if !reflect.DeepEqual(matrixClient.roomNames, want) {

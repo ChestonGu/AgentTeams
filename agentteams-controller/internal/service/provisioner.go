@@ -901,9 +901,9 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrixOps.UserIDFor)
-	teamRoomName := fmt.Sprintf("Team: %s", req.TeamName)
+	teamRoomName := req.TeamName
 	if req.DisplayName != "" {
-		teamRoomName = fmt.Sprintf("Team: %s", req.DisplayName)
+		teamRoomName = req.DisplayName
 	}
 	teamRoom, err := p.matrixOps.CreateRoom(ctx, matrix.RoomSpec{
 		Name:           teamRoomName,
@@ -1372,7 +1372,7 @@ func (p *Provisioner) DeleteTeamRoomAliases(ctx context.Context, teamName, leade
 func (p *Provisioner) ArchiveTeamRooms(ctx context.Context, req TeamRoomArchiveRequest) error {
 	logger := log.FromContext(ctx)
 	if req.TeamRoomID != "" {
-		name := fmt.Sprintf("Team: %s [deleted]", req.TeamName)
+		name := fmt.Sprintf("%s [deleted]", req.TeamName)
 		if err := p.matrixOps.ArchiveRoom(ctx, req.TeamRoomID, name, matrix.MemberSpec{ActorToken: req.ActorToken}); err != nil {
 			logger.Error(err, "failed to archive team room name (non-fatal)", "roomID", req.TeamRoomID, "name", name)
 		}
