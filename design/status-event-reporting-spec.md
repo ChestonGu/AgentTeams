@@ -107,6 +107,53 @@ worker-bridge 线的命令名与事件名映射（接收方看到的 event 值�
 | `projectflow delegate-commit` | `taskflow.delegate_task` |
 | `projectflow check` | `taskflow.check_task` |
 
+## 4A. direct 协作模式事件（2 种）
+
+当 Team CR 设置 `spec.collaboration: direct` 时，该 team 不注册 taskflow/projectflow 工具（§4 的 11 种事件在此类 team 中不会产生），改为由 direct 工作流发出以下两种事件。**两模式按 team 共存，同一事件流中可混合出现；`team` 字段区分来源队。**
+
+| `event` 值 | 触发动作 | 典型发出方 | 特有载荷块 |
+|---|---|---|---|
+| `direct_work_started` | agent 开始实际工作（长任务鼓励，快任务可省） | worker 或 leader（被 @ 的成员） | `work` |
+| `direct_work_completed` | 工作完成（有交付物或最终结论时必发） | 同上 | `work` |
+
+发送入口（direct 模式下的唯一上报通道，均复用 §2 传输契约与 §8 配置解析）：
+
+| 线 | 入口 | 代码 |
+|---|---|---|
+| copaw | `work_report` 工具（direct 模式注册，替代 taskflow/projectflow） | `copaw/src/copaw_worker/hooks/tools/work_report.py` |
+| worker-bridge | `work-report` CLI（direct-work skill） | `worker-bridge/template/worker-bridge-agent/skills/direct-work/scripts/work_report.py` |
+
+### `work` 载荷块
+
+| 字段 | 出现条件 | 含义 |
+|---|---|---|
+| `summary` | 恒在 | 一句话工作/结果描述 |
+| `requester` | 可选 | 发起 @ 的成员 Matrix ID（纯文本，不含矩阵域解析义务） |
+| `status` | 仅 completed | `SUCCESS`（默认）/ `SUCCESS_WITH_NOTES` / `BLOCKED`（真阻断；凭据等待按协议是暂停，不报 BLOCKED） |
+| `deliverables` | 仅 completed，有交付物时 | 共享相对路径数组，如 `["shared/outputs/pl3-dev/report.md"]`——**接收方可顺此路径到对象存储 `teams/<team>/shared/` 下取结果** |
+
+示例（completed）：
+
+```json
+{
+  "event": "direct_work_completed",
+  "team": "t-pl3",
+  "actor": "@pl3-dev:example.org",
+  "work": {
+    "summary": "构建周报已生成",
+    "requester": "@admin:example.org",
+    "status": "SUCCESS",
+    "deliverables": ["shared/outputs/pl3-dev/build-report.md"]
+  },
+  "timestamp": "2026-11-09T10:00:00+00:00"
+}
+```
+
+接收方注意：
+- direct 事件**没有** `projectId`/`taskId`/`project`/`task`/`projectTasks` 等任务轴字段（键省略，与 §3 可选字段语义一致）；`event`/`timestamp` 恒在，`team`/`actor` 解析失败时省略。
+- direct 工作**不进入 dashboard 项目看板**（看板读 `shared/projects/` meta.json，direct 模式不写该目录）；direct 事件的消费通道是 webhook + 日志。
+- 上报语义与任务事件相同：best-effort、at-most-once、3 秒超时、失败仅 WARN；`started` 依赖 agent 自发调用，可能缺席，接收方不得把 `started` 当作 completed 的必需前置。
+
 ## 5. 载荷块结构
 
 字段名两线统一（copaw 侧 dataclass 定义，bridge 侧同构 snake_case）。

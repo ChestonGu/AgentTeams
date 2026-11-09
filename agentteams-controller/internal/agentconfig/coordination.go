@@ -8,6 +8,9 @@ import (
 // CoordinationContext describes the team/coordination context to inject into AGENTS.md.
 type CoordinationContext struct {
 	WorkerName string
+	// Collaboration is the team protocol mode ("direct" = no taskflow);
+	// empty means the default taskflow rendering.
+	Collaboration string
 	// SelfDisplayName is this agent's own spec.displayName; empty renders
 	// no self-identity line (the agent then only knows its worker ID).
 	SelfDisplayName string
@@ -123,6 +126,13 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 				}
 			}
 		}
+		if ctx.Collaboration == "direct" {
+			b.WriteString("- **Collaboration**: direct — you are a regular team member, not a task planner: do the work people @mention you for, yourself. Do NOT create projects, DAG plans, or delegate tasks\n")
+			b.WriteString("- Deliverables go to shared/outputs/<your-worker-name>/ pushed to team shared storage; report completions in the Team Room @mentioning the requester\n")
+			b.WriteString("- You remain the team's media archivist (shared/knowledge/matrix/) and room membership coordinator\n")
+			b.WriteString("- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads\n")
+			break
+		}
 		b.WriteString("- You decompose tasks from Manager, Team Admin, or coordinator members and assign sub-tasks to your team workers\n")
 		b.WriteString("- @mention workers in the Team Room for task assignment\n")
 		b.WriteString("- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads\n")
@@ -132,6 +142,19 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 		b.WriteString("- @mention Manager only for: task completion, blockers, escalations\n")
 
 	case "worker":
+		if ctx.Collaboration == "direct" {
+			fmt.Fprintf(&b, "- **Team**: %s (collaboration: direct)\n", ctx.TeamName)
+			fmt.Fprintf(&b, "- **Team Leader**: @%s:%s — a regular team member in direct mode, NOT your task coordinator\n", ctx.TeamLeaderName, ctx.MatrixDomain)
+			if ctx.TeamAdminID != "" {
+				writeTeamAdminWorkerView(&b, ctx.TeamAdminID, ctx.TeamAdminDisplayName)
+			}
+			writeTeamCoordinators(&b, ctx.TeamCoordinators, ctx.TeamAdminID)
+			b.WriteString("- **Collaboration**: direct — any team member may @mention you in the Team Room with work; there is no task protocol (no taskflow/projectflow, no DAG, no ack/submit)\n")
+			b.WriteString("- Deliverables go to shared/outputs/<your-worker-name>/ pushed to team shared storage\n")
+			b.WriteString("- Report results, blockers, and questions to the requester (the member who @mentioned you) in the Team Room\n")
+			b.WriteString("- Respond to @mentions from team members, Team Admin, and global Admin\n")
+			break
+		}
 		fmt.Fprintf(&b, "- **Coordinator**: @%s:%s (Team Leader of %s)\n", ctx.TeamLeaderName, ctx.MatrixDomain, ctx.TeamName)
 		if ctx.TeamAdminID != "" {
 			writeTeamAdminWorkerView(&b, ctx.TeamAdminID, ctx.TeamAdminDisplayName)

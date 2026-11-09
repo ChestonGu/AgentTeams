@@ -680,8 +680,9 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		// lifecycle and credentials; this only restores role-specific prompt and
 		// skill assets generated for Team members.
 		if err := r.Deployer.SyncTeamLeaderAssets(ctx, service.SyncTeamLeaderAssetsRequest{
-			WorkerName: leaderRuntimeName,
-			Runtime:    leaderMember.worker.Spec.Runtime,
+			WorkerName:    leaderRuntimeName,
+			Runtime:       leaderMember.worker.Spec.Runtime,
+			Collaboration: t.Spec.EffectiveCollaboration(),
 		}); err != nil {
 			logger.Error(err, "team leader asset sync failed (non-fatal)", "worker", leaderRuntimeName)
 		}
@@ -689,6 +690,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		// Leader coordination context
 		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
 			LeaderName:           leaderRuntimeName,
+			Collaboration:        t.Spec.EffectiveCollaboration(),
 			SelfDisplayName:      leaderMember.worker.Spec.DisplayName,
 			Role:                 RoleTeamLeader.String(),
 			TeamName:             teamRuntimeName,
@@ -727,6 +729,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:           rm.runtimeName,
+			Collaboration:        t.Spec.EffectiveCollaboration(),
 			SelfDisplayName:      rm.worker.Spec.DisplayName,
 			TeamName:             teamRuntimeName,
 			TeamLeaderName:       leaderRuntimeName,
@@ -1050,6 +1053,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		}
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:                 member.ref.Name,
+			Collaboration:        t.Spec.EffectiveCollaboration(),
 			RuntimeName:          member.runtimeName,
 			Runtime:              runtime,
 			Role:                 role.String(),

@@ -494,6 +494,14 @@ type TeamSpec struct {
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
 
+	// Collaboration selects the team's collaboration protocol:
+	// "taskflow" (default, empty) — leader-planned projects, DAG tasks and
+	// the taskflow/projectflow tools; "direct" — humans @mention workers
+	// (and the leader) directly in the Team Room, deliverables land in
+	// shared/outputs/<worker>/, task tools are not registered.
+	// +kubebuilder:validation:Enum=taskflow;direct;""
+	Collaboration string `json:"collaboration,omitempty"`
+
 	// HeartbeatEvery configures the Team Leader agent's periodic heartbeat
 	// check interval. The TeamReconciler writes this value into the leader
 	// Worker's openclaw.json and coordination context AGENTS.md.
@@ -516,6 +524,19 @@ func (s TeamSpec) EffectiveTeamName(metadataName string) string {
 		return s.TeamName
 	}
 	return metadataName
+}
+
+// CollaborationDirect is the Team collaboration mode without the task
+// protocol: direct @mention work with deliverables in shared/outputs/.
+const CollaborationDirect = "direct"
+
+// EffectiveCollaboration returns the collaboration mode; empty and any
+// non-"direct" value mean the default taskflow protocol.
+func (s TeamSpec) EffectiveCollaboration() string {
+	if s.Collaboration == CollaborationDirect {
+		return CollaborationDirect
+	}
+	return "taskflow"
 }
 
 type TeamAdminSpec struct {

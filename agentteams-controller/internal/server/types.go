@@ -128,6 +128,7 @@ type CreateTeamRequest struct {
 	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
 	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers"`
 	HeartbeatEvery string                     `json:"heartbeatEvery,omitempty"`
+	Collaboration  string                       `json:"collaboration,omitempty"`
 	PeerMentions   *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
@@ -136,6 +137,7 @@ type UpdateTeamRequest struct {
 	DisplayName    string                     `json:"displayName,omitempty"`
 	TeamName       string                     `json:"teamName,omitempty"`
 	Description    string                     `json:"description,omitempty"`
+	Collaboration  string                     `json:"collaboration,omitempty"`
 	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
 	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
 	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers,omitempty"`
@@ -159,6 +161,7 @@ type TeamResponse struct {
 	WorkerMemberDetails []TeamWorkerDetail           `json:"workerMemberDetails,omitempty"`
 	LeaderName          string                       `json:"leaderName"`
 	HeartbeatEvery      string                       `json:"heartbeatEvery,omitempty"`
+	Collaboration       string                       `json:"collaboration,omitempty"`
 	TeamRoomID          string                       `json:"teamRoomID,omitempty"`
 	LeaderDMRoomID      string                       `json:"leaderDMRoomID,omitempty"`
 	LeaderReady         bool                         `json:"leaderReady"`

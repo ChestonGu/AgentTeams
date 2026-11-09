@@ -226,6 +226,7 @@ func createTeamCmd() *cobra.Command {
 		leaderHeartbeatEvery string
 		workers              string
 		description          string
+		collaboration        string
 		adminName            string
 		adminMatrixID        string
 		peerMentions         bool
@@ -266,6 +267,7 @@ resources, skills, and lifecycle state.`,
 			setIfNotEmpty(req, "description", description)
 			setIfNotEmpty(req, "displayName", displayName)
 			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
+			setIfNotEmpty(req, "collaboration", collaboration)
 			if adminName != "" {
 				req["admin"] = map[string]interface{}{"name": adminName, "matrixUserId": adminMatrixID}
 			}
@@ -288,6 +290,7 @@ resources, skills, and lifecycle state.`,
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
 	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated existing Worker resource names")
 	cmd.Flags().StringVar(&description, "description", "", "Team description")
+	cmd.Flags().StringVar(&collaboration, "collaboration", "", "Collaboration protocol: taskflow (default) or direct (no task protocol, direct @mention work)")
 	cmd.Flags().StringVar(&adminName, "admin", "", "Existing Human resource used as Team Admin")
 	cmd.Flags().StringVar(&adminMatrixID, "admin-matrix-id", "", "Expected Matrix user ID for the Team Admin")
 	cmd.Flags().BoolVar(&peerMentions, "peer-mentions", true, "Allow Team Workers to mention peers")

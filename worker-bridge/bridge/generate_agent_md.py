@@ -85,6 +85,9 @@ except ImportError:  # module not deployed next door -> no-op shim, never break 
 DEFAULT_TEMPLATE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..",
     "template", "worker-bridge-agent", "AGENTS.md")
+DIRECT_TEMPLATE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..",
+    "template", "worker-bridge-agent", "AGENTS-direct.md")
 
 PLACEHOLDER_COORDINATION = "{{COORDINATION}}"
 PLACEHOLDER_ENVIRONMENT = "{{ENVIRONMENT}}"
@@ -243,6 +246,9 @@ def parse_runtime_config(text):
         "domain": domain,
         "role": role,
         "team_name": team.get("name") or "",
+        # team.collaboration: "direct" selects the AGENTS-direct.md template
+        # (no task protocol); empty/absent keeps the taskflow template.
+        "collaboration": str(team.get("collaboration") or "").strip().lower(),
         "leader_id": leader_id,
         "admin_id": admin_id,
         "admin_display": admin_display,
@@ -305,6 +311,33 @@ def render_coordination(cfg):
                      "to your coordinator")
         lines.append("- Only respond to @mentions from your coordinator "
                      "and Admin")
+        return "\n".join(lines)
+
+    if cfg.get("collaboration") == "direct":
+        lines.append(f"- **Team**: {cfg['team_name']} (collaboration: direct)")
+        lines.append(f"- **Team Leader**: {cfg['leader_id']} — a regular "
+                     "team member in direct mode, NOT your task coordinator")
+        if cfg["admin_id"]:
+            lines.append(f"- **Team Admin**: "
+                         f"{_named_mxid(cfg['admin_display'], cfg['admin_id'])} "
+                         "(has admin authority within this team)")
+        if cfg["coordinators"]:
+            lines.append("- **Coordinator Members**:")
+            for coord in cfg["coordinators"]:
+                lines.append(f"  - {_named_mxid(coord['display_name'], coord['matrix_user_id'])}")
+        roster = _roster_lines(cfg)
+        if roster:
+            lines.append("- **Team Roster**:")
+            lines.extend(roster)
+        lines.append("- **Collaboration**: direct — any team member may "
+                     "@mention you in the Team Room with work; there is no "
+                     "task protocol (no taskflow/projectflow, no DAG, no ack/submit)")
+        lines.append("- Deliverables go to shared/outputs/<your-worker-name>/ "
+                     "pushed to team shared storage")
+        lines.append("- Report results, blockers, and questions to the "
+                     "requester (the member who @mentioned you) in the Team Room")
+        lines.append("- Respond to @mentions from team members, Team Admin, "
+                     "and global Admin")
         return "\n".join(lines)
 
     lines.append(f"- **Coordinator**: {cfg['leader_id']} "
@@ -406,17 +439,21 @@ def generate(cfg, template, date=None, soul_text="", profile_text=""):
 
 def main(argv=None):
     # The output contract is UTF-8/LF; don't let the host locale (e.g. a
-    # GBK Windows console) re-encode the pipe.
+    # GBK Windows console) re-encode the pipe. Test harnesses may substitute
+    # stream objects without reconfigure (pytest's DontReadFromInput).
     for stream in (sys.stdin, sys.stdout):
-        stream.reconfigure(encoding="utf-8", newline="\n")
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     ap = argparse.ArgumentParser(
         description="Generate the worker-bridge agent.md from the source "
                     "template + MemberRuntimeConfig (contract §6).")
     ap.add_argument("--runtime-config", required=True,
                     help="runtime.yaml path (MinIO agents/<name>/runtime/"
                          "runtime.yaml) — identity and team facts")
-    ap.add_argument("--template", default=DEFAULT_TEMPLATE,
-                    help=f"source template path (default: {DEFAULT_TEMPLATE})")
+    ap.add_argument("--template", default=None,
+                    help="source template path (default: AGENTS.md, or "
+                         "AGENTS-direct.md when runtime.yaml sets "
+                         "team.collaboration=direct)")
     ap.add_argument("--soul-file", default=None,
                     help="optional SOUL.md path; content appended verbatim "
                          "after the rendered agent.md (copaw prompt order)")
@@ -438,14 +475,19 @@ def main(argv=None):
             return fh.read()
 
     try:
+        runtime = load_runtime_config(args.runtime_config)
+        template_path = args.template
+        if template_path is None:
+            template_path = (DIRECT_TEMPLATE
+                             if runtime.get("collaboration") == "direct"
+                             else DEFAULT_TEMPLATE)
         try:
-            with open(args.template, encoding="utf-8") as fh:
+            with open(template_path, encoding="utf-8") as fh:
                 template = fh.read()
         except OSError as exc:
             raise GenerateError(f"cannot read template: {exc}")
         if not template.strip():
-            raise GenerateError(f"empty template: {args.template}")
-        runtime = load_runtime_config(args.runtime_config)
+            raise GenerateError(f"empty template: {template_path}")
         soul_text = _read_optional(args.soul_file)
         profile_text = _read_optional(args.profile_file)
         out = generate(runtime, template, date=args.date,

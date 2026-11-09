@@ -214,20 +214,25 @@ class StackOperator:
         # normalization (empty adapterMode with a binding → cimicode-pod).
         return mode or ADAPTER_POD
 
-    def team_for(self, worker: str) -> str:
-        """Team CR 名反查（workerMembers 按名字匹配；无 team 返回空）。
-
-        存储侧的 team 名 = Team CR 名去掉 bucket 前缀（mc_sync.py 语义）；
-        pod 内无 agt CLI，AGENTTEAMS_TEAM 是 team 路径解析的必需 env。
-        """
+    def team_spec_for(self, worker: str) -> dict[str, Any] | None:
+        """Worker 所属 Team CR（workerMembers 按名字匹配；无 team 返回 None）。"""
         teams = self.custom.list_namespaced_custom_object(
             GROUP, VERSION, self.cfg.namespace, TEAMS_PLURAL
         ).get("items", [])
         for team in teams:
             for member in team.get("spec", {}).get("workerMembers", []) or []:
                 if member.get("name") == worker:
-                    return team["metadata"]["name"]
-        return ""
+                    return team
+        return None
+
+    def team_for(self, worker: str) -> str:
+        """Team CR 名反查（workerMembers 按名字匹配；无 team 返回空）。
+
+        存储侧的 team 名 = Team CR 名去掉 bucket 前缀（mc_sync.py 语义）；
+        pod 内无 agt CLI，AGENTTEAMS_TEAM 是 team 路径解析的必需 env。
+        """
+        team = self.team_spec_for(worker)
+        return team["metadata"]["name"] if team else ""
 
     def matrix_user_id(self, worker: str, worker_obj: dict[str, Any]) -> str:
         """权威来源 = Worker CR status.matrixUserID（controller 写入）；
@@ -370,6 +375,7 @@ class StackOperator:
         *,
         team: str = "",
         matrix_user: str = "",
+        collaboration: str = "",
         with_fs_secret: bool = False,
         model_config: str | None = None,
     ) -> client.V1Deployment:
@@ -389,6 +395,10 @@ class StackOperator:
             pod_env["AGENTTEAMS_TEAM"] = team
         if matrix_user:
             pod_env["AGENTTEAMS_MATRIX_USER_ID"] = matrix_user
+        if collaboration:
+            # direct 模式由 sandbox entrypoint 消费：skills.paths 排除
+            # task-management、taskflow wrapper 停用（可逆），见 entrypoint。
+            pod_env["AGENTTEAMS_COLLABORATION"] = collaboration
         container_env = env_list(pod_env)
         secret_name = self.cimicode_secret_name(worker)
         if with_fs_secret:
@@ -677,6 +687,10 @@ class StackOperator:
         if secret_data:
             self.ensure_secret(self.cimicode_secret_name(worker), worker, secret_data)
         team = self.team_for(worker)
+        team_spec = self.team_spec_for(worker)
+        collaboration = str(
+            (team_spec or {}).get("spec", {}).get("collaboration") or ""
+        ).strip()
         matrix_user = self.matrix_user_id(worker, worker_obj)
         self.ensure_service(self.svc(worker))
         self.ensure_deployment(
@@ -684,6 +698,7 @@ class StackOperator:
                 worker,
                 team=team,
                 matrix_user=matrix_user,
+                collaboration=collaboration,
                 with_fs_secret=with_fs_secret,
                 model_config=model_config,
             )

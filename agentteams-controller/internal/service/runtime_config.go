@@ -40,6 +40,10 @@ type memberRuntimeConfigMetadata struct {
 }
 
 type memberRuntimeConfigTeam struct {
+	// Collaboration mirrors Team.spec.collaboration ("direct" = no task
+	// protocol); empty means the default taskflow mode. Consumers: copaw
+	// tool registration, bridge agent.md template selection, sandbox skills.
+	Collaboration     string                        `json:"collaboration,omitempty"`
 	Name              string                        `json:"name,omitempty"`
 	StorageID         string                        `json:"storageId,omitempty"`
 	TeamRoomID        string                        `json:"teamRoomId,omitempty"`
@@ -565,6 +569,7 @@ func applyRuntimeTeamContext(doc *memberRuntimeConfigDocument, req MemberRuntime
 		return
 	}
 	doc.Team = &memberRuntimeConfigTeam{
+		Collaboration:     req.Collaboration,
 		Name:              req.TeamName,
 		StorageID:         req.TeamName,
 		TeamRoomID:        req.TeamRoomID,

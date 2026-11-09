@@ -87,7 +87,8 @@ RUN sed -i "s|\r$||" /opt/agentteams/entrypoint.sh \
 COPY worker-bridge/template/worker-bridge-agent/skills /opt/agentteams/skills
 RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scripts/taskflow.py "$@"\n' > /usr/local/bin/taskflow \
     && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
-    && chmod +x /usr/local/bin/taskflow /usr/local/bin/agentteams-sync \
+    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/direct-work/scripts/work_report.py "$@"\n' > /usr/local/bin/work-report \
+    && chmod +x /usr/local/bin/taskflow /usr/local/bin/agentteams-sync /usr/local/bin/work-report \
     && chmod +x /opt/agentteams/skills/*/scripts/*.py || true
 
 # ── 3. 约定 ──────────────────────────────────────────────────────────────

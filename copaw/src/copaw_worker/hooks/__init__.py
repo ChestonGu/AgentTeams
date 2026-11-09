@@ -39,6 +39,33 @@ def _register_tool_function(toolkit: Any, func: Any, **kwargs: Any) -> None:
         toolkit.register_tool_function(func, **fallback)
 
 
+def _collaboration_mode() -> str:
+    """Read team.collaboration from the member runtime.yaml ("" = taskflow).
+
+    The controller projects Team.spec.collaboration into
+    agents/<w>/runtime/runtime.yaml; the entrypoint mirrors it before the
+    app starts, so it is readable at toolkit-creation time. Standalone
+    pip-installed workers have no runtime.yaml and keep the default
+    taskflow toolset. Any read error degrades to the default, never breaks
+    tool registration.
+    """
+    try:
+        import yaml
+
+        from copaw_worker.hooks.tools.status_report import _working_dir
+
+        path = _working_dir().parent / "runtime" / "runtime.yaml"
+        if not path.exists():
+            return ""
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        team = data.get("team") if isinstance(data, dict) else None
+        if isinstance(team, dict):
+            return str(team.get("collaboration") or "").strip().lower()
+    except Exception:
+        logger.debug("Unable to read collaboration mode from runtime.yaml", exc_info=True)
+    return ""
+
+
 def _existing_tool_schema(toolkit: Any, name: str) -> dict[str, Any] | None:
     tool = getattr(toolkit, "tools", {}).get(name)
     schema = getattr(tool, "json_schema", None)
@@ -75,6 +102,7 @@ def install_tool_hooks() -> None:
     from copaw_worker.hooks.tools.message import message
     from copaw_worker.hooks.tools.projectflow import projectflow
     from copaw_worker.hooks.tools.taskflow import taskflow
+    from copaw_worker.hooks.tools.work_report import work_report
 
     original_create_toolkit = CoPawAgent._create_toolkit
     if getattr(original_create_toolkit, "_agentteams_message_hook", False):
@@ -96,18 +124,29 @@ def install_tool_hooks() -> None:
                 namesake_strategy="override",
             )
             logger.debug("Registered AgentTeams CoPaw filesync tool")
-            _register_tool_function(
-                toolkit,
-                projectflow,
-                namesake_strategy="override",
-            )
-            logger.debug("Registered AgentTeams CoPaw projectflow tool")
-            _register_tool_function(
-                toolkit,
-                taskflow,
-                namesake_strategy="override",
-            )
-            logger.debug("Registered AgentTeams CoPaw taskflow tool")
+            if _collaboration_mode() == "direct":
+                # Direct teams: the task protocol is not offered at all —
+                # removing the tools (not just the docs) is what makes the
+                # mode switch real. work_report is the only status channel.
+                _register_tool_function(
+                    toolkit,
+                    work_report,
+                    namesake_strategy="override",
+                )
+                logger.debug("Registered AgentTeams CoPaw work_report tool (direct mode)")
+            else:
+                _register_tool_function(
+                    toolkit,
+                    projectflow,
+                    namesake_strategy="override",
+                )
+                logger.debug("Registered AgentTeams CoPaw projectflow tool")
+                _register_tool_function(
+                    toolkit,
+                    taskflow,
+                    namesake_strategy="override",
+                )
+                logger.debug("Registered AgentTeams CoPaw taskflow tool")
         except Exception:
             logger.exception("Failed to register AgentTeams CoPaw tool hooks")
         try:

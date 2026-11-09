@@ -346,6 +346,10 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.Collaboration != "" && req.Collaboration != "taskflow" && req.Collaboration != v1beta1.CollaborationDirect {
+		httputil.WriteError(w, http.StatusBadRequest, "collaboration must be \"taskflow\" or \"direct\"")
+		return
+	}
 
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{
@@ -360,6 +364,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			HumanMembers:   req.HumanMembers,
 			WorkerMembers:  req.WorkerMembers,
 			HeartbeatEvery: req.HeartbeatEvery,
+			Collaboration:  req.Collaboration,
 			PeerMentions:   req.PeerMentions,
 			ChannelPolicy:  req.ChannelPolicy,
 		},
@@ -482,6 +487,13 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Admin != nil {
 			team.Spec.Admin = req.Admin
+		}
+		if req.Collaboration != "" {
+			if req.Collaboration != "taskflow" && req.Collaboration != v1beta1.CollaborationDirect {
+				httputil.WriteError(w, http.StatusBadRequest, "collaboration must be \"taskflow\" or \"direct\"")
+				return
+			}
+			team.Spec.Collaboration = req.Collaboration
 		}
 		if req.PeerMentions != nil {
 			team.Spec.PeerMentions = req.PeerMentions
@@ -1124,6 +1136,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 func teamToResponse(t *v1beta1.Team) TeamResponse {
 	resp := TeamResponse{
 		Name:           t.Name,
+		Collaboration:  t.Spec.EffectiveCollaboration(),
 		DisplayName:    t.Spec.DisplayName,
 		TeamName:       t.Spec.EffectiveTeamName(t.Name),
 		Phase:          t.Status.Phase,

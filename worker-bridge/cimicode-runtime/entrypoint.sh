@@ -37,5 +37,49 @@ fi
 # 空 node_modules：跳过后台 npm install 尝试（见文件头注释）
 mkdir -p "$CFG_DIR/node_modules"
 
+# direct 协作模式（AGENTTEAMS_COLLABORATION=direct，operator 从 Team CR
+# spec.collaboration 注入）：任务协议从沙箱视野中移除——
+#   1. skills.paths 逐 skill 列举并排除 task-management（种子是全量父目录）
+#   2. taskflow wrapper 停用（mv 到 /opt/agentteams/taskflow.disabled，可逆）
+# 切回 taskflow 模式时两者都恢复。direct 生成的配置每次启动强制重写；
+# 非 direct 仅在 direct 标记存在时恢复种子（保留"存在即不覆盖"的手改语义）。
+COLLAB="${AGENTTEAMS_COLLABORATION:-}"
+MODE_MARK="$CFG_DIR/.agentteams-direct"
+if [ "$COLLAB" = "direct" ]; then
+    if [ -f /usr/local/bin/taskflow ]; then
+        mv /usr/local/bin/taskflow /opt/agentteams/taskflow.disabled
+    fi
+    SKILL_PATHS="["
+    first=1
+    for d in /opt/agentteams/skills/*/; do
+        name="${d%/}"; name="${name##*/}"
+        [ "$name" = "task-management" ] && continue
+        [ "$first" = "1" ] || SKILL_PATHS="$SKILL_PATHS,"
+        SKILL_PATHS="$SKILL_PATHS\"/opt/agentteams/skills/$name\""
+        first=0
+    done
+    SKILL_PATHS="$SKILL_PATHS]"
+    cat > "$CFG_DIR/cimicode.json" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "skills": {
+    "paths": $SKILL_PATHS
+  }
+}
+EOF
+    touch "$MODE_MARK"
+    echo "[cimicode] direct collaboration: task-management skill removed, taskflow wrapper disabled"
+else
+    if [ -f /opt/agentteams/taskflow.disabled ]; then
+        mv /opt/agentteams/taskflow.disabled /usr/local/bin/taskflow
+    fi
+    if [ -f "$MODE_MARK" ]; then
+        cp /opt/agentteams/cimicode.json "$CFG_DIR/cimicode.json"
+        rm -f "$MODE_MARK"
+        echo "[cimicode] taskflow collaboration restored"
+    fi
+fi
+
 echo "[cimicode] workdir=$WORKDIR port=$OPENCODE_PORT"
 exec cimicode serve --port "$OPENCODE_PORT" --hostname 0.0.0.0

@@ -32,8 +32,11 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent", "AGENTS.md")
 RUNTIME_TEAM = os.path.join(FIXTURES, "runtime.yaml")
 RUNTIME_STANDALONE = os.path.join(FIXTURES, "runtime-standalone.yaml")
+RUNTIME_DIRECT = os.path.join(FIXTURES, "runtime-direct.yaml")
 GOLDEN_TEAM = os.path.join(FIXTURES, "golden-team.md")
 GOLDEN_STANDALONE = os.path.join(FIXTURES, "golden-standalone.md")
+GOLDEN_DIRECT = os.path.join(FIXTURES, "golden-direct.md")
+DIRECT_TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent", "AGENTS-direct.md")
 DATE = "2026-09-03"
 
 SOUL_TEXT = "# SOUL\n\nYou are a meticulous backend engineer.\nPrefer minimal diffs.\n"
@@ -65,6 +68,39 @@ class GoldenTest(unittest.TestCase):
     def test_standalone_golden(self):
         out = gen.generate(cfg_standalone(), read(TEMPLATE), date=DATE)
         self.assertEqual(out, read(GOLDEN_STANDALONE))
+
+    def test_direct_golden(self):
+        cfg = gen.load_runtime_config(RUNTIME_DIRECT)
+        self.assertEqual(cfg["collaboration"], "direct")
+        out = gen.generate(cfg, read(DIRECT_TEMPLATE), date=DATE)
+        self.assertEqual(out, read(GOLDEN_DIRECT))
+
+    def test_direct_coordination_has_no_task_protocol(self):
+        cfg = gen.load_runtime_config(RUNTIME_DIRECT)
+        block = gen.render_coordination(cfg)
+        self.assertIn("collaboration: direct", block)
+        self.assertIn("NOT your task coordinator", block)
+        self.assertIn("no task protocol", block)
+        self.assertIn("requester", block)
+        self.assertNotIn("Report task completion", block)
+
+    def test_taskflow_fixtures_have_no_collaboration_mode(self):
+        # Default stays taskflow: existing fixtures must not silently flip.
+        self.assertEqual(cfg_team()["collaboration"], "")
+        self.assertEqual(cfg_standalone()["collaboration"], "")
+
+    def test_cli_default_template_follows_collaboration(self):
+        # main() without --template must select AGENTS-direct.md for direct
+        # runtime configs and AGENTS.md otherwise.
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "agent.md")
+            rc = gen.main([
+                "--runtime-config", RUNTIME_DIRECT,
+                "--date", DATE,
+                "--output", out_path,
+            ])
+            self.assertEqual(rc, 0)
+            self.assertEqual(read(out_path), read(GOLDEN_DIRECT))
 
     def test_persona_seam_then_soul_then_profile(self):
         out = gen.generate(cfg_team(), read(TEMPLATE), date=DATE,

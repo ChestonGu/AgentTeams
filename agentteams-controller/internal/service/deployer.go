@@ -30,6 +30,8 @@ type WorkerDeployRequest struct {
 	Name           string
 	Spec           v1beta1.WorkerSpec
 	Role           string // "standalone" | "team_leader" | "worker"
+	// Collaboration selects the direct-mode template/skills variant.
+	Collaboration  string
 	TeamName       string
 	TeamLeaderName string
 	TeamRoomID     string
@@ -104,6 +106,8 @@ type MemberRuntimeConfigDeployRequest struct {
 	SkillRegistryURL      string
 	SkillRegistryAuthType string
 
+	// Collaboration is the team collaboration mode ("direct" or "" = taskflow).
+	Collaboration        string
 	TeamName             string
 	TeamRoomID           string
 	LeaderName           string
@@ -138,6 +142,8 @@ type RuntimeConfigTeamMember struct {
 // CoordinationDeployRequest describes coordination context injection for a team leader.
 type CoordinationDeployRequest struct {
 	LeaderName string
+	// Collaboration selects the direct-mode coordination block variant.
+	Collaboration string
 	// SelfDisplayName is the leader's own spec.displayName — rendered as the
 	// "Your display name" line so the leader introduces itself by name.
 	SelfDisplayName string
@@ -170,6 +176,8 @@ type TeamWorkerEntry struct {
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
 type WorkerCoordinationRequest struct {
 	WorkerName string
+	// Collaboration selects the direct-mode coordination block variant.
+	Collaboration string
 	// SelfDisplayName is the worker's own spec.displayName — rendered as the
 	// "Your display name" line so the worker introduces itself by name.
 	SelfDisplayName string
@@ -204,6 +212,8 @@ type InjectChannelPolicyRequest struct {
 type SyncTeamLeaderAssetsRequest struct {
 	WorkerName string
 	Runtime    string
+	// Collaboration selects the direct-mode template/skills variant.
+	Collaboration string
 }
 
 // --- Deployer ---
@@ -479,7 +489,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// --- Builtin top-level files (e.g. HEARTBEAT.md for team leaders) ---
 	phaseStart = time.Now()
-	if err := d.pushBuiltinTopLevelFiles(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
+	if err := d.pushBuiltinTopLevelFiles(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.Collaboration); err != nil {
 		logger.Error(err, "builtin top-level file sync failed (non-fatal)")
 	}
 	logger.Info("deploy worker config: builtin top-level files", "worker", req.Name,
@@ -487,7 +497,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
 	phaseStart = time.Now()
-	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamAdminDisplayName, req.Spec.DisplayName, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamAdminDisplayName, req.Spec.DisplayName, req.TeamCoordinatorIDs, req.Spec.Agents, req.Collaboration); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
 	if req.Role == "team_leader" && req.TeamName != "" && req.TeamRoomID != "" {
@@ -506,6 +516,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
 			LeaderName:           req.Name,
+			Collaboration:        req.Collaboration,
 			SelfDisplayName:      req.Spec.DisplayName,
 			Role:                 req.Role,
 			TeamName:             req.TeamName,
@@ -526,7 +537,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// --- Push builtin skills from worker-agent template ---
 	phaseStart = time.Now()
-	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
+	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.Collaboration); err != nil {
 		logger.Error(err, "builtin skills push failed (non-fatal)")
 	}
 	logger.Info("deploy worker config: builtin skills", "worker", req.Name,
@@ -680,6 +691,7 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.LeaderName,
+		Collaboration:        req.Collaboration,
 		SelfDisplayName:      req.SelfDisplayName,
 		Role:                 req.Role,
 		MatrixDomain:         d.matrixDomain,
@@ -718,7 +730,15 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 		return d.oss.PutObject(ctx, soulKey, []byte(req.LeaderSoul))
 	}
 
-	tmplPath := filepath.Join(d.builtinAgentDir("team_leader", ""), "SOUL.md.tmpl")
+	tmplName := "SOUL.md.tmpl"
+	if req.Collaboration == v1beta1.CollaborationDirect {
+		// Direct leaders get the task-free persona; the stock template would
+		// re-teach task decomposition and delegation every reconcile.
+		if _, statErr := os.Stat(filepath.Join(d.builtinAgentDir("team_leader", ""), "SOUL-direct.md.tmpl")); statErr == nil {
+			tmplName = "SOUL-direct.md.tmpl"
+		}
+	}
+	tmplPath := filepath.Join(d.builtinAgentDir("team_leader", ""), tmplName)
 	tmplData, err := os.ReadFile(tmplPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -761,6 +781,7 @@ func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoord
 	}
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.WorkerName,
+		Collaboration:        req.Collaboration,
 		SelfDisplayName:      req.SelfDisplayName,
 		Role:                 role,
 		MatrixDomain:         d.matrixDomain,
@@ -810,13 +831,13 @@ func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderA
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	role := "team_leader"
-	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", "", "", nil, ""); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", "", "", nil, "", req.Collaboration); err != nil {
 		return err
 	}
-	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime, req.Collaboration); err != nil {
 		return err
 	}
-	if err := d.pushBuiltinTopLevelFiles(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+	if err := d.pushBuiltinTopLevelFiles(ctx, req.WorkerName, agentPrefix, role, req.Runtime, req.Collaboration); err != nil {
 		return err
 	}
 	return nil
@@ -1358,9 +1379,13 @@ func redactPackageURI(raw string) string {
 
 // prepareAndPushAgentsMD merges the builtin AGENTS.md section and injects
 // coordination context in a single OSS read-write cycle.
-func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName, selfDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string) error {
+func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName, selfDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string, collaboration string) error {
 	logger := log.FromContext(ctx)
-	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), "AGENTS.md")
+	builtinName := "AGENTS.md"
+	if collaboration == v1beta1.CollaborationDirect {
+		builtinName = "AGENTS-direct.md"
+	}
+	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), builtinName)
 	builtinContent, err := os.ReadFile(builtinPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read builtin AGENTS.md: %w", err)
@@ -1412,6 +1437,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 		}
 		coordCtx := agentconfig.CoordinationContext{
 			WorkerName:           workerName,
+			Collaboration:        collaboration,
 			SelfDisplayName:      selfDisplayName,
 			MatrixDomain:         d.matrixDomain,
 			TeamName:             teamName,
@@ -1449,7 +1475,19 @@ func hasTeamContext(content string) bool {
 
 // pushBuiltinSkills copies builtin skill directories to the worker's OSS prefix.
 // Skills are read from the local agent template directory baked into the controller image.
-func (d *Deployer) pushBuiltinSkills(ctx context.Context, workerName, agentPrefix, role, runtime string) error {
+func (d *Deployer) pushBuiltinSkills(ctx context.Context, workerName, agentPrefix, role, runtime, collaboration string) error {
+	// Remove the opposite mode's protocol skills first: switching a team's
+	// collaboration mode must not leave the removed protocol teachable in
+	// the agent workspace (pushDirWithCompare only ever adds/updates).
+	stale := []string{"direct-work"}
+	if collaboration == v1beta1.CollaborationDirect {
+		stale = []string{"task-management", "project-management", "team-coordination"}
+	}
+	for _, name := range stale {
+		if err := d.oss.DeletePrefix(ctx, agentPrefix+"/skills/"+name+"/"); err != nil {
+			log.FromContext(ctx).Error(err, "stale skill cleanup failed (non-fatal)", "skill", name, "worker", workerName)
+		}
+	}
 	skillsDir := filepath.Join(d.builtinAgentDir(role, runtime), "skills")
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
@@ -1464,6 +1502,16 @@ func (d *Deployer) pushBuiltinSkills(ctx context.Context, workerName, agentPrefi
 			continue
 		}
 		skillName := entry.Name()
+		// Collaboration-mode skill gating: direct teams get direct-work
+		// instead of the task protocol skills (and vice versa) so a removed
+		// protocol is neither taught nor shipped to the agent workspace.
+		if collaboration == v1beta1.CollaborationDirect {
+			if skillName == "task-management" || skillName == "project-management" || skillName == "team-coordination" {
+				continue
+			}
+		} else if skillName == "direct-work" {
+			continue
+		}
 		src := skillsDir + "/" + skillName
 		dst := agentPrefix + "/skills/" + skillName
 		if err := d.pushDirWithCompare(ctx, src, dst); err != nil {
@@ -1512,21 +1560,42 @@ func (d *Deployer) pushDirWithCompare(ctx context.Context, srcDir, dstPrefix str
 	})
 }
 
-func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, agentPrefix, role, runtime string) error {
+func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, agentPrefix, role, runtime, collaboration string) error {
 	agentDir := d.builtinAgentDir(role, runtime)
 	for _, name := range []string{"HEARTBEAT.md"} {
 		ossKey := agentPrefix + "/" + name
-		if existing, _ := d.oss.GetObject(ctx, ossKey); existing != nil {
-			log.FromContext(ctx).Info("seed-only: skipping (already in MinIO)", "file", name, "worker", workerName)
-			continue
+		srcName := name
+		if collaboration == v1beta1.CollaborationDirect {
+			// Direct leaders get the task-free heartbeat variant when shipped.
+			if _, err := os.Stat(filepath.Join(agentDir, "HEARTBEAT-direct.md")); err == nil {
+				srcName = "HEARTBEAT-direct.md"
+			}
 		}
-		src := filepath.Join(agentDir, name)
+		src := filepath.Join(agentDir, srcName)
 		content, err := os.ReadFile(src)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return err
+		}
+		if existing, _ := d.oss.GetObject(ctx, ossKey); existing != nil {
+			// Seed-only by default; but when the stored copy is exactly one
+			// of the builtin variants, a collaboration-mode switch rewrites
+			// it to the current mode's variant (user edits are preserved).
+			builtinDefault, _ := os.ReadFile(filepath.Join(agentDir, name))
+			builtinDirect, _ := os.ReadFile(filepath.Join(agentDir, "HEARTBEAT-direct.md"))
+			if bytes.Equal(existing, content) ||
+				(len(builtinDefault) > 0 && bytes.Equal(existing, builtinDefault)) ||
+				(len(builtinDirect) > 0 && bytes.Equal(existing, builtinDirect)) {
+				if bytes.Equal(existing, content) {
+					continue
+				}
+				log.FromContext(ctx).Info("heartbeat variant re-projected for collaboration mode", "file", name, "worker", workerName, "mode", collaboration)
+			} else {
+				log.FromContext(ctx).Info("seed-only: skipping (already in MinIO)", "file", name, "worker", workerName)
+				continue
+			}
 		}
 		if err := d.oss.PutObject(ctx, ossKey, content); err != nil {
 			return err

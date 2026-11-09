@@ -51,10 +51,11 @@ injection or /opt/teams/config/runtime.json, which mc_sync loads into
 os.environ at import time): AGENTTEAMS_TEAM (team),
 AGENTTEAMS_MATRIX_USER_ID (actor; the taskflow CLI's --actor flag wins).
 
-Vendored copy — keep the four instances in sync: cli/taskflow,
+Vendored copy — keep the five instances in sync: cli/taskflow,
 cli/projectflow, template/worker-bridge-agent/skills/task-management/scripts
 (worker sandbox images), template/worker-bridge-leader-agent/skills/
-task-management/scripts (leader).
+task-management/scripts (leader), template/worker-bridge-agent/skills/
+direct-work/scripts (direct-collaboration sandbox images).
 """
 from __future__ import annotations
 
@@ -107,6 +108,20 @@ def report_event(
             tool, action, root, task=task, project=project, tasks=tasks,
             ready_nodes=ready_nodes, loop=loop, result=result, actor=actor,
         )
+        emit_event(event, root)
+    except Exception:
+        logger.exception("status report failed for %s.%s", tool, action)
+
+
+def emit_event(event: dict, root: Path | str) -> None:
+    """Log + optionally POST one pre-built event envelope. Never raises.
+
+    Shared delivery path for taskflow/projectflow events (report_event) and
+    direct-collaboration work events (direct-work skill's work_report CLI):
+    one INFO ``STATUS_EVENT`` line always, then the per-key env >
+    <root>/shared/config/webhook.json resolution with the at-most-once POST.
+    """
+    try:
         logger.info("STATUS_EVENT %s", json.dumps(event, ensure_ascii=False))
         config = _webhook_file_config(root)
         url = ((os.getenv(_WEBHOOK_URL_ENV) or "").strip()
@@ -116,7 +131,7 @@ def report_event(
                      or config.get(_WEBHOOK_TOKEN_ENV, "").strip())
             _post_webhook(url, event, token)
     except Exception:
-        logger.exception("status report failed for %s.%s", tool, action)
+        logger.exception("status event emission failed")
 
 
 def _webhook_file_config(root: Path | str) -> dict[str, str]:

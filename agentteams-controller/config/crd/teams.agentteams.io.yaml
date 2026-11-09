@@ -37,6 +37,15 @@ spec:
               properties:
                 description:
                   type: string
+                collaboration:
+                  type: string
+                  enum: ["taskflow", "direct", ""]
+                  description: >
+                    Team collaboration protocol: "taskflow" (default, empty) —
+                    leader-planned projects, DAG tasks and the taskflow/projectflow
+                    tools; "direct" — humans @mention workers (and the leader)
+                    directly in the Team Room, deliverables land in
+                    shared/outputs/<worker>/, task tools are not registered.
                 displayName:
                   type: string
                   description: Friendly display name for the Team (used for the Team room name and listings). Falls back to teamName.

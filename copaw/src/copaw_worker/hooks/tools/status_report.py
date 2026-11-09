@@ -302,6 +302,20 @@ async def report_tool_event(
         if data.get("dryRun") or not data.get("ok"):
             return
         event = _build_event(tool, action, _coerce_payload_dict(payload), data)
+        await emit_event(event)
+    except Exception:
+        logger.exception("status report failed for %s.%s", tool, action)
+
+
+async def emit_event(event: dict[str, Any]) -> None:
+    """Log + optionally POST one pre-built event envelope. Never raises.
+
+    Shared delivery path for taskflow/projectflow events (report_tool_event)
+    and direct-collaboration work events (work_report): one INFO
+    ``STATUS_EVENT`` line always, then the per-key env > shared/config/
+    webhook.json webhook resolution with the 3-second at-most-once POST.
+    """
+    try:
         logger.info("STATUS_EVENT %s", json.dumps(event, ensure_ascii=False))
         config = _webhook_file_config()
         url = (os.getenv(_WEBHOOK_URL_ENV, "").strip()
@@ -311,4 +325,4 @@ async def report_tool_event(
                      or config.get(_WEBHOOK_TOKEN_ENV, "").strip())
             await asyncio.to_thread(_post_webhook, url, event, token)
     except Exception:
-        logger.exception("status report failed for %s.%s", tool, action)
+        logger.exception("status event emission failed")
