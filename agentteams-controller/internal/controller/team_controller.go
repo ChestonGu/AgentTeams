@@ -729,6 +729,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:           rm.runtimeName,
+			Runtime:              rm.worker.Spec.Runtime,
 			Collaboration:        t.Spec.EffectiveCollaboration(),
 			SelfDisplayName:      rm.worker.Spec.DisplayName,
 			TeamName:             teamRuntimeName,
@@ -1198,6 +1199,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if !backend.IsManagedRuntime(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:           runtimeName,
+			Runtime:              w.Spec.Runtime,
 			SelfDisplayName:      w.Spec.DisplayName,
 			TeamName:             "",
 			TeamLeaderName:       "",

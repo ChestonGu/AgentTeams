@@ -176,6 +176,10 @@ type TeamWorkerEntry struct {
 // WorkerCoordinationRequest describes coordination context injection for a team member worker.
 type WorkerCoordinationRequest struct {
 	WorkerName string
+	// Runtime is the member worker's spec.runtime (copaw/hermes/openclaw) —
+	// required to pick the correct builtin template directory when the
+	// collaboration mode re-projects the AGENTS.md base and skill set.
+	Runtime string
 	// Collaboration selects the direct-mode coordination block variant.
 	Collaboration string
 	// SelfDisplayName is the worker's own spec.displayName — rendered as the
@@ -774,11 +778,25 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 // line instead of a malformed "@:domain (Team Leader of )" worker line.
 func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
-	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 	role := "worker"
 	if req.TeamLeaderName == "" {
 		role = "standalone"
 	}
+	// Re-project the member's AGENTS.md base and skill set for the team's
+	// collaboration mode. Team membership used to touch only the
+	// coordination block, which left direct-mode members on the taskflow
+	// template and task-management skills (leader already had
+	// SyncTeamLeaderAssets; members had no counterpart). The detach path
+	// (empty TeamLeaderName) resets to the standalone taskflow base.
+	if req.Runtime != "" {
+		if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminID, req.TeamAdminDisplayName, req.SelfDisplayName, req.TeamCoordinators, "", req.Collaboration); err != nil {
+			log.FromContext(ctx).Error(err, "member AGENTS.md base re-projection failed (non-fatal)", "worker", req.WorkerName)
+		}
+		if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime, req.Collaboration); err != nil {
+			log.FromContext(ctx).Error(err, "member builtin skills re-projection failed (non-fatal)", "worker", req.WorkerName)
+		}
+	}
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 	coordCtx := agentconfig.CoordinationContext{
 		WorkerName:           req.WorkerName,
 		Collaboration:        req.Collaboration,
