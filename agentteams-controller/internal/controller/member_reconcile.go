@@ -505,6 +505,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	// overwrite the direct AGENTS.md base and skill set back to taskflow
 	// (the two reconcilers fight, and the worker one always wins).
 	collaboration := ""
+	teamLeaderName := ""
 	if m.TeamName != "" && d.DynamicClient != nil {
 		// A list failure (or a fake client missing the registered list kind in
 		// tests) must never break the member reconcile — it only means we
@@ -534,6 +535,21 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 				if mode == v1beta1.CollaborationDirect {
 					collaboration = v1beta1.CollaborationDirect
 				}
+				// Resolve the team leader so the member's AGENTS.md gets the
+				// team-facing coordination block (role=worker, requester
+				// anchor) instead of the standalone @manager block this
+				// team-agnostic reconcile would otherwise inject.
+				members, _, _ := unstructured.NestedSlice(spec, "workerMembers")
+				for _, raw := range members {
+					member, ok := raw.(map[string]interface{})
+					if !ok || member["role"] != "team_leader" {
+						continue
+					}
+					if name, ok := member["name"].(string); ok {
+						teamLeaderName = name
+					}
+					break
+				}
 				break
 			}
 		}()
@@ -544,6 +560,8 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		Spec:           m.Spec,
 		Role:           m.Role.String(),
 		Collaboration:  collaboration,
+		TeamName:       m.TeamName,
+		TeamLeaderName: teamLeaderName,
 		MatrixToken:    state.ProvResult.MatrixToken,
 		GatewayKey:     state.ProvResult.GatewayKey,
 		MatrixPassword: state.ProvResult.MatrixPassword,
