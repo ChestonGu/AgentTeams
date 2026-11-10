@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from pathlib import Path
 
 from cimicode_bridge.app import BridgeApp
@@ -8,6 +10,8 @@ from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig
 from cimicode_bridge.config import load_config
 from cimicode_bridge.runtime.cimicode_pod_adapter import CimicodePodAdapter
 from cimicode_bridge.runtime.cimicode_stateless_adapter import CimicodeStatelessAdapter
+from cimicode_bridge.store.memory import MemoryStore
+from cimicode_bridge.store.s3 import S3StateStore
 
 
 class FakeMinio:
@@ -428,3 +432,159 @@ bridge:
         assert app.config.runtime.base_url == "http://cimicode.internal:8080"
         assert app.config.runtime.sandbox_id == "sbx-1"
         assert app.config.runtime.template_id == "tpl-1"
+
+
+class _CountingMinio(FakeMinio):
+    """FakeMinio + put_object 计数（S3StateStore 写入断言）。"""
+
+    def __init__(self, objects: dict[str, str]) -> None:
+        super().__init__(objects)
+        self.puts: list[str] = []
+
+    def put_object(self, bucket, key, data, length, content_type=None):
+        self.puts.append(key)
+        self.objects[key] = data.read().decode("utf-8")
+
+
+class TestSseTraceSwitch:
+    """bridgeSseTrace 已知键 → BRIDGE_SSE_TRACE env 投射（显式 env 优先）。"""
+
+    TRACE_ON_YAML = (
+        "bridge:\n"
+        "  adapterMode: cimicode-stateless\n"
+        "  runtimeParameter:\n"
+        "    bridgeSseTrace: '1'\n"
+    )
+
+    def _app_with_files(self, runtime_yaml: str) -> BridgeApp:
+        app = BridgeApp()
+        app.config = load_config("config/does-not-exist.yaml")
+        app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=runtime_yaml)
+        return app
+
+    def test_bag_value_projected_to_env(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_SSE_TRACE", raising=False)
+        app = self._app_with_files(self.TRACE_ON_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert os.environ["BRIDGE_SSE_TRACE"] == "1"
+
+    def test_bag_absent_clears_env(self, monkeypatch):
+        monkeypatch.setenv("BRIDGE_SSE_TRACE", "1")
+        app = self._app_with_files("bridge:\n  adapterMode: cimicode-stateless\n")
+        assert app._explicit_sse_trace is False
+        app._apply_bridge_section(app.worker_files)
+        assert os.environ["BRIDGE_SSE_TRACE"] == ""
+
+    def test_explicit_env_not_shadowed_by_bag(self, monkeypatch):
+        monkeypatch.setenv("BRIDGE_SSE_TRACE", "0")
+        app = self._app_with_files(self.TRACE_ON_YAML)
+        app._apply_env_overrides()
+        assert app._explicit_sse_trace is True
+        app._apply_bridge_section(app.worker_files)
+        assert os.environ["BRIDGE_SSE_TRACE"] == "0"
+
+
+class TestThreadProcessSwitch:
+    """bridgeThreadProcess 布尔 → emitter.thinking/tools="thread" 映射。"""
+
+    THREAD_ON_YAML = "bridge:\n  adapterMode: cimicode-stateless\n  runtimeParameter:\n    bridgeThreadProcess: '1'\n"
+    THREAD_OFF_YAML = "bridge:\n  adapterMode: cimicode-stateless\n  runtimeParameter:\n    bridgeThreadProcess: '0'\n"
+    EMPTY_YAML = "bridge:\n  adapterMode: cimicode-stateless\n"
+
+    def _app_with_files(self, runtime_yaml: str) -> BridgeApp:
+        app = BridgeApp()
+        app.config = load_config("config/does-not-exist.yaml")
+        app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=runtime_yaml)
+        return app
+
+    def test_bag_one_enables_thread(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_THREAD_PROCESS", raising=False)
+        app = self._app_with_files(self.THREAD_ON_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.emitter.thinking == "thread"
+        assert app.config.emitter.tools == "thread"
+
+    def test_bag_absent_reverts_to_yaml_defaults(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_THREAD_PROCESS", raising=False)
+        app = self._app_with_files(self.THREAD_ON_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.emitter.thinking == "thread"
+        app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=self.EMPTY_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.emitter.thinking == "hide"
+        assert app.config.emitter.tools == "compact"
+
+    def test_bag_zero_disables(self, monkeypatch):
+        monkeypatch.delenv("BRIDGE_THREAD_PROCESS", raising=False)
+        app = self._app_with_files(self.THREAD_ON_YAML)
+        app._apply_bridge_section(app.worker_files)
+        app.worker_files = WorkerBootstrapConfig(openclaw={}, runtime_yaml=self.THREAD_OFF_YAML)
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.emitter.thinking == "hide"
+        assert app.config.emitter.tools == "compact"
+
+    def test_explicit_env_not_shadowed_by_bag(self, monkeypatch):
+        monkeypatch.setenv("BRIDGE_THREAD_PROCESS", "0")
+        app = self._app_with_files(self.THREAD_ON_YAML)
+        app._apply_env_overrides()
+        assert app._explicit_thread_process is True
+        app._apply_bridge_section(app.worker_files)
+        assert app.config.emitter.thinking == "hide"
+        assert app.config.emitter.tools == "compact"
+
+
+class TestS3StateStore:
+    """since 游标 S3 持久化（scope 信封防毒、跳写、删除语义）。"""
+
+    def _store(self, *, scope="https://hs|w1", objects=None):
+        client = _CountingMinio(dict(objects or {}))
+        bootstrap = S3Bootstrap(client=client, bucket="bkt", prefix="")
+        return S3StateStore(bootstrap, scope=scope), client
+
+    def test_roundtrip(self, monkeypatch):
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        store, client = self._store()
+        assert asyncio.run(store.get("matrix:since:w1")) is None
+        asyncio.run(store.set("matrix:since:w1", "s_100"))
+        assert client.puts == ["agents/w1/state/matrix:since:w1"]
+        assert asyncio.run(store.get("matrix:since:w1")) == "s_100"
+
+    def test_scope_mismatch_treated_as_absent(self, monkeypatch):
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        old = json.dumps({"scope": "https://old|w1", "value": "s_old"})
+        store, _ = self._store(scope="https://new|w1",
+                               objects={"agents/w1/state/matrix:since:w1": old})
+        assert asyncio.run(store.get("matrix:since:w1")) is None
+
+    def test_unreadable_envelope_treated_as_absent(self, monkeypatch):
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        store, _ = self._store(objects={"agents/w1/state/matrix:since:w1": "not json"})
+        assert asyncio.run(store.get("matrix:since:w1")) is None
+
+    def test_set_same_value_skips_write(self, monkeypatch):
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        store, client = self._store()
+        asyncio.run(store.set("k", "v1"))
+        asyncio.run(store.set("k", "v1"))
+        asyncio.run(store.set("k", "v2"))
+        assert len(client.puts) == 2
+
+    def test_delete_makes_value_absent(self, monkeypatch):
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        store, _ = self._store()
+        asyncio.run(store.set("k", "v"))
+        asyncio.run(store.delete("k"))
+        assert asyncio.run(store.get("k")) is None
+
+    def test_build_state_store_s3_and_degradation(self, monkeypatch):
+        app = BridgeApp()
+        app.config = load_config("config/does-not-exist.yaml")
+        assert app.config.store.backend == "s3"
+        monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "https://hs.example.com")
+        monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "w1")
+        app.s3_bootstrap = S3Bootstrap(client=_CountingMinio({}), bucket="bkt", prefix="")
+        store = app._build_state_store()
+        assert isinstance(store, S3StateStore)
+        assert store._scope == "https://hs.example.com|w1"
+        app.s3_bootstrap = None
+        assert isinstance(app._build_state_store(), MemoryStore)

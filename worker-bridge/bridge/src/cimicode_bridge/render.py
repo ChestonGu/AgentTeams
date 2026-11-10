@@ -1,4 +1,4 @@
-"""出站内容渲染：agentMd 拼装 + Markdown→Matrix HTML 消息构造。"""
+"""出站内容渲染：Markdown → Matrix HTML 消息构造（agentMd 组装已收敛到 v2.4 generator，见 prompt.py）。"""
 from __future__ import annotations
 
 import html
@@ -42,36 +42,6 @@ def _md_to_html(text: str) -> str:
     except ImportError:
         logger.warning("markdown-it-py not installed; formatted_body will be plain text")
         return html.escape(text).replace("\n", "<br>\n")
-
-
-def build_agent_md(
-    *,
-    agents_md: str = "",
-    soul_md: str = "",
-    role: str = "worker",
-    leader: str = "",
-    team: str = "",
-    room: str = "",
-    admin: str = "",
-    workers: str = "",
-) -> str:
-    """每轮 turn 组装发给 gateway 的 agentMd：协作上下文 + AGENTS.md + SOUL.md。"""
-    coordination = "\n".join([
-        "## Coordination",
-        f"- Role: {role}",
-        f"- Leader: {leader or 'unknown'}",
-        f"- Team: {team or 'unknown'}",
-        f"- Room: {room or 'unknown'}",
-        f"- Admin: {admin or 'unknown'}",
-        f"- Workers: {workers or 'unknown'}",
-        "- Respond only to the latest message that explicitly mentions you.",
-    ])
-    parts = [coordination]
-    if agents_md:
-        parts.append("## AGENTS.md\n" + agents_md)
-    if soul_md:
-        parts.append("## SOUL.md\n" + soul_md)
-    return "\n\n".join(parts)
 
 
 def render_matrix_message(body: str, *, mention_user_ids: list[str] | None = None) -> dict[str, object]:

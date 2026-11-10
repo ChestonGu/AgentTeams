@@ -14,4 +14,13 @@ filter:
 history:
   max_entries: 50
 store:
-  backend: memory
+  # s3：since 游标持久化到 MinIO agents/<w>/state/，pod 重启增量续传不重放；
+  # 无 AGENTTEAMS_FS_* env（本地开发）自动降级 memory。
+  backend: s3
+
+emitter:
+  # thinking/tools = "thread"：思考链与工具调用透出到该 turn 消息的
+  # Matrix thread（Element UI 折叠区），不再静默丢弃；"hide"/"compact"
+  # 保持旧行为。两者独立开关。
+  thinking: "hide"
+  tools: "compact"

@@ -18,7 +18,9 @@ Semantics copied from copaw:
     ``pushed`` / ``exists`` / ``entries`` per action. Failures print
     ``{"ok": false, "error", action, path}`` and exit 1, so bash can branch
     on $? while the JSON stays parseable.
-  - push: ``global-shared/`` is read-only; ``--exclude`` maps 1:1 to copaw's
+  - push: ``global-shared/`` and ``oauth/`` are read-only (``oauth/`` is the
+    worker's own per-agent credential directory: pull/stat/list only, never push);
+    ``--exclude`` maps 1:1 to copaw's
     exclude list (glob patterns handed to ``mc mirror``).
   - ``--dry-run`` resolves the path and echoes the payload without touching
     storage (copaw's dryRun).
@@ -100,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("path", help="shared/... or global-shared/... path")
+    common.add_argument("path", help="shared/..., global-shared/..., or oauth/... path")
     common.add_argument(
         "--dry-run", action="store_true",
         help="resolve and echo the payload without touching storage",

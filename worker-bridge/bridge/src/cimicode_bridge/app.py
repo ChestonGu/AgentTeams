@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+import json
 import logging
 import os
 import re
@@ -25,6 +26,7 @@ from fastapi import FastAPI
 from cimicode_bridge.api.routes import register_routes
 from cimicode_bridge.bootstrap import S3Bootstrap, WorkerBootstrapConfig, managed_runtime_type
 from cimicode_bridge.config import BridgeConfig, load_config
+from cimicode_bridge.events import RuntimeEventKind
 from cimicode_bridge.controller.client import fetch_worker_runtime_env, refresh_matrix_token
 from cimicode_bridge.log import setup_logging
 from cimicode_bridge.matrix.filter import MentionFilter, RoleResolver
@@ -35,6 +37,7 @@ from cimicode_bridge.session import HistoryManager, SessionManager
 from cimicode_bridge.store.file import FileStore
 from cimicode_bridge.store.memory import MemoryStore
 from cimicode_bridge.store.redis import RedisStore
+from cimicode_bridge.store.s3 import S3StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,52 @@ def _media_history_line(
 # 推导——晚到的从来不是值，是可达性；operator 无需再回写 Worker CR env。
 ADAPTER_POD_DEFAULT = "cimicode-pod"
 RUNTIME_SVC_PORT = 4096
+
+# thread 过程消息（emitter.thinking/tools="thread"）的工具输入/输出截断
+# 上限——Element thread 折叠区内容适度即可，超长输出会淹没人眼。
+THREAD_TOOL_INPUT_MAX = 800
+THREAD_TOOL_OUTPUT_MAX = 1500
+
+
+def _truncate_for_thread(text: str, limit: int) -> str:
+    """截断 thread 过程消息正文，超限附原始长度说明。"""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n…（已截断，共 {len(text)} 字符）"
+
+
+def _format_tool_thread_body(
+    *,
+    started: bool,
+    tool: str,
+    detail: Any = "",
+    failed: bool = False,
+) -> str:
+    """工具过程消息正文（thread 透出用）；返回空串表示无可透出内容。
+
+    started=True（调用中）：detail 为输入 dict，JSON 预览截断；
+    started=False（结算帧）：detail 为输出文本，按上限截断。
+    """
+    tool = (tool or "").strip()
+    if started:
+        preview = ""
+        if isinstance(detail, dict) and detail:
+            try:
+                preview = _truncate_for_thread(
+                    json.dumps(detail, ensure_ascii=False), THREAD_TOOL_INPUT_MAX
+                )
+            except (TypeError, ValueError):
+                preview = ""
+        parts = [f"🔧 调用工具 `{tool or 'unknown'}`"]
+        if preview:
+            parts.append(f"```json\n{preview}\n```")
+        return "\n".join(parts)
+    output = _truncate_for_thread(detail, THREAD_TOOL_OUTPUT_MAX) if isinstance(detail, str) else ""
+    head = f"❌ 工具失败 `{tool or 'unknown'}`" if failed else f"✅ 工具完成 `{tool or 'unknown'}`"
+    if output:
+        return f"{head}\n```\n{output}\n```"
+    return head
 
 # runtimeParameter 袋中会被抽到 RuntimeConfig 固定字段的已知键
 # （snake_case 字段名 → camelCase 袋键名）；袋内其余键原样透传平台。
@@ -119,6 +168,15 @@ class BridgeApp:
     # BRIDGE_RUNTIME_BASE_URL（或 controller runtimeEnv）显式提供过值时置
     # True——runtime.yaml bridge 段不得遮蔽显式 env 覆盖（排障用）。
     _explicit_base_url: bool = field(default=False, init=False, repr=False)
+    # BRIDGE_SSE_TRACE 显式提供过值时置 True（部署层 / Worker CR spec.env
+    # 直供）——runtime.yaml 袋的 bridgeSseTrace 不得遮蔽，同 base_url 约定。
+    _explicit_sse_trace: bool = field(default=False, init=False, repr=False)
+    # BRIDGE_THREAD_PROCESS 显式 env 在场标记（袋值不得遮蔽）；镜像 YAML
+    # emitter 默认值快照（删键/置 0 的回退基线）；当前生效态 on/off
+    # （只在翻转时打 INFO 防每 turn 刷屏）。
+    _explicit_thread_process: bool = field(default=False, init=False, repr=False)
+    _emitter_yaml_defaults: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _thread_process_state: str = field(default="", init=False, repr=False)
     # 已见证过的 adapter 形态（自愈轮询变更检测用）
     _last_adapter_mode: str = field(default="", init=False, repr=False)
 
@@ -209,6 +267,16 @@ class BridgeApp:
         adapter_env = os.getenv("BRIDGE_RUNTIME_ADAPTER", "")
         base_url_env = os.getenv("BRIDGE_RUNTIME_BASE_URL", "")
         turn_timeout = os.getenv("BRIDGE_RUNTIME_TURN_TIMEOUT", "")
+        # SSE 逐帧日志开关若由部署层显式给出（Worker CR spec.env / 镜像层），
+        # 启动即在场——后续 runtime.yaml 袋值不得遮蔽（显式 env 优先）。
+        if os.getenv("BRIDGE_SSE_TRACE") is not None:
+            self._explicit_sse_trace = True
+        # thread 透出总开关：显式 env（spec.env / 部署层）启动即在场则最高
+        # 优先；镜像 YAML 默认值快照作删键/置 0 的回退基线。
+        self._snapshot_emitter_defaults()
+        if os.getenv("BRIDGE_THREAD_PROCESS") is not None:
+            self._explicit_thread_process = True
+            self._apply_thread_process(os.getenv("BRIDGE_THREAD_PROCESS", "").strip())
         if turn_timeout.isdigit() and int(turn_timeout) > 0:
             self.config.runtime.turn_timeout_seconds = int(turn_timeout)
         if adapter_env:
@@ -216,6 +284,45 @@ class BridgeApp:
         if base_url_env:
             self.config.runtime.base_url = base_url_env
             self._explicit_base_url = True
+
+    def _snapshot_emitter_defaults(self) -> None:
+        """镜像 YAML 的 emitter 默认值快照（幂等，首次调用生效）。
+
+        bridgeThreadProcess 袋键删除/置 0 后的回退基线。生产路径在
+        _apply_env_overrides 开头调用（config 必是 load_config 的 YAML
+        结果）；测试直接调 _apply_bridge_section 时兜底再快照一次。
+        """
+        if not self._emitter_yaml_defaults:
+            self._emitter_yaml_defaults = {
+                "thinking": self.config.emitter.thinking,
+                "tools": self.config.emitter.tools,
+            }
+
+    def _apply_thread_process(self, raw: str) -> None:
+        """bridgeThreadProcess 布尔 → emitter.thinking/tools 映射。
+
+        值域（对齐 bridgeSseTrace 风格）："1" = thinking+tools 都挂
+        thread；"0"/空/垃圾值 = 回退镜像 YAML 默认（hide/compact）。
+        消费口（handle_matrix_message 的 thinking_to_thread/
+        tools_to_thread）每 turn 重读 self.config——本方法随
+        _apply_bridge_section 每 turn 重应用，patch Worker CR
+        runtimeParameter 即热切生效，无需重启 pod。只在状态翻转时
+        打 INFO（防每 turn 刷屏）。
+        """
+        enabled = raw == "1"
+        if enabled:
+            self.config.emitter.thinking = "thread"
+            self.config.emitter.tools = "thread"
+        else:
+            self.config.emitter.thinking = self._emitter_yaml_defaults.get("thinking", "hide")
+            self.config.emitter.tools = self._emitter_yaml_defaults.get("tools", "compact")
+        state = "on" if enabled else "off"
+        if state != self._thread_process_state:
+            self._thread_process_state = state
+            logger.info(
+                "thread process relay %s (bridgeThreadProcess=%r)",
+                state, raw or "(absent)",
+            )
 
     def _apply_bridge_section(self, files: WorkerBootstrapConfig) -> None:
         """把 runtime.yaml bridge 段应用到 runtime 配置（不遮蔽显式 env）。
@@ -228,6 +335,10 @@ class BridgeApp:
         已知键（baseUrl/sessionId/sandboxId/templateId/eid，camel/snake 双认）
         抽到 RuntimeConfig 固定字段；追加键留袋不透传——参数面就是
         runtime.yaml 本身（新约定），后续平台需要新参数时先升已知键。
+
+        例外：排障开关 bridgeSseTrace 投射到 BRIDGE_SSE_TRACE env；
+        thread 透出总开关 bridgeThreadProcess 映射到
+        self.config.emitter.thinking/tools——均见下方。
         """
         section = files.runtime_bridge_section
         params = files.runtime_parameter
@@ -258,6 +369,28 @@ class BridgeApp:
         self.config.runtime.app_secret = binding("app_secret")
         self.config.runtime.api_key = binding("api_key")
         self.config.runtime.model = binding("model")
+
+        # ── SSE 逐帧日志开关（排障，已知键 bridgeSseTrace）─────────────
+        # 值 "1"/"0" 投射到 BRIDGE_SSE_TRACE env——adapter 逐帧日志的
+        # 消费口是 env（cimicode_stateless_adapter.submit）。本方法每 turn
+        # 重拉重应用，因此 patch Worker CR runtimeParameter 即可热切，
+        # 无需重启 pod。显式 env（Worker CR spec.env / 部署层）启动时
+        # 在场则不遮蔽。
+        if not self._explicit_sse_trace:
+            raw_trace = str(params.get("bridgeSseTrace") or "").strip()
+            os.environ["BRIDGE_SSE_TRACE"] = raw_trace
+
+        # ── thread 过程透出总开关（已知键 bridgeThreadProcess）─────────
+        # "1" = thinking+tools 挂 Element UI thread；"0"/删键 = 回退镜像
+        # YAML 默认。消费口是 self.config.emitter（handle_matrix_message
+        # 每 turn 重读）；本方法每 turn 重拉重应用，因此 patch Worker CR
+        # spec.runtimeParameter 即可热切，无需重启 pod（runtimeParameter
+        # 不进 spec hash 不滚 pod）。显式 env（BRIDGE_THREAD_PROCESS，
+        # spec.env / 部署层）启动时在场则不遮蔽。
+        if not self._explicit_thread_process:
+            self._snapshot_emitter_defaults()
+            raw_thread = str(params.get("bridgeThreadProcess") or "").strip()
+            self._apply_thread_process(raw_thread)
 
     def _resolve_adapter_mode(self) -> str:
         """adapter 形态判定（唯一权威顺序，bootstrap 与自愈轮询共用）。
@@ -408,8 +541,18 @@ class BridgeApp:
         return None
 
     def _build_state_store(self) -> Any:
-        """按配置选择 StateStore 后端：redis（无 URL 降级 memory）/ file / memory。"""
+        """按配置选择 StateStore 后端：s3（默认，无 FS env 降级 memory）/ redis（无 URL 降级 memory）/ file / memory。"""
         backend = self.config.store.backend
+        if backend == "s3":
+            if self.s3_bootstrap is not None:
+                # 部署指纹：homeserver + worker 名——存进信封，异环境旧
+                # token 读取时视为无（full_state 自愈），防毒化 sync 循环
+                scope = (
+                    f"{os.getenv('AGENTTEAMS_MATRIX_URL', '')}"
+                    f"|{os.getenv('AGENTTEAMS_WORKER_NAME', '')}"
+                )
+                return S3StateStore(self.s3_bootstrap, scope=scope)
+            logger.warning("S3 backend selected but AGENTTEAMS_FS_* env is missing; using memory")
         if backend == "redis":
             url = os.getenv(self.config.store.redis_url_env, "")
             if url:
@@ -734,6 +877,9 @@ class BridgeApp:
             "turn start event_id=%s adapter=%s user_message=%r",
             event_id, self.config.runtime.adapter, user_message[:300],
         )
+        # 过程透出开关每 turn 重读（bridgeThreadProcess 热切）
+        thinking_to_thread = self.config.emitter.thinking == "thread"
+        tools_to_thread = self.config.emitter.tools == "thread"
         try:
             # ---- agent.md 组装（worker-bridge 唯一路径：v2.4 生成器）----
             # 经 bridge 镜像内置的 generator 从 runtime.yaml + SOUL/PROFILE
@@ -761,47 +907,120 @@ class BridgeApp:
                 logger.info("agent.md generated bytes=%d (no S3 bootstrap; not published)", len(agent_md.encode("utf-8")))
 
             # ---- 调 adapter（Gateway v2：submit 回执 + SSE 订阅；pod：REST 轮询，统一返回 RuntimeEvent 列表）----
-            # 流式回复（方案 A，对齐 CoPaw 体验但无占位文案）：typing 期间
-            # 不发任何消息；SSE 首段完整叙述（TEXT_DONE）到达时发第一条
-            # 消息（内容即真实段落，同时作为 m.replace 编辑锚点），后续
-            # 段落到达节流编辑该消息为累积全文，终态编辑为权威全文。
-            # CoPaw 的"处理中..."占位在 bridge 场景多余：它需要占位是
-            # 为了给 reasoning/tool 过程挂 thread，bridge 无此需求，且
-            # typing 指示已是"正在处理"信号。
+            # 流式回复（方案 A）：typing 期间不发正文；SSE 首段完整叙述
+            # （TEXT_DONE）到达时发第一条 Matrix 消息（真实段落，兼作
+            # m.replace 编辑锚点），后续段落 2s 节流编辑为累积全文，终态
+            # 编辑为权威全文。thread 透出开启（emitter.thinking/tools =
+            # "thread"）时，思考链/工具调用作为过程事件挂到该 turn 消息的
+            # Matrix thread（Element UI 折叠区）；首个过程事件先于正文时
+            # 发"处理中..."占位作 thread 根兼流式锚点。
             stream_event_id: str | None = None    # 流式锚点消息 event_id
             streamed_parts: list[str] = []       # 已流式透出的段落
             last_edit = 0.0                       # 上次编辑时间（节流）
             EDIT_MIN_INTERVAL = 2.0               # 秒——防 m.replace 事件洪水
+            thread_root_id: str | None = None     # thread 根消息 event_id（占位或锚点）
+            root_filled = False                   # 占位是否已被真实正文填充
+            tool_names: dict[str, str] = {}       # callID → 工具名（结算帧回查）
 
-            async def _stream_edit(event: Any) -> None:
-                """TEXT_DONE 回调：首段建锚点，后续段落节流编辑累积全文。"""
-                nonlocal last_edit, stream_event_id
-                text = (event.text or "").strip()
-                if not text or text == "NO_REPLY":
-                    return
-                streamed_parts.append(text)
-                now = time.monotonic()
-                if stream_event_id is None:
-                    # 首段：直接发真实内容（锚点），无"处理中..."占位
-                    if self.matrix_gateway:
-                        stream_event_id = await self.matrix_gateway.send_text(
-                            room_id, text
-                        )
+            async def _on_stream_event(event: Any) -> None:
+                """流式回调：正文段落编辑锚点；过程事件挂 thread（开关开启时）。"""
+                nonlocal last_edit, stream_event_id, thread_root_id, root_filled
+                kind = event.kind
+                notice = False
+                if kind == RuntimeEventKind.TEXT_DONE:
+                    text = (event.text or "").strip()
+                    if not text or text == "NO_REPLY":
+                        return
+                    streamed_parts.append(text)
+                    now = time.monotonic()
+                    if stream_event_id is None:
+                        # 首段：直接发真实内容（锚点），无"处理中..."占位
+                        if self.matrix_gateway:
+                            stream_event_id = await self.matrix_gateway.send_text(
+                                room_id, text
+                            )
+                        last_edit = now
+                        return
+                    if thread_root_id == stream_event_id and not root_filled:
+                        # 占位首次填充：把"处理中..."编辑为首段正文（绕过节流）
+                        root_filled = True
+                        if self.matrix_gateway:
+                            await self.matrix_gateway.edit_message(
+                                room_id, stream_event_id, text
+                            )
+                        last_edit = now
+                        return
+                    if now - last_edit < EDIT_MIN_INTERVAL:
+                        return  # 节流窗口内——留给下次编辑或终态收尾
                     last_edit = now
+                    if stream_event_id and self.matrix_gateway:
+                        await self.matrix_gateway.edit_message(
+                            room_id, stream_event_id, "\n\n".join(streamed_parts)
+                        )
                     return
-                if now - last_edit < EDIT_MIN_INTERVAL:
-                    return  # 节流窗口内——留给下次编辑或终态收尾
-                last_edit = now
-                if stream_event_id and self.matrix_gateway:
-                    await self.matrix_gateway.edit_message(
-                        room_id, stream_event_id, "\n\n".join(streamed_parts)
+                if kind == RuntimeEventKind.REASONING_DONE:
+                    if not thinking_to_thread:
+                        return
+                    body = (event.text or "").strip()
+                    if not body:
+                        return
+                    notice = True  # m.notice 不触发通知
+                elif kind == RuntimeEventKind.TOOL_STARTED:
+                    if not tools_to_thread:
+                        return
+                    payload = (event.data or {}).get("data") or {}
+                    call_id = str(payload.get("callID") or "")
+                    tool = str(payload.get("tool") or event.text or "")
+                    if call_id and tool:
+                        tool_names[call_id] = tool
+                    body = _format_tool_thread_body(
+                        started=True, tool=tool, detail=payload.get("input")
+                    )
+                    if not body:
+                        return
+                elif kind == RuntimeEventKind.TOOL_FINISHED:
+                    if not tools_to_thread:
+                        return
+                    payload = (event.data or {}).get("data") or {}
+                    call_id = str(payload.get("callID") or "")
+                    failed = "tool.failed" in str((event.data or {}).get("type") or "")
+                    body = _format_tool_thread_body(
+                        started=False,
+                        tool=tool_names.get(call_id, ""),
+                        detail=event.text or "",
+                        failed=failed,
+                    )
+                    if not body:
+                        return
+                else:
+                    return
+                if self.matrix_gateway is None:
+                    return
+                if thread_root_id is None and stream_event_id is not None:
+                    # 正文锚点已存在（正文先于过程事件）→ 锚点即 thread 根
+                    thread_root_id = stream_event_id
+                    root_filled = True
+                if thread_root_id is None and stream_event_id is None:
+                    # 首个过程事件先于正文：发"处理中..."占位作 thread 根兼锚点
+                    thread_root_id = await self.matrix_gateway.send_text(
+                        room_id, "处理中...", content={"msgtype": "m.notice"}
+                    )
+                    if thread_root_id:
+                        stream_event_id = thread_root_id
+                        logger.info(
+                            "thread root placeholder room=%s event_id=%s",
+                            room_id, thread_root_id,
+                        )
+                if thread_root_id:
+                    await self.matrix_gateway.send_thread_text(
+                        room_id, thread_root_id, body, notice=notice
                     )
 
             events = await self.runtime_client.chat(
                 session_id=self.config.runtime.session_id,
                 agent_md=agent_md,
                 user_message=user_message,
-                on_event=_stream_edit if hasattr(self.runtime_client, "chat") else None,
+                on_event=_on_stream_event if hasattr(self.runtime_client, "chat") else None,
             )
             response_text = ""
             progress_texts: list[str] = []
@@ -817,10 +1036,21 @@ class BridgeApp:
                     # 失败可见化：告诉房间发生了什么，turn 可被重试
                     try:
                         reason = (event.text or "runtime error").strip()
-                        await self.matrix_gateway.send_text(
-                            room_id,
-                            f"**turn failed**: {reason}",
-                        )
+                        if (
+                            stream_event_id
+                            and thread_root_id == stream_event_id
+                            and not root_filled
+                        ):
+                            # 占位未被正文填充（纯过程 turn 失败）——直接把
+                            # 占位编辑为失败态，不残留"处理中..."
+                            await self.matrix_gateway.edit_message(
+                                room_id, stream_event_id, f"**turn failed**: {reason}"
+                            )
+                        else:
+                            await self.matrix_gateway.send_text(
+                                room_id,
+                                f"**turn failed**: {reason}",
+                            )
                     except Exception:
                         logger.exception("failed to report turn failure to room %s", room_id)
                     return
@@ -855,6 +1085,12 @@ class BridgeApp:
             else:
                 # NO_REPLY / 空回复：无锚点则什么都不发（typing 已是反馈）；
                 # 有锚点（流式已透出过段落但终态判定 NO_REPLY）则保留已发内容。
+                if stream_event_id and thread_root_id == stream_event_id and not root_filled:
+                    # 占位未被正文填充（纯过程 turn 无回复）——收口为
+                    # "已完成"（对齐 CoPaw），不残留"处理中..."
+                    await self.matrix_gateway.edit_message(
+                        room_id, stream_event_id, "已完成"
+                    )
                 logger.info("no reply event_id=%s (empty or NO_REPLY marker)", event_id)
             self.history_manager.clear(room_id)
             logger.info("turn completed event_id=%s elapsed=%.1fs", event_id, time.monotonic() - turn_started)

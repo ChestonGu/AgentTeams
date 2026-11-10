@@ -340,3 +340,68 @@ class RuntimeConfigFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OauthPrefixTests(unittest.TestCase):
+    """oauth/ read-only prefix: per-worker connector credentials.
+
+    Remote tree: agents/{worker_cr_name}/oauth/... (bucket root, no team
+    resolution). pull/stat/list allowed; push rejected before any mc call.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "oauth").mkdir()
+        (self.root / "oauth" / "yunxiao.yaml").write_text("env: {}\n", encoding="utf-8")
+        self.records: list = []
+        self.patcher = mock.patch.object(mc_sync, "_mc", fake_mc(self.records))
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+        self.env_patch = mock.patch.dict(os.environ)
+        self.env_patch.start()
+        os.environ.pop("AGENTTEAMS_RUNTIME", None)
+        os.environ.pop("AGENTTEAMS_TEAM", None)
+        self.addCleanup(self.env_patch.stop)
+        self.addCleanup(self._tmp.cleanup)
+
+    def fs(self, **overrides) -> McFileSync:
+        return make_fs(self.root, **overrides)
+
+    def remote(self, worker: str, tail: str = "yunxiao.yaml") -> str:
+        return f"{mc_sync._MC_ALIAS}/agentteams-storage/agents/{worker}/oauth/{tail}"
+
+    def test_oauth_pull_resolves_to_own_agent_dir(self) -> None:
+        resolved = self.fs().pull_shared_path("oauth/yunxiao.yaml")
+        self.assertEqual(resolved.kind, "oauth")
+        self.assertEqual(self.records[-1], ("cp", self.remote("worker-a"), str(self.root / "oauth" / "yunxiao.yaml")))
+
+    def test_oauth_directory_pull_mirrors(self) -> None:
+        resolved = self.fs().pull_shared_path("oauth/")
+        self.assertEqual(resolved.kind, "oauth")
+        self.assertEqual(self.records[-1], ("mirror", self.remote("worker-a", ""), str(self.root / "oauth") + "/", "--overwrite"))
+
+    def test_oauth_uses_worker_cr_name(self) -> None:
+        fs = self.fs(worker_name="display-name", worker_cr_name="cr-name")
+        fs.pull_shared_path("oauth/yunxiao.yaml")
+        self.assertEqual(self.records[-1][1], self.remote("cr-name"))
+
+    def test_oauth_push_rejected(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self.fs().push_shared_path("oauth/yunxiao.yaml")
+        self.assertIn("read-only", str(ctx.exception))
+        self.assertEqual(self.records, [])
+
+    def test_oauth_stat_targets_agent_dir(self) -> None:
+        self.fs().stat_shared_path("oauth/yunxiao.yaml")
+        self.assertEqual(self.records[-1], ("stat", self.remote("worker-a")))
+
+    def test_oauth_escape_rejected(self) -> None:
+        for bad in ("oauth/../secrets.yaml", "oauth/.."):
+            with self.assertRaises(ValueError):
+                self.fs().resolve_shared_path(bad)
+
+    def test_unknown_prefix_error_mentions_oauth(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self.fs().resolve_shared_path("secrets/token.yaml")
+        self.assertIn("oauth/", str(ctx.exception))

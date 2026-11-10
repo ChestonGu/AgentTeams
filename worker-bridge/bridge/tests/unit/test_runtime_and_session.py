@@ -224,8 +224,11 @@ def test_gateway_v2_dialect_official_schema_field_names():
                                 "data": {"reasoningID": "prt_r1", "assistantMessageID": "msg_1"}}})
     assert dialect.translate({"data": {"type": "session.next.reasoning.delta",
                                        "data": {"reasoningID": "prt_r1", "delta": "thinking..."}}}) == []
-    assert dialect.translate({"data": {"type": "session.next.reasoning.ended@1",
-                                       "data": {"reasoningID": "prt_r1", "text": "thinking... full"}}}) == []
+    reasoning_done = dialect.translate({"data": {"type": "session.next.reasoning.ended@1",
+                                                "data": {"reasoningID": "prt_r1", "text": "thinking... full"}}})
+    assert len(reasoning_done) == 1
+    assert reasoning_done[0].kind == RuntimeEventKind.REASONING_DONE
+    assert reasoning_done[0].text == "thinking... full"
     # text 三帧（官方字段名 textID）——只回放 ended（错过 live delta）
     dialect.translate({"data": {"type": "session.next.text.started@1",
                                 "data": {"textID": "prt_t1", "assistantMessageID": "msg_1"}}})
@@ -252,10 +255,13 @@ def test_gateway_v2_dialect_reasoning_excluded_from_reply():
     # reasoning delta：不产生正文事件（上层会把 TEXT_DELTA 拼进 response_text）
     assert dialect.translate({"data": {"type": "session.next.reasoning.delta",
                                        "data": {"partID": "r1", "delta": "Let me think..."}}}) == []
-    # reasoning ended 收口帧（part.type=reasoning）：不聚合
-    assert dialect.translate({"data": {"type": "message.part.updated",
-                                       "data": {"part": {"partID": "r1", "type": "reasoning",
-                                                         "text": "Let me think... full"}}}}) == []
+    # reasoning ended 收口帧（part.type=reasoning）：产出 REASONING_DONE（不聚合进正文）
+    reasoning_done = dialect.translate({"data": {"type": "message.part.updated",
+                                                "data": {"part": {"partID": "r1", "type": "reasoning",
+                                                                  "text": "Let me think... full"}}}})
+    assert len(reasoning_done) == 1
+    assert reasoning_done[0].kind == RuntimeEventKind.REASONING_DONE
+    assert reasoning_done[0].text == "Let me think... full"
     # 正文 text part 正常聚合
     dialect.translate({"data": {"type": "session.next.text.delta",
                                 "data": {"partID": "t1", "delta": "你好"}}})
@@ -276,14 +282,50 @@ def test_gateway_v2_dialect_reasoning_excluded_from_reply():
     assert "sneaky" not in completed.text
 
 
-def test_gateway_v2_dialect_failed_is_terminal_error():
-    """invocation.failed → RUNTIME_ERROR 且标记终态（服务端随后关闭是正常结束）。"""
+def test_dialect_error_frames_never_terminal():
+    """AIAGI-420：invocation.failed/error/session.error 一律非收线信号。
+
+    错误帧只 warning + 记录 last_error_message + 重置部分聚合，不置
+    terminal_seen、不产生 RUNTIME_ERROR，订阅继续消费；成功终态仍为
+    invocation.idle/yielded。
+    """
     dialect = GatewayV2Dialect()
-    failed = dialect.translate({"data": {"type": "invocation.failed",
-                                         "data": {"error": {"code": "Timeout", "message": "deadline exceeded"}}}})[0]
-    assert failed.kind == RuntimeEventKind.RUNTIME_ERROR
-    assert failed.text == "deadline exceeded"
+    variants = [
+        {"type": "invocation.failed", "data": {"error": {"code": "InfraRetry",
+                                                          "message": "provider stream interrupted"},
+                                                "retryable": True}},
+        {"type": "invocation.failed", "data": {"error": {"message": "hard failure"},
+                                                "retryable": False}},
+        {"type": "invocation.failed", "data": {"error": {"message": "no retryable field"}}},
+        {"type": "error", "data": {"message": "legacy error"}},
+        {"type": "session.error", "data": {"message": "legacy session error"}},
+    ]
+    for frame in variants:
+        # 先喂一个 delta，错误帧应把部分聚合重置
+        dialect.translate({"data": {"type": "session.next.text.delta",
+                                    "data": {"textID": "t1", "delta": "partial"}}})
+        assert dialect.translate({"data": frame}) == []
+        assert dialect.terminal_seen is False
+        assert dialect.parts == {} and dialect.part_order == []
+        assert dialect.last_error_message != ""
+    # 成功终态仍正常置位
+    completed = dialect.translate({"data": {"type": "invocation.idle",
+                                            "data": {"content": "done"}}})[0]
+    assert completed.kind == RuntimeEventKind.TURN_COMPLETED
     assert dialect.terminal_seen is True
+
+
+def test_dialect_error_frame_resets_partial_parts():
+    """错误帧重置半截生成：重试从头生成，旧文本不污染终态拼接。"""
+    dialect = GatewayV2Dialect()
+    dialect.translate({"data": {"type": "session.next.text.delta",
+                                "data": {"textID": "t1", "delta": "garbage"}}})
+    dialect.translate({"data": {"type": "invocation.failed",
+                                "data": {"error": {"message": "retry me"}}}})
+    dialect.translate({"data": {"type": "session.next.text.delta",
+                                "data": {"textID": "t1", "delta": "clean"}}})
+    done = dialect.translate({"data": {"type": "invocation.idle", "data": {}}})[0]
+    assert done.text == "clean"
 
 
 def test_probe_status_contains_runtime_summary():

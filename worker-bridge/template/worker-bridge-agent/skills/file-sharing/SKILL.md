@@ -36,6 +36,17 @@ Do not use in chat, task outputs, or normal reasoning:
 - `/root/agentteams-fs/...`
 - `/root/agentteams-fs/agents/...`
 
+## Path Prefixes
+
+| Prefix | Maps to (MinIO) | Mode | Use |
+|---|---|---|---|
+| `shared/...` | `teams/{team}/shared/...` | read/write | Task and team shared files |
+| `global-shared/...` | `shared/...` (bucket root) | read-only | Global shared assets |
+| `oauth/...` | `agents/<your-worker>/oauth/...` | **read-only** | This worker's own per-agent connector credentials, uploaded by the platform and bound to your owner |
+
+- `oauth/` supports pull / stat / list only — never push.
+- Never `cat` a credential file; consume it only through the owning skill's documented loader.
+
 ## Task Lifecycle Sync
 
 `taskflow ack {task-id}` and `taskflow submit {task-id}` handle all task lifecycle file sync internally (pull, push, stat). Do not call `agentteams-sync` separately for these operations.

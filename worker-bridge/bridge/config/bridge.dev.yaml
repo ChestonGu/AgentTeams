@@ -25,6 +25,14 @@ store:
   backend: memory
 emitter:
   markdown_html: true
+  # thinking/tools = "thread"：思考链与工具调用透出到该 turn 消息的
+  # Matrix thread（Element UI 折叠区），不再静默丢弃；"hide"/"compact"
+  # 保持旧行为。两者独立开关。
+  # 运维主通道（热切，无需改镜像）：patch Worker CR
+  #   spec.runtimeParameter.bridgeThreadProcess: "1"
+  # → controller 投影 runtime.yaml → bridge 下一 turn 生效（thinking+tools
+  # 同时开）；置 "0" 或删键回退本文件默认。显式 env BRIDGE_THREAD_PROCESS
+  # （spec.env）优先级最高但会滚 pod。
   thinking: "hide"
   tools: "compact"
 

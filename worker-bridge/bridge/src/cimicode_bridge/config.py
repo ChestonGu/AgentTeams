@@ -67,15 +67,25 @@ class RuntimeConfig(BaseModel):
 
 
 class EmitterConfig(BaseModel):
-    """出站消息策略配置（部分字段当前未接线，为生产化预留）。"""
+    """出站消息策略配置。
+
+    thinking / tools 取值：
+    - "hide"/"compact"（默认）：旧行为——思考链/工具过程不进 Matrix；
+    - "thread"：思考链/工具调用透出到该 turn 消息的 Matrix thread
+      （Element UI 折叠区），对齐 CoPaw 占位模式。
+
+    运维热切通道：patch Worker CR ``spec.runtimeParameter.bridgeThreadProcess``
+    （"1" 同时置 thinking+tools 为 thread，"0"/删键回退镜像 YAML 默认）；
+    显式 env ``BRIDGE_THREAD_PROCESS`` 在场时优先级最高。
+    """
 
     no_reply_mode: str = "trim"                        # NO_REPLY 识别方式
     streaming_mode: str = "complete"                   # complete/chunked/throttled
     throttle_seconds: int = 3
     min_chunk_chars: int = 40
     markdown_html: bool = True                         # Markdown 渲染开关
-    thinking: str = "hide"                             # thinking 展示策略
-    tools: str = "compact"                             # 工具调用展示策略
+    thinking: str = "hide"                             # thinking 展示策略：hide / thread
+    tools: str = "compact"                             # 工具调用展示策略：compact / thread
     components: str = "placeholder"                    # 组件展示策略
     three_layer_mention: bool = True                   # 三层 mention 开关
 
@@ -89,7 +99,10 @@ class SystemPromptConfig(BaseModel):
 class StoreConfig(BaseModel):
     """StateStore 后端配置。"""
 
-    backend: str = "memory"                            # memory / file / redis
+    # s3（默认）：since 等状态持久化到 MinIO agents/<w>/state/，pod 重启
+    # 增量续传、不重放已处理消息；无 AGENTTEAMS_FS_* env（本地开发）时
+    # app._build_state_store 自动降级 memory。
+    backend: str = "s3"                                # s3 / memory / file / redis
     redis_url_env: str = "BRIDGE_REDIS_URL"            # redis 连接串的 env 名
 
 

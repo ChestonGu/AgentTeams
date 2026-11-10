@@ -220,6 +220,44 @@ class MatrixGateway:
         event_id = getattr(response, "event_id", None)
         return str(event_id) if event_id else None
 
+    async def send_thread_text(
+        self,
+        room_id: str,
+        root_event_id: str,
+        body: str,
+        *,
+        notice: bool = False,
+    ) -> str | None:
+        """在指定 thread 根下发送过程消息（思考链/工具调用透出用）。
+
+        ``m.relates_to`` 采用 ``rel_type=m.thread`` + ``is_falling_back=False``
+        （对齐 CoPaw：不做 in_reply_to 回退）。过程消息剥离 ``m.mentions``——
+        工具输出里出现的完整 MXID（"@xxx"）不触发通知。thread 过程消息
+        丢失不致命（发送失败降级 debug 返回 None）。
+        """
+        message = render_matrix_message(body)
+        if notice:
+            message["msgtype"] = "m.notice"
+        message.pop("m.mentions", None)
+        message["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": root_event_id,
+            "is_falling_back": False,
+        }
+        try:
+            response = await self.client.room_send(
+                room_id,
+                "m.room.message",
+                message,
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            # thread 过程消息丢失不致命（下次过程事件或最终回复兜底）
+            logger.debug("send_thread_text(%s) failed: %s", root_event_id, exc)
+            return None
+        event_id = getattr(response, "event_id", None)
+        return str(event_id) if event_id else None
+
     async def edit_message(self, room_id: str, event_id: str, body: str) -> None:
         """编辑已发送的消息（Matrix m.replace 协议，对齐 CoPaw thread-root 编辑）。
 

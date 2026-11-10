@@ -149,21 +149,34 @@ class GatewayV2Dialect:
     envelope 契约（Gateway SseEventForwarder 原样转发 cimicode turn/1 帧）：
     ``{kind, sid, inv, epoch, seq, type, data, rev?, eventID?}``。
     事件名取 envelope 的 ``type``（如 ``session.next.text.delta@`` 带版本
-    命名）；终态 = ``invocation.idle / yielded / failed``（互斥且恰一次，
-    终态帧后服务端主动关闭连接——这是正常结束，不是断流）。
+    命名）。成功终态 = ``invocation.idle / yielded``（置 terminal_seen）。
+    **错误帧（``invocation.failed / error / session.error``）一律不是订阅的
+    收线信号**（AIAGI-420，与网关确认 2026-10-20，retryable 与否不看）：
+    网关侧负责重试（InfraRetry 以 ``attempt.restarted`` 续跑同一连接）与
+    终局（``session.end`` 关流）；方言对错误帧 warning + 记录
+    ``last_error_message`` + 重置部分聚合后继续消费——turn 的失败在流结束
+    时由"未见成功终态"判定，原始错误经 ``last_error_message`` 归因。
     """
 
     name = "gateway-v2"
 
-    # 终态 type 集合（turn/1 契约 §7）
-    TERMINAL_TYPES = {"invocation.idle", "invocation.yielded", "invocation.failed"}
+    # 成功终态 type 集合（turn/1 契约 §7；错误帧不收线，见类 docstring）
+    TERMINAL_TYPES = {"invocation.idle", "invocation.yielded"}
 
     def __init__(self) -> None:
         self.parts: dict[str, str] = {}      # part_id → 已累积文本（仅正文 text part）
         self.part_order: list[str] = []      # part 首次出现顺序（终态按此拼接）
         self._closed_parts: set[str] = set() # 已收口（ended）的 part，后续 delta 不再追加
         self._reasoning_parts: set[str] = set()  # reasoning part 的 id 集合——不进正文聚合
-        self.terminal_seen = False          # 是否已见终态帧
+        self.terminal_seen = False          # 是否已见**成功**终态（idle/yielded；错误帧不再置位）
+        # 最后一条错误帧的 message（invocation.failed/error/session.error）——
+        # 流结束未见成功终态时作失败归因（网关负责重试与终局，bridge 只记录）
+        self.last_error_message = ""
+        # session.end 收口原因（AIAGI-420，2026-10-15 上线）：Completed /
+        # IDLE_TIMEOUT / INTERNAL_ERROR——空串 = 未见收口帧（流未关或裸断流）。
+        # 消费方（stateless chat）据此分流：Completed 无终态 = 理论异常
+        # fail-loud；其余未见终态 = 重订阅自愈。
+        self.session_end_reason = ""
 
     def is_terminal(self, event_type: str) -> bool:
         """终态判定（含 v0.1 遗留 done/error 兼容）。"""
@@ -176,6 +189,15 @@ class GatewayV2Dialect:
             envelope = {"value": envelope}
         event_type = str(envelope.get("type") or "")
         payload = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+
+        # ── Gateway 合成帧（kind="gateway"，AIAGI-420）：只解析 session.end
+        # 的收口原因；其余（turn.start / attempt.restarted /
+        # COMMIT_OUTPUT_FAILED 等）一律跳过不报错（网关文档 §5.1：必须
+        # 忽略未知 type——合成帧目录随版本演进）。
+        if str(envelope.get("kind") or "") == "gateway":
+            if event_type == "session.end":
+                self.session_end_reason = str(payload.get("reason") or "")
+            return []
 
         # reasoning part 识别：delta 帧的事件名自带 reasoning；ended 帧
         # （message.part.updated / session.next.text.ended@1）的 part 对象
@@ -228,13 +250,47 @@ class GatewayV2Dialect:
         elif event_type in {"invocation.failed", "error", "session.error"}:
             error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
             text = str(error.get("message") or payload.get("message") or payload.get("reason") or "")
-            kind = RuntimeEventKind.RUNTIME_ERROR
-            self.terminal_seen = True
+            # AIAGI-420 契约（与网关确认 2026-10-20）：这三类错误帧一律不是
+            # 订阅的收线信号，retryable 与否都不看——重试与终局都由网关侧
+            # 收口（InfraRetry 以 attempt.restarted 续跑，或终局失败后以
+            # session.end 关流）。bridge 在此只：warning + 记住最后错误
+            # （流结束时作失败归因）+ 重置部分聚合（当前生成作废，重试会
+            # 从头生成），然后继续消费。turn 的成败由流结束时的终态判定：
+            # 成功终态 = invocation.idle / yielded；未见成功终态 = 失败。
+            logger.warning(
+                "gateway error frame (stream continues): type=%s message=%s",
+                event_type, text or "(no message)",
+            )
+            self.last_error_message = text
+            self.parts.clear()
+            self.part_order.clear()
+            self._closed_parts.clear()
+            self._reasoning_parts.clear()
+            return []
         elif event_type == "session.next.tool.called@1":
             text = str(payload.get("tool") or "")
             kind = RuntimeEventKind.TOOL_STARTED
         elif event_type in {"session.next.tool.success@1", "session.next.tool.failed@1"}:
-            text = str(payload.get("output") or payload.get("error") or "")
+            # 契约 §4.11/§4.12：success 无 output 字段，主载体 content[].text
+            # （ToolContent[] MUST，file 条目跳过）→ result 兜底
+            # （provider-executed MAY）→ error.message；failed 取 error.message。
+            error_obj = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            content_text = ""
+            if isinstance(payload.get("content"), list):
+                content_text = "\n".join(
+                    str(item.get("text") or "")
+                    for item in payload["content"]
+                    if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+                )
+            result = payload.get("result")
+            text = str(
+                content_text
+                or payload.get("output")
+                or (result if result not in (None, "") else "")
+                or error_obj.get("message")
+                or payload.get("message")
+                or ""
+            )
             kind = RuntimeEventKind.TOOL_FINISHED
         elif event_type == "invocation.started":
             kind = RuntimeEventKind.TURN_STARTED
@@ -277,11 +333,19 @@ class GatewayV2Dialect:
         if kind == RuntimeEventKind.TURN_COMPLETED and not text:
             text = "\n".join(self.parts[part_id] for part_id in self.part_order)
         if is_reasoning and kind in {RuntimeEventKind.TEXT_DELTA, RuntimeEventKind.TEXT_DONE}:
-            # reasoning 增量/收口帧不产生正文事件——上层（app.py）会把
-            # TEXT_DELTA 拼进 response_text，思考链一旦透出就会混进回复
-            # 正文（实测：deepseek-v4-flash 的英文思考链拼在中文正文前）。
-            # 原文保留在 envelope（data 字段）里可诊断，不丢失。
-            return []
+            # reasoning 增量碎片丢弃（无意义，全文由 ended 帧携带）；收口帧
+            # 产出独立 REASONING_DONE 事件供上层 thread 透出——不进 parts
+            # 聚合，终态拼接仍只拼正文 text part，思考链不混回复正文不变。
+            if kind == RuntimeEventKind.TEXT_DELTA:
+                return []
+            return [
+                RuntimeEvent(
+                    seq=envelope.get("seq"),
+                    kind=RuntimeEventKind.REASONING_DONE,
+                    text=str(text),
+                    data=envelope,
+                )
+            ]
         return [
             RuntimeEvent(
                 seq=envelope.get("seq"),

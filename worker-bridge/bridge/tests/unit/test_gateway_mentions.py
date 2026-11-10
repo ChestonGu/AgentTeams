@@ -120,3 +120,39 @@ def test_multiple_mentions_deduped_in_order():
     asyncio.run(gateway.send_text(ROOM, "@admin @oct-lead @oct-lead 请复核"))
 
     assert client.sent[0][1]["m.mentions"]["user_ids"] == [ADMIN, LEAD]
+
+
+
+def test_send_thread_text_attaches_thread_relation_and_strips_mentions():
+    client = FakeNioClient([_Member(LEAD), _Member(OCW)])
+    gateway = _gateway(client)
+
+    event_id = asyncio.run(
+        gateway.send_thread_text(ROOM, "$root-1", "tool output for @oct-lead:x")
+    )
+
+    content = client.sent[0][1]
+    assert content["m.relates_to"] == {
+        "rel_type": "m.thread",
+        "event_id": "$root-1",
+        "is_falling_back": False,
+    }
+    assert "m.mentions" not in content
+    assert "@oct-lead:x" in content["body"]
+    assert event_id == "$sent-1"
+
+
+class _FailingClient(FakeNioClient):
+    async def room_send(self, room_id: str, etype: str, content: dict, **kwargs):
+        raise RuntimeError("matrix down")
+
+
+def test_send_thread_text_notice_and_send_failure_tolerated():
+    client = FakeNioClient()
+    gateway = _gateway(client)
+
+    asyncio.run(gateway.send_thread_text(ROOM, "$root-1", "thinking...", notice=True))
+    assert client.sent[0][1]["msgtype"] == "m.notice"
+
+    failing = _gateway(_FailingClient())
+    assert asyncio.run(failing.send_thread_text(ROOM, "$root-1", "boom")) is None

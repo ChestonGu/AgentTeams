@@ -13,6 +13,7 @@ class RuntimeEventKind(str, Enum):
     TURN_STARTED = "turn_started"            # turn 开始
     TEXT_DELTA = "text_delta"                # 文本增量
     TEXT_DONE = "text_done"                  # 一段文本完成（part 全量替换）
+    REASONING_DONE = "reasoning_done"        # 思考链 part 收口（全文；不进正文，供 thread 透出）
     TOOL_STARTED = "tool_started"            # 工具调用开始
     TOOL_FINISHED = "tool_finished"          # 工具调用结束
     ARTIFACT_PUBLISHED = "artifact_published"  # 产物发布
@@ -40,15 +41,3 @@ class MatrixMessage(BaseModel):
     body: str                  # 纯文本正文
     timestamp: int | None = None             # 服务器时间戳（毫秒）
     mentions: list[str] = Field(default_factory=list)  # 正文/结构化 mention 列表
-
-
-class MatrixMessage(BaseModel):
-    """入站 Matrix 文本消息的规范化表示。"""
-
-    event_id: str
-    room_id: str
-    sender: str
-    sender_display_name: str | None = None
-    body: str
-    timestamp: int | None = None
-    mentions: list[str] = Field(default_factory=list)
