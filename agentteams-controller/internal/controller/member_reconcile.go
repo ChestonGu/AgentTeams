@@ -499,10 +499,51 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("write inline configs: %w", err)
 	}
 
+	// Resolve the owning Team's collaboration mode. TeamReconciler projects
+	// direct-mode assets onto members, but this reconcile is otherwise
+	// team-agnostic: without the mode here, every worker reconcile would
+	// overwrite the direct AGENTS.md base and skill set back to taskflow
+	// (the two reconcilers fight, and the worker one always wins).
+	collaboration := ""
+	if m.TeamName != "" && d.DynamicClient != nil {
+		// A list failure (or a fake client missing the registered list kind in
+		// tests) must never break the member reconcile — it only means we
+		// cannot prove direct mode and keep the taskflow default.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Info("team list for collaboration panicked; defaulting to taskflow", "team", m.TeamName, "panic", r)
+				}
+			}()
+			teamGVR := schema.GroupVersionResource{Group: "agentteams.io", Version: "v1beta1", Resource: "teams"}
+			teamList, err := d.DynamicClient.Resource(teamGVR).Namespace(m.Namespace).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				logger.Info("list teams for collaboration failed; defaulting to taskflow", "team", m.TeamName, "error", err)
+				return
+			}
+			for _, item := range teamList.Items {
+				spec, _, _ := unstructured.NestedMap(item.Object, "spec")
+				runtimeName, _, _ := unstructured.NestedString(spec, "teamName")
+				if runtimeName == "" {
+					runtimeName = item.GetName()
+				}
+				if runtimeName != m.TeamName {
+					continue
+				}
+				mode, _, _ := unstructured.NestedString(spec, "collaboration")
+				if mode == v1beta1.CollaborationDirect {
+					collaboration = v1beta1.CollaborationDirect
+				}
+				break
+			}
+		}()
+	}
+
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
 		Name:           m.RuntimeName,
 		Spec:           m.Spec,
 		Role:           m.Role.String(),
+		Collaboration:  collaboration,
 		MatrixToken:    state.ProvResult.MatrixToken,
 		GatewayKey:     state.ProvResult.GatewayKey,
 		MatrixPassword: state.ProvResult.MatrixPassword,
