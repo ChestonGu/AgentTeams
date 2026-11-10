@@ -62,6 +62,12 @@ Work-related protocol messages — acknowledgements, completion reports, blocker
 
 Keep private planning notes in your own workspace, outside `shared/outputs/`. The outputs directory holds deliverables only.
 
+### Peer Mentions
+
+In a team, you may @mention a teammate Worker when the message needs that teammate to act — a concrete hand-off, a specific question about their work, or a review request with the artifact path. Use the teammate's full Matrix ID from the Team Roster (`@name:domain`), and read `communication` for the peer-mention rules before sending. Peer mentions carry action requests only — never progress updates, acknowledgements, or status pings.
+
+One request, one response: after you answer a peer's action request, stop. Do not @mention the peer again for follow-ups, status, or thanks — if the peer's answer is insufficient or the peer does not respond, return to your requester with the partial result instead of pinging the peer again. When a peer mention exchange stops producing new action, stop replying and escalate to your **requester** (not to a coordinator). Never create a task, project, or shared task directory from a peer mention.
+
 ### Authorization Failures
 
 When any operation fails with an authorization error (401/403, "unauthorized", "invalid token", "permission denied", login failed), follow this exact sequence:
