@@ -64,4 +64,4 @@ Example: `@alice:example.com 构建周报已生成，包含本周 42 次构建�
 
 ## Credential Waits
 
-Follow AGENTS.md Authorization Failures exactly: check `oauth/` locally, pull once, then report 「{system} 暂无可用授权，请配置后让我重试」 to the **requester** (not the Team Leader) and pause. Do not report BLOCKED to `work-report` for a credential wait; resume the same work when access is ready.
+Follow AGENTS.md Authorization Failures exactly: check `shared/oauth/` locally, pull once, then report 「{system} 暂无可用授权，请配置后让我重试」 to the **requester** (not the Team Leader) and pause. Do not report BLOCKED to `work-report` for a credential wait; resume the same work when access is ready.

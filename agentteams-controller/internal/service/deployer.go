@@ -735,14 +735,7 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	}
 
 	tmplName := "SOUL.md.tmpl"
-	if req.Collaboration == v1beta1.CollaborationDirect {
-		// Direct leaders get the task-free persona; the stock template would
-		// re-teach task decomposition and delegation every reconcile.
-		if _, statErr := os.Stat(filepath.Join(d.builtinAgentDir("team_leader", ""), "SOUL-direct.md.tmpl")); statErr == nil {
-			tmplName = "SOUL-direct.md.tmpl"
-		}
-	}
-	tmplPath := filepath.Join(d.builtinAgentDir("team_leader", ""), tmplName)
+	tmplPath := filepath.Join(d.builtinAgentDirFor("team_leader", "", req.Collaboration), tmplName)
 	tmplData, err := os.ReadFile(tmplPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1399,11 +1392,7 @@ func redactPackageURI(raw string) string {
 // coordination context in a single OSS read-write cycle.
 func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, teamAdminDisplayName, selfDisplayName string, teamCoordinators []agentconfig.TeamCoordinatorInfo, inlineAgents string, collaboration string) error {
 	logger := log.FromContext(ctx)
-	builtinName := "AGENTS.md"
-	if collaboration == v1beta1.CollaborationDirect {
-		builtinName = "AGENTS-direct.md"
-	}
-	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), builtinName)
+	builtinPath := filepath.Join(d.builtinAgentDirFor(role, runtime, collaboration), "AGENTS.md")
 	builtinContent, err := os.ReadFile(builtinPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read builtin AGENTS.md: %w", err)
@@ -1506,28 +1495,47 @@ func (d *Deployer) pushBuiltinSkills(ctx context.Context, workerName, agentPrefi
 			log.FromContext(ctx).Error(err, "stale skill cleanup failed (non-fatal)", "skill", name, "worker", workerName)
 		}
 	}
-	skillsDir := filepath.Join(d.builtinAgentDir(role, runtime), "skills")
+
+	// Mode-specific directory first (direct: only direct-work; taskflow: the
+	// full taskflow set including protocol skills).
+	modeSkip := map[string]bool(nil)
+	if collaboration != v1beta1.CollaborationDirect {
+		modeSkip = map[string]bool{"direct-work": true}
+	}
+	if err := d.pushSkillDirFiltered(ctx, filepath.Join(d.builtinAgentDirFor(role, runtime, collaboration), "skills"), agentPrefix, modeSkip); err != nil {
+		return err
+	}
+	if collaboration == v1beta1.CollaborationDirect {
+		// Direct mode additionally ships the shared skills from the taskflow
+		// directory, minus the task-protocol group — one shared copy, no
+		// duplicated files to drift apart.
+		sharedDir := filepath.Join(d.builtinAgentDir(role, runtime), "skills")
+		if err := d.pushSkillDirFiltered(ctx, sharedDir, agentPrefix, map[string]bool{
+			"task-management": true, "project-management": true, "team-coordination": true,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pushSkillDirFiltered pushes every skill subdirectory of skillsDir to the
+// worker OSS prefix, skipping names in skip. A nil/empty directory is a
+// no-op (that role/runtime ships no builtin skills).
+func (d *Deployer) pushSkillDirFiltered(ctx context.Context, skillsDir, agentPrefix string, skip map[string]bool) error {
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // no builtin skills for this role/runtime
+			return nil
 		}
 		return err
 	}
-
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		skillName := entry.Name()
-		// Collaboration-mode skill gating: direct teams get direct-work
-		// instead of the task protocol skills (and vice versa) so a removed
-		// protocol is neither taught nor shipped to the agent workspace.
-		if collaboration == v1beta1.CollaborationDirect {
-			if skillName == "task-management" || skillName == "project-management" || skillName == "team-coordination" {
-				continue
-			}
-		} else if skillName == "direct-work" {
+		if skip != nil && skip[skillName] {
 			continue
 		}
 		src := skillsDir + "/" + skillName
@@ -1579,7 +1587,7 @@ func (d *Deployer) pushDirWithCompare(ctx context.Context, srcDir, dstPrefix str
 }
 
 func (d *Deployer) pushBuiltinTopLevelFiles(ctx context.Context, workerName, agentPrefix, role, runtime, collaboration string) error {
-	agentDir := d.builtinAgentDir(role, runtime)
+	agentDir := d.builtinAgentDirFor(role, runtime, collaboration)
 	for _, name := range []string{"HEARTBEAT.md"} {
 		ossKey := agentPrefix + "/" + name
 		srcName := name
@@ -1636,6 +1644,25 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 		}
 		return d.workerAgentDir
 	}
+}
+
+// builtinAgentDirFor returns the collaboration-mode-specific template
+// directory. Direct-mode assets live in their own sibling directories
+// (copaw-worker-agent-direct / team-leader-agent-direct) so the two modes
+// never share a template file. Runtimes without a direct variant (hermes,
+// openclaw, plain worker-agent) fall back to the taskflow directory.
+func (d *Deployer) builtinAgentDirFor(role, runtime, collaboration string) string {
+	if collaboration == v1beta1.CollaborationDirect {
+		switch role {
+		case "team_leader":
+			return filepath.Join(filepath.Dir(d.workerAgentDir), "team-leader-agent-direct")
+		default:
+			if runtime == "copaw" {
+				return filepath.Join(filepath.Dir(d.workerAgentDir), "copaw-worker-agent-direct")
+			}
+		}
+	}
+	return d.builtinAgentDir(role, runtime)
 }
 
 // mergeUserPluginConfig preserves user-customized plugin entries from an

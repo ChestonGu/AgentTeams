@@ -87,7 +87,7 @@ DEFAULT_TEMPLATE = os.path.join(
     "template", "worker-bridge-agent", "AGENTS.md")
 DIRECT_TEMPLATE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..",
-    "template", "worker-bridge-agent", "AGENTS-direct.md")
+    "template", "worker-bridge-agent-direct", "AGENTS.md")
 
 PLACEHOLDER_COORDINATION = "{{COORDINATION}}"
 PLACEHOLDER_ENVIRONMENT = "{{ENVIRONMENT}}"

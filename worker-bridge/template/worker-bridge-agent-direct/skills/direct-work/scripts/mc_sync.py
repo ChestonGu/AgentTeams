@@ -248,7 +248,6 @@ class McFileSync:
         local_dir: Optional[Path] = None,
         shared_dir: Optional[Path] = None,
         global_shared_dir: Optional[Path] = None,
-        oauth_dir: Optional[Path] = None,
     ) -> None:
         self.endpoint = (endpoint or "").rstrip("/")
         self.access_key = access_key
@@ -261,7 +260,6 @@ class McFileSync:
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.shared_dir = shared_dir or self.local_dir / "shared"
         self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"
-        self.oauth_dir = oauth_dir or self.local_dir / "oauth"
         self._alias_set = False
         runtime = os.environ.get("AGENTTEAMS_RUNTIME")
         self._cloud_mode = runtime == "aliyun"
@@ -382,17 +380,6 @@ class McFileSync:
         """Return the MinIO remote path for global-shared/ directory."""
         return f"{_MC_ALIAS}/{self.bucket}/shared/"
 
-    def _get_oauth_remote(self) -> str:
-        """Return the MinIO remote path for this worker's per-agent oauth/ directory.
-
-        Per-worker connector credentials uploaded by operators to the
-        bucket-root per-agent tree (agents/{worker}/oauth/ — same tree as the
-        worker's runtime.yaml and skills/). Each worker pulls only its own
-        credential directory. Read-only by contract — push is rejected in
-        push_shared_path.
-        """
-        return f"{_MC_ALIAS}/{self.bucket}/agents/{self.worker_cr_name}/oauth/"
-
     # -- path resolution ---------------------------------------------------
 
     def resolve_shared_path(self, path: str) -> SharedPath:
@@ -432,24 +419,7 @@ class McFileSync:
                     remote += "/"
             return SharedPath("global-shared", subpath, local, remote)
 
-        if parts[0] == "oauth":
-            # Per-worker connector credentials (uploaded to the bucket-root
-            # per-agent tree agents/{self}/oauth/). Read-only: push is
-            # rejected in push_shared_path.
-            subpath = "/".join(parts[1:])
-            local = (
-                self.oauth_dir.joinpath(*parts[1:])
-                if len(parts) > 1
-                else self.oauth_dir
-            )
-            remote = self._get_oauth_remote()
-            if subpath:
-                remote = f"{remote}{subpath}"
-                if raw.endswith("/"):
-                    remote += "/"
-            return SharedPath("oauth", subpath, local, remote)
-
-        raise ValueError("path must start with shared/, global-shared/, or oauth/")
+        raise ValueError("path must start with shared/ or global-shared/")
 
     # -- public API ---------------------------------------------------------
 
@@ -483,8 +453,6 @@ class McFileSync:
         resolved = self.resolve_shared_path(path)
         if resolved.kind == "global-shared":
             raise ValueError("global-shared/ is read-only")
-        if resolved.kind == "oauth":
-            raise ValueError("oauth/ is read-only (per-worker credentials managed by the platform)")
         if not resolved.local.exists():
             raise FileNotFoundError(f"local path does not exist: {resolved.local}")
 
@@ -557,7 +525,6 @@ def filesync_from_env(root: Path) -> McFileSync:
         local_dir=root,
         shared_dir=root / "shared",
         global_shared_dir=root / "global-shared",
-        oauth_dir=root / "oauth",
     )
 
 

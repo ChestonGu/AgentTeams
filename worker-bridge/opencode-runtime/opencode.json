@@ -2,6 +2,6 @@
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
   "skills": {
-    "paths": ["/opt/agentteams/skills"]
+    "paths": ["/opt/agentteams/skills-taskflow"]
   }
 }

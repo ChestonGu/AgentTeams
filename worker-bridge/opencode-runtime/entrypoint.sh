@@ -50,14 +50,12 @@ if [ "$COLLAB" = "direct" ]; then
     if [ -f /usr/local/bin/taskflow ]; then
         mv /usr/local/bin/taskflow /opt/agentteams/taskflow.disabled
     fi
-    SKILL_PATHS="["
-    first=1
-    for d in /opt/agentteams/skills/*/; do
+    # direct = 专属目录（direct-work）+ taskflow 目录中的通用 skill（排除 task-management）
+    SKILL_PATHS="[\"/opt/agentteams/skills-direct\""
+    for d in /opt/agentteams/skills-taskflow/*/; do
         name="${d%/}"; name="${name##*/}"
         [ "$name" = "task-management" ] && continue
-        [ "$first" = "1" ] || SKILL_PATHS="$SKILL_PATHS,"
-        SKILL_PATHS="$SKILL_PATHS\"/opt/agentteams/skills/$name\""
-        first=0
+        SKILL_PATHS="$SKILL_PATHS,\"/opt/agentteams/skills-taskflow/$name\""
     done
     SKILL_PATHS="$SKILL_PATHS]"
     cat > "$CFG_DIR/opencode.json" <<EOF
@@ -70,7 +68,7 @@ if [ "$COLLAB" = "direct" ]; then
 }
 EOF
     touch "$MODE_MARK"
-    echo "[opencode] direct collaboration: task-management skill removed, taskflow wrapper disabled"
+    echo "[opencode] direct collaboration: skills-direct only, taskflow wrapper disabled"
 else
     if [ -f /opt/agentteams/taskflow.disabled ]; then
         mv /opt/agentteams/taskflow.disabled /usr/local/bin/taskflow

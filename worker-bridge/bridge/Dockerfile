@@ -17,9 +17,9 @@ RUN pip install --no-cache-dir .
 COPY worker-bridge/bridge/generate_agent_md.py /opt/agenttools/generate_agent_md.py
 COPY worker-bridge/bridge/agentteams_log.py /opt/agenttools/agentteams_log.py
 COPY worker-bridge/template/worker-bridge-agent/AGENTS.md /opt/template/worker-bridge-agent/AGENTS.md
-# Direct-collaboration variant: the generator picks it when runtime.yaml
-# team.collaboration=direct (same relative <script_dir>/../template pairing).
-COPY worker-bridge/template/worker-bridge-agent/AGENTS-direct.md /opt/template/worker-bridge-agent/AGENTS-direct.md
+# Direct-collaboration variant lives in its own template directory: the
+# generator picks it when runtime.yaml team.collaboration=direct.
+COPY worker-bridge/template/worker-bridge-agent-direct/AGENTS.md /opt/template/worker-bridge-agent-direct/AGENTS.md
 ENV BRIDGE_GENERATOR_PATH=/opt/agenttools/generate_agent_md.py
 
 # sed strips any CR characters: a CRLF shebang (#!/bin/sh\r) fails exec with

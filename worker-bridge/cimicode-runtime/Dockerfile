@@ -83,13 +83,14 @@ COPY worker-bridge/cimicode-runtime/entrypoint.sh /opt/agentteams/entrypoint.sh
 RUN sed -i "s|\r$||" /opt/agentteams/entrypoint.sh \
     && chmod +x /opt/agentteams/entrypoint.sh
 
-# ── 2. skills 全套 + 协作协议 CLI（全局命令包装到 PATH）──────────────────
-COPY worker-bridge/template/worker-bridge-agent/skills /opt/agentteams/skills
-RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/task-management/scripts/taskflow.py "$@"\n' > /usr/local/bin/taskflow \
-    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
-    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills/direct-work/scripts/work_report.py "$@"\n' > /usr/local/bin/work-report \
+# ── 2. skills 按模式分目录 + 协作协议 CLI（全局命令包装到 PATH）─────────────
+COPY worker-bridge/template/worker-bridge-agent/skills /opt/agentteams/skills-taskflow
+COPY worker-bridge/template/worker-bridge-agent-direct/skills /opt/agentteams/skills-direct
+RUN printf '#!/bin/sh\nexec python3 /opt/agentteams/skills-taskflow/task-management/scripts/taskflow.py "$@"\n' > /usr/local/bin/taskflow \
+    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills-taskflow/file-sharing/scripts/agentteams_sync.py "$@"\n' > /usr/local/bin/agentteams-sync \
+    && printf '#!/bin/sh\nexec python3 /opt/agentteams/skills-direct/direct-work/scripts/work_report.py "$@"\n' > /usr/local/bin/work-report \
     && chmod +x /usr/local/bin/taskflow /usr/local/bin/agentteams-sync /usr/local/bin/work-report \
-    && chmod +x /opt/agentteams/skills/*/scripts/*.py || true
+    && find /opt/agentteams -path '*/scripts/*.py' -exec chmod +x {} +
 
 # ── 3. 约定 ──────────────────────────────────────────────────────────────
 # OPENCODE_PERMISSION：headless 全放行。未匹配权限的默认 action 是 ask
