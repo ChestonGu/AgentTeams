@@ -15,6 +15,8 @@ Task protocol — acknowledgements, TASK_COMPLETED, blockers, questions, and cre
 
 Your coordinator is the sender of the current task assignment message. Use that Matrix ID directly for @mentions. Do not call `organization` to look up your coordinator during standard task flows.
 
+**Direct-collaboration teams** (`collaboration: direct`): there is no task protocol and no coordinator. The member you report to is the **requester** — the member who @mentioned you with the work (the sender of the current request message). Never report to the Team Leader unless the Team Leader was the one who @mentioned you; the Team Leader is a regular member in this mode.
+
 ## @Mention Rules
 
 Use a full Matrix ID when the recipient must act.
@@ -31,6 +33,8 @@ Mention your coordinator only for:
 - Blocker: `@coordinator:domain BLOCKED: <what is blocking you>`
 - Question: `@coordinator:domain QUESTION: <your question>`
 - Direct answer to a coordinator question
+
+In a **direct-collaboration team** the same four cases target the **requester** instead: completion reports, blockers, questions, and answers all go to the requester's full Matrix ID in the Team Room, with no task-ID prefix — one short message with the outcome and the shared-relative deliverable paths.
 
 Do not @mention for:
 
