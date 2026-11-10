@@ -36,7 +36,7 @@ RUNTIME_DIRECT = os.path.join(FIXTURES, "runtime-direct.yaml")
 GOLDEN_TEAM = os.path.join(FIXTURES, "golden-team.md")
 GOLDEN_STANDALONE = os.path.join(FIXTURES, "golden-standalone.md")
 GOLDEN_DIRECT = os.path.join(FIXTURES, "golden-direct.md")
-DIRECT_TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent", "AGENTS-direct.md")
+DIRECT_TEMPLATE = os.path.join(REPO, "template", "worker-bridge-agent-direct", "AGENTS.md")
 DATE = "2026-09-03"
 
 SOUL_TEXT = "# SOUL\n\nYou are a meticulous backend engineer.\nPrefer minimal diffs.\n"
