@@ -56,7 +56,7 @@ Most assigned tasks move through these phases:
 
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current room. Do not use `taskflow` for that check, and do not treat it as low-information chatter.
 
-Protocol notifications — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages when you are in a team: deliver them to the Team Room with the @coordinator mention, never to a private room. Ordinary conversation (direct answers, clarifications) replies in the current session.
+Protocol notifications — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages when you are in a team: deliver them to the Team Room with the @coordinator mention, never to a private room. Ordinary conversation (direct answers, clarifications, Q&A) replies in the current session **with the current message sender's full Matrix ID mention** — the person who asked the question, not necessarily the coordinator. Every direct answer must @mention the asker by full Matrix ID; a reply without a mention does not notify them.
 
 Keep private planning notes under the task workspace. Do not create shared task-level plans.
 

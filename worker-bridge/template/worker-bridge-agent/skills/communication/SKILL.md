@@ -32,7 +32,7 @@ Mention your coordinator only for:
 - Task completion: `@coordinator:domain TASK_COMPLETED: <summary>`
 - Blocker: `@coordinator:domain BLOCKED: <what is blocking you>`
 - Question: `@coordinator:domain QUESTION: <your question>`
-- Direct answer to a coordinator question
+- Direct answer to the person who asked: ordinary conversation (direct answers, clarifications, Q&A) must @mention the **current message's sender** by their full Matrix ID — the person who asked the question, not necessarily the coordinator. Task-protocol reports (TASK_COMPLETED / BLOCKED / QUESTION / credential protocol sentences) still go to the coordinator (Team Leader). A direct answer without a mention does not notify the asker.
 
 In a **direct-collaboration team** the same four cases target the **requester** instead: completion reports, blockers, questions, and answers all go to the requester's full Matrix ID in the Team Room, with no task-ID prefix — one short message with the outcome and the shared-relative deliverable paths.
 

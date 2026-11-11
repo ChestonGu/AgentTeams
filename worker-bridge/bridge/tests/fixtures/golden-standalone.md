@@ -60,7 +60,7 @@ Most assigned tasks move through these phases:
 
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current session. Do not use `taskflow` for that check, and do not treat it as low-information chatter.
 
-Task protocol messages — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages: they belong in the Team Room conversation where the task was assigned, with the @coordinator mention. A private-room conversation carries direct Q&A only; do not carry task assignment or task reporting into it.
+Task protocol messages — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages: they belong in the Team Room conversation where the task was assigned, with the @coordinator mention. A private-room conversation carries direct Q&A only; do not carry task assignment or task reporting into it. **Every direct answer to a question (ordinary conversation, clarifications, Q&A) must @mention the person who asked by their full Matrix ID** — the current message's sender, not necessarily the coordinator; a reply without a mention does not notify the asker.
 
 Keep private planning notes under the task workspace. Do not create shared task-level plans.
 
