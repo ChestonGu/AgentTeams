@@ -60,9 +60,11 @@ Work requested by an @mention moves through these phases:
 | Report completion | Run `work-report completed --summary "<one sentence>" --deliverables <paths> --requester <requester-matrix-id>`. | `direct-work` |
 | Reply | Send one Team Room message @mentioning the requester: outcome summary + the shared-relative deliverable paths. | `communication` |
 
+**Every reply must @mention the requester by their full Matrix ID** (`@name:domain`) — including short Q&A answers, clarifications, and simple confirmations. The requester is the member who sent the message you are responding to (the current message's sender), never a default Team Admin or Team Leader. A reply without a mention does not notify the requester: they will not see your answer unless they watch the room. The mention is mandatory on every response, not optional.
+
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current session without the work-report steps, and do not treat it as low-information chatter.
 
-Work-related protocol messages — acknowledgements, completion reports, blockers, questions, and credential protocol sentences — are Team Room messages with the @requester mention. A private-room conversation carries direct Q&A only.
+Work-related protocol messages — acknowledgements, completion reports, blockers, questions, and credential protocol sentences — are Team Room messages with the @requester mention. A private-room conversation carries direct Q&A only, always with the requester's full Matrix ID mention.
 
 Keep private planning notes in your own workspace, outside `shared/outputs/`. The outputs directory holds deliverables only.
 
