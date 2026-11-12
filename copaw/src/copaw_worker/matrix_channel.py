@@ -169,6 +169,15 @@ HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]"
 CURRENT_MESSAGE_MARKER = "[Current message - respond to this]"
 DEFAULT_HISTORY_LIMIT = 50
 
+_DIRECT_ANSWER_REQUEST_RE = re.compile(
+    r"(?i)(?:[?？]|\b(?:answer|reply)\b|请(?:直接|只)?回答|直接回答|只回答|是否|吗(?:\s|[?？]|$))"
+)
+
+
+def _is_direct_answer_request(text: str) -> bool:
+    """Identify an inbound question/explicit answer request for reply fallback."""
+    return bool(_DIRECT_ANSWER_REQUEST_RE.search(text or ""))
+
 
 @dataclass
 class HistoryEntry:
@@ -1589,6 +1598,7 @@ class MatrixChannel(BaseChannel):
                 "worker_name": worker_name,
                 "event_id": event.event_id,
                 "sender_id": sender_id,
+                "direct_answer_requested": _is_direct_answer_request(command_text),
             },
         }
 
@@ -1821,6 +1831,14 @@ class MatrixChannel(BaseChannel):
         parts = native_payload.get("content_parts", [])
         meta = native_payload.get("meta", {})
         sender_id = native_payload.get("sender_id", "")
+        if sender_id:
+            # Direct answers in either collaboration mode must mention the
+            # requester; expose the sender MXID instead of hiding it in metadata.
+            # Task-protocol reports still follow the coordinator routing rules.
+            parts = list(parts) + [{
+                "type": "text",
+                "text": f"[Current message sender: {sender_id}]",
+            }]
         room_id = meta.get("room_id", sender_id)
         session_id = f"matrix:{room_id}"
 
@@ -1999,7 +2017,15 @@ class MatrixChannel(BaseChannel):
                 rerouted_room_id,
             )
             room_id = rerouted_room_id
-        self._apply_mention(content, room_id, explicit_mentions)
+        fallback_user_id = None
+        if (meta or {}).get("direct_answer_requested"):
+            fallback_user_id = (meta or {}).get("sender_id") or (meta or {}).get("user_id")
+        self._apply_mention(
+            content,
+            room_id,
+            explicit_mentions,
+            fallback_user_id=fallback_user_id,
+        )
 
         try:
             await self._client.room_send(

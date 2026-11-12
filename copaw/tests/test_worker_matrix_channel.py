@@ -196,3 +196,99 @@ def test_worker_channel_suppresses_no_reply(tmp_path, monkeypatch):
     asyncio.run(ch.send("!leader-dm:hs.local", "NO_REPLY"))
 
     assert ch._client.sent == []
+
+
+def _write_worker_collaboration_runtime(tmp_path, collaboration):
+    working_dir = tmp_path / "worker" / ".copaw"
+    runtime_dir = tmp_path / "worker" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: worker\n"
+        "team:\n"
+        f"  collaboration: {collaboration}\n",
+        encoding="utf-8",
+    )
+    return working_dir
+
+
+def _capture_agent_content_parts(ch):
+    captured = {}
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    ch.build_agent_request_from_user_content = capture
+    return captured
+
+
+def test_direct_request_exposes_current_sender_matrix_id(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "COPAW_WORKING_DIR",
+        str(_write_worker_collaboration_runtime(tmp_path, "direct")),
+    )
+    ch = _make_channel("@dag-team-1-dev:hs.local")
+    captured = _capture_agent_content_parts(ch)
+
+    ch.build_agent_request_from_native({
+        "sender_id": "@alice:hs.local",
+        "meta": {"room_id": "!room:hs.local"},
+        "content_parts": [{"type": "text", "text": "@dev 1+1?"}],
+    })
+
+    texts = [part.text for part in captured["content_parts"]]
+    assert texts == [
+        "@dev 1+1?",
+        "[Current message sender: @alice:hs.local]",
+    ]
+
+
+def test_taskflow_request_exposes_current_sender_for_direct_answers(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "COPAW_WORKING_DIR",
+        str(_write_worker_collaboration_runtime(tmp_path, "taskflow")),
+    )
+    ch = _make_channel("@dag-team-1-dev:hs.local")
+    captured = _capture_agent_content_parts(ch)
+
+    ch.build_agent_request_from_native({
+        "sender_id": "@alice:hs.local",
+        "meta": {"room_id": "!room:hs.local"},
+        "content_parts": [{"type": "text", "text": "@dev 1+1?"}],
+    })
+
+    texts = [part.text for part in captured["content_parts"]]
+    assert texts == [
+        "@dev 1+1?",
+        "[Current message sender: @alice:hs.local]",
+    ]
+
+
+def test_direct_answer_send_falls_back_to_current_sender():
+    ch = _make_channel("@dag-team-1-dev:hs.local")
+
+    asyncio.run(ch.send(
+        "!room:hs.local",
+        "2",
+        {"sender_id": "@alice:hs.local", "direct_answer_requested": True},
+    ))
+
+    content = ch._client.sent[0][2]
+    assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
+    assert "@alice:hs.local" in content["body"]
+    assert "matrix.to" in content["formatted_body"]
+
+
+def test_work_progress_does_not_auto_mention_current_sender():
+    ch = _make_channel("@dag-team-1-dev:hs.local")
+
+    asyncio.run(ch.send(
+        "!room:hs.local",
+        "Progress: wrote the file; next run tests.",
+        {"sender_id": "@alice:hs.local", "direct_answer_requested": False},
+    ))
+
+    content = ch._client.sent[0][2]
+    assert "m.mentions" not in content
