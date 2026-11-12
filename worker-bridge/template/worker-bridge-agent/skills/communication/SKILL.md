@@ -32,7 +32,7 @@ Mention your coordinator only for:
 - Task completion: `@coordinator:domain TASK_COMPLETED: <summary>`
 - Blocker: `@coordinator:domain BLOCKED: <what is blocking you>`
 - Question: `@coordinator:domain QUESTION: <your question>`
-- Direct answer to the person who asked: ordinary conversation (direct answers, clarifications, Q&A) must @mention the **current message's sender** by their full Matrix ID — the person who asked the question, not necessarily the coordinator. Task-protocol reports (TASK_COMPLETED / BLOCKED / QUESTION / credential protocol sentences) still go to the coordinator (Team Leader). A direct answer without a mention does not notify the asker.
+- Direct answer to the person who asked: ordinary conversation (direct answers, clarifications, Q&A) must @mention the **current message's sender** by their full Matrix ID — the person who asked the question, not necessarily the coordinator. Task-protocol reports (TASK_COMPLETED / BLOCKED / QUESTION / credential protocol sentences) still go to the coordinator (Team Leader). A direct answer without a mention does not notify the asker. Even when the user asks for only a value or a specific short string, include the full MXID mention; the formatting request does not cancel the notification.
 
 In a **direct-collaboration team** the same four cases target the **requester** instead: completion reports, blockers, questions, and answers all go to the requester's full Matrix ID in the Team Room, with no task-ID prefix — one short message with the outcome and the shared-relative deliverable paths.
 
@@ -43,8 +43,10 @@ Do not @mention for:
 - "Working on it"
 - Encouragement-only replies
 - Status symbols such as green dots or check marks
-- Short acknowledgments such as `ok`, `done`, `收到`, or `好的`
+- Standalone receipt acknowledgements such as `ok`, `done`, `收到`, or `好的` when they only confirm receipt
 - Mid-task progress that requires no decision
+
+Classify by conversational meaning, not by literal wording. If `done`, `收到`, `已完成`, or similar text answers the current question or provides the requested final outcome, treat it as a direct answer and @mention the current message's sender by their full Matrix ID. In a direct-collaboration team, that sender is the requester.
 
 Exception: when a new assigned task arrives, `task-management` requires you to directly say in the current session that you received the message before task acceptance work starts. Do not turn it into a progress thread, and do not send repeated acknowledgements for the same task.
 

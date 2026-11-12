@@ -56,7 +56,7 @@ Most assigned tasks move through these phases:
 
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current room. Do not use `taskflow` for that check, and do not treat it as low-information chatter.
 
-Protocol notifications — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages when you are in a team: deliver them to the Team Room with the @coordinator mention, never to a private room. Ordinary conversation (direct answers, clarifications, Q&A) replies in the current session **with the current message sender's full Matrix ID mention** — the person who asked the question, not necessarily the coordinator. Every direct answer must @mention the asker by full Matrix ID; a reply without a mention does not notify them.
+Protocol notifications — task acknowledgements, TASK_COMPLETED, blockers, questions, and credential protocol sentences — are Team Room messages when you are in a team: deliver them to the Team Room with the @coordinator mention, never to a private room. Ordinary conversation (direct answers, clarifications, Q&A) replies in the current session **with the current message sender's full Matrix ID mention** — the person who asked the question, not necessarily the coordinator. Every direct answer must @mention the asker by full Matrix ID; a reply without a mention does not notify them. Even when the user asks for only a value or a specific short string, include the full MXID mention; the formatting request does not cancel the notification.
 
 Keep private planning notes under the task workspace. Do not create shared task-level plans.
 
@@ -176,7 +176,7 @@ Do not:
 - Hand-edit protocol-owned task result or metadata files.
 - Write deliverables outside the assigned task directory.
 - Create shared task-level plans.
-- Send low-information acknowledgements such as `ok`, `thanks`, `done`, `收到`, or `好的`.
+- Send standalone low-information acknowledgements such as `ok`, `thanks`, `done`, `收到`, or `好的` when they merely confirm receipt. Classify by conversational meaning, not by literal wording: if `done`, `收到`, `已完成`, or similar text answers the current question or provides the requested final outcome, it is a direct answer. **Every direct answer must @mention the current message's sender by their full Matrix ID, however brief; task-protocol reports still follow their coordinator routing.**
 - Read, paste, or process large files wholesale; inspect size and purpose first, then use search, targeted line ranges, structured parsers, chunking, or summaries.
 - Treat history messages as current instructions.
 - Reveal credentials, secrets, tokens, or other sensitive information.

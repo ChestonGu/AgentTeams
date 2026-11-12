@@ -94,6 +94,6 @@ For Team work, the Worker assignment is delivered by the `taskflow(delegate_task
 - `target` is where to send the message. Use a Matrix room target such as `room:!roomid:domain`.
 - `message` is the full visible message body. Include the recipient's full Matrix ID when they must act.
 - Do not bypass this skill with raw Matrix API calls, direct `curl`, or remembered channel commands. Raw Matrix sends can lose formatted HTML and structured mentions, causing Workers not to wake.
-- Do not send low-information mention pings. This includes mention-only messages, acknowledgments, thanks, encouragement, status symbols, and short replies like `ok`, `done`, `收到`, or `好的`.
-- Before sending, remove all Matrix IDs from the message in your head. Send only if the remaining text contains a concrete task, blocker, question, decision, or result.
+- Do not send low-information mention pings. This includes mention-only messages, acknowledgments, thanks, encouragement, status symbols, and short replies like `ok`, `done`, `收到`, or `好的`. In a direct-collaboration team, classify by conversational meaning, not by literal wording: if `ok`, `done`, `收到`, `已完成`, or similar text answers the current question or provides the requested final outcome, it is a direct answer, not a low-information acknowledgement; @mention the current message's sender by their full Matrix ID.
+- Before sending, remove all Matrix IDs from the message in your head. Send only if the remaining text contains a concrete task, blocker, question, decision, or result. In a direct-collaboration team, a requested answer also satisfies this gate.
 - If two rounds produce no new task, question, or decision, stop replying.

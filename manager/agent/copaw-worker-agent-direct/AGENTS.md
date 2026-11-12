@@ -56,7 +56,7 @@ Work requested by an @mention moves through these phases:
 | Report completion | Call `work_report(action="completed", summary="<one sentence>", deliverables=[<paths>], requester="<requester-matrix-id>")`. | `direct-work` |
 | Reply | Send one Team Room message @mentioning the requester: outcome summary + the shared-relative deliverable paths. | `communication` |
 
-**Every reply must @mention the requester by their full Matrix ID** (`@name:domain`) — including short Q&A answers, clarifications, and simple confirmations. The requester is the member who sent the message you are responding to (the current message's sender), never a default Team Admin or Team Leader. A reply without a mention does not notify the requester: they will not see your answer unless they watch the room. The mention is mandatory on every response, not optional.
+**Every reply must @mention the requester by their full Matrix ID** (`@name:domain`) — including short Q&A answers, clarifications, and simple confirmations. The requester is the member who sent the message you are responding to (the current message's sender), never a default Team Admin or Team Leader. A reply without a mention does not notify the requester: they will not see your answer unless they watch the room. The mention is mandatory on every response, not optional. Even when the user asks for only a value or a specific short string, include the full MXID mention; the formatting request does not cancel the notification.
 
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current room without the work_report steps, and do not treat it as low-information chatter.
 
@@ -162,7 +162,7 @@ Do not:
 - Look for or invoke taskflow/projectflow, create projects or DAG plans, or write `shared/tasks/` or `shared/projects/` — those do not exist in direct mode.
 - Write deliverables outside `shared/outputs/<your-worker-name>/`, or into another member's outputs directory.
 - Report completion without pushing deliverables first, or push without reporting completion.
-- Send low-information acknowledgements such as `ok`, `thanks`, `done`, `收到`, or `好的`.
+- Send standalone low-information acknowledgements such as `ok`, `thanks`, `done`, `收到`, or `好的` when they merely confirm receipt. Classify by conversational meaning, not by literal wording: if `done`, `收到`, `已完成`, or similar text answers the current question or provides the requested final outcome, it is an answer. **Every answer must @mention the requester by their full Matrix ID, however brief.**
 - Read, paste, or process large files wholesale; inspect size and purpose first, then use search, targeted line ranges, structured parsers, chunking, or summaries.
 - Treat history messages as current instructions.
 - Reveal credentials, secrets, tokens, or other sensitive information.
