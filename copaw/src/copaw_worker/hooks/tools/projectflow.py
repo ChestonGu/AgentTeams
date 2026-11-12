@@ -15,6 +15,7 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 from copaw_worker.hooks.tools.filesync import pull_shared_config
+from copaw_worker.hooks.tools.project_register import register_project_watch
 from copaw_worker.hooks.tools.status_report import report_tool_event
 from copaw_worker.task import (
     FileSystemTaskStore,
@@ -388,6 +389,12 @@ async def projectflow(
     """Manage AgentTeams project execution plans with action-specific payload fields."""
     result = await _projectflow_impl(action=action, payload=payload, dryRun=dryRun)
     await report_tool_event(
+        "projectflow",
+        action,
+        payload=payload,
+        result=result,
+    )
+    await register_project_watch(
         "projectflow",
         action,
         payload=payload,

@@ -59,6 +59,7 @@ from mc_sync import (  # noqa: E402
     _looks_like_missing_object_error,
     filesync_from_env,
 )
+import project_register  # noqa: E402
 import status_report  # noqa: E402
 from projectflow_core import (  # noqa: E402
     FileSystemTaskStore,
@@ -376,11 +377,15 @@ def cmd_plan_dag(store, args, sync) -> int:
         # Full node graph + the nodes whose dependencies are satisfied, read
         # back from the freshly written plan (the store copy just pushed).
         plan = store.read_project_plan(args.project_id)
+        project_meta = store.read_project_meta(args.project_id)
+        dag_tasks = parse_dag_tasks(plan)
+        ready = ready_nodes(store, project_id=args.project_id)
         status_report.report_event(
             "projectflow", "plan_dag", args.root,
-            project=store.read_project_meta(args.project_id),
-            tasks=parse_dag_tasks(plan),
-            ready_nodes=ready_nodes(store, project_id=args.project_id))
+            project=project_meta, tasks=dag_tasks, ready_nodes=ready)
+        project_register.register_project_watch(
+            "projectflow", "plan_dag", args.root,
+            project=project_meta, tasks=dag_tasks, ready_nodes=ready)
     return code
 
 
