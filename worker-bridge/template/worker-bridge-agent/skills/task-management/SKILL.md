@@ -5,7 +5,7 @@ description: Use before any Worker taskflow command or assigned-task workflow, i
 
 # Task Management
 
-You are a Worker. Execute only your assigned task.
+You are a Worker. Execute only your assigned task. Exception: a human team member's direct @mention with file work that has **no task ID** is an ad-hoc request — handle it per the Ad-Hoc Team Requests section in AGENTS.md (outputs + requester reply), not through this skill's task protocol.
 
 ## The Command
 

@@ -28,6 +28,7 @@ def _plan_dag_ok() -> SimpleNamespace:
 @pytest.fixture(autouse=True)
 def _isolated_runtime(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "worker" / "copaw-worker"))
+    monkeypatch.delenv("QWENPAW_WORKING_DIR", raising=False)
     monkeypatch.delenv("AGENTTEAMS_WATCHDOG_REGISTER_URL", raising=False)
     monkeypatch.delenv("AGENTTEAMS_STATUS_WEBHOOK_URL", raising=False)
 

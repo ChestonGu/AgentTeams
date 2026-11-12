@@ -34,6 +34,8 @@ Mention your coordinator only for:
 
 In a **direct-collaboration team** the same four cases target the **requester** instead: completion reports, blockers, questions, and answers all go to the requester's full Matrix ID in the Team Room. There is no `TASK_COMPLETED` prefix and no task-ID in these reports — they are one short message with the outcome and the shared-relative deliverable paths.
 
+**Ad-hoc team requests** (a human directly @mentions you with file work that has no task ID — see AGENTS.md) follow the same routing as direct-collaboration: reply to the requester with the outcome and shared-relative paths, do **not** send `TASK_COMPLETED`, and do not involve the coordinator unless you hit a real blocker.
+
 Do not @mention for:
 
 - "Got it"

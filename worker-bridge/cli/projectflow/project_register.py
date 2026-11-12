@@ -54,7 +54,10 @@ def _register_file_config(root: Path | str) -> dict[str, str]:
     try:
         path = Path(root) / "shared" / "config" / "watchdog-register.json"
         data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
     except Exception:
+        logger.debug("watchdog-register.json unreadable", exc_info=True)
         return {}
     if not isinstance(data, dict):
         return {}

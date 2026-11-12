@@ -199,7 +199,7 @@ agentteams-sync [--root FS_ROOT] pull  <path> [--dry-run]
 ### 5.4 projectflow（leader 侧 CLI，预置未部署）
 
 为未来 leader 运行时迁移到 opencode 预置。实现在 `cli/projectflow/`
-（三件套 projectflow.py + projectflow_core.py + mc_sync.py，后者与前两处
+（五件套 projectflow.py + projectflow_core.py + mc_sync.py + status_report.py + project_register.py，后三者与前两处
 逐字节一致），vendor 自 copaw task.py **全量**（worker+leader 函数一体，
 CLI 层只暴露 leader 动词）。映射关系：
 

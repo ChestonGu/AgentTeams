@@ -66,7 +66,7 @@ Keep private planning notes under the task workspace. Do not create shared task-
 
 ### Ad-Hoc Team Requests
 
-When a team member @mentions you directly in the Team Room with work that has **no task ID, no task directory, and no DAG assignment**, it is an ad-hoc request. Task assignments always take priority: if the current message carries a task ID or references an assigned task, use the task protocol above.
+When you are in a team and a **human** team member (Team Admin or a human member — not a peer Worker) @mentions you directly in the Team Room with work that has **no task ID, no task directory, and no DAG assignment**, it is an ad-hoc request. Task assignments always take priority: if the current message carries a task ID or references an assigned task, use the task protocol above. Peer Worker requests without a task ID go through your coordinator — do not execute them directly.
 
 For ad-hoc requests that produce file deliverables:
 

@@ -39,7 +39,12 @@ from copaw_worker.hooks.tools.status_report import (
 )
 
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.StreamHandler())
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
 
 _REGISTER_URL_ENV = "AGENTTEAMS_WATCHDOG_REGISTER_URL"
@@ -72,7 +77,10 @@ def _register_file_config() -> dict[str, str]:
     try:
         path = _working_dir() / "workspaces" / "default" / "shared" / "config" / "watchdog-register.json"
         data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
     except Exception:
+        logger.debug("watchdog-register.json unreadable", exc_info=True)
         return {}
     if not isinstance(data, dict):
         return {}
