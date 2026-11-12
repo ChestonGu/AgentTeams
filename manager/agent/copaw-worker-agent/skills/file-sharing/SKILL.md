@@ -12,6 +12,7 @@ Use local shared paths only. Do not expose storage internals.
 Use:
 
 - `shared/tasks/{task-id}/`
+- `shared/outputs/<your-worker-name>/` for ad-hoc request deliverables (no task ID)
 - `shared/projects/{project-id}/` only for read-only project context
 
 Directory sync paths must end with `/`. If a directory pull fails, report the filesync result instead of creating local placeholder directories or switching to absolute paths.
@@ -48,6 +49,17 @@ To push mid-task progress or non-result files that the coordinator needs before 
   "payload": {
     "path": "shared/tasks/{task-id}/progress/",
     "exclude": ["spec.md", "base/"]
+  }
+}
+```
+
+Ad-hoc request deliverables (direct @mention work with no task ID) go to your own outputs directory:
+
+```json
+{
+  "action": "push",
+  "payload": {
+    "path": "shared/outputs/<your-worker-name>/"
   }
 }
 ```

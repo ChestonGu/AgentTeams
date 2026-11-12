@@ -358,6 +358,9 @@ def render_coordination(cfg):
         lines.extend(roster)
     lines.append("- Report task completion, blockers, and questions "
                  "to your coordinator")
+    lines.append("- Ad-hoc work requested directly in the Team Room "
+                 "(no task ID) reports its outcome to that requester, "
+                 "not to the coordinator")
     audiences = ["your coordinator"]
     if cfg["admin_id"]:
         audiences.append("Team Admin")

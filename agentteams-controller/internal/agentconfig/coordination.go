@@ -161,6 +161,7 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 		}
 		writeTeamCoordinators(&b, ctx.TeamCoordinators, ctx.TeamAdminID)
 		b.WriteString("- Report task completion, blockers, and questions to your coordinator\n")
+		b.WriteString("- Ad-hoc work requested directly in the Team Room (no task ID) reports its outcome to that requester, not to the coordinator\n")
 		switch {
 		case ctx.TeamAdminID != "" && len(ctx.TeamCoordinators) > 0:
 			b.WriteString("- Respond to @mentions from your coordinator, Team Admin, coordinator members, and global Admin\n")

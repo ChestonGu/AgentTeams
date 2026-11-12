@@ -25,6 +25,7 @@ If `agentteams-sync` is not on PATH: `python3 ~/skills/file-sharing/scripts/agen
 Use:
 
 - `shared/tasks/{task-id}/`
+- `shared/outputs/<your-worker-name>/` for ad-hoc request deliverables (no task ID)
 - `shared/projects/{project-id}/` only for read-only project context
 
 Directory sync paths must end with `/`. (`shared/tasks/{task-id}` without the slash is still treated as a directory automatically, but write it with the slash.) If a directory pull fails, report the `agentteams-sync` result instead of creating local placeholder directories or switching to absolute paths.
@@ -63,6 +64,12 @@ To push mid-task progress or non-result files that the coordinator needs before 
 
 ```bash
 agentteams-sync push shared/tasks/{task-id}/progress/ --exclude spec.md --exclude base/
+```
+
+Ad-hoc request deliverables (direct @mention work with no task ID) go to your own outputs directory:
+
+```bash
+agentteams-sync push shared/outputs/<your-worker-name>/
 ```
 
 ## If You Cannot Find Files

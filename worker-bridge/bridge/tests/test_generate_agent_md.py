@@ -404,6 +404,8 @@ class CoordinationTest(unittest.TestCase):
             "  - u1234 (@u1234:example.org, coordinator)",
             "- Report task completion, blockers, and questions to your "
             "coordinator",
+            "- Ad-hoc work requested directly in the Team Room (no task ID) "
+            "reports its outcome to that requester, not to the coordinator",
             "- Respond to @mentions from your coordinator, Team Admin, "
             "coordinator members, and global Admin",
             "- Do NOT @mention Manager directly — all communication goes "

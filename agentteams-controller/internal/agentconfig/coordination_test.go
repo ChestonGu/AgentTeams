@@ -85,6 +85,11 @@ func TestCoordinationBlockWorkerShowsHumanNames(t *testing.T) {
 	if !strings.Contains(got, wantPolicy) {
 		t.Errorf("worker block mention policy changed unexpectedly:\ngot:\n%s", got)
 	}
+	// Ad-hoc work routing: outcomes go to the requester, not the coordinator.
+	wantAdHoc := "- Ad-hoc work requested directly in the Team Room (no task ID) reports its outcome to that requester, not to the coordinator"
+	if !strings.Contains(got, wantAdHoc) {
+		t.Errorf("worker block missing ad-hoc routing line:\nwant: %s\ngot:\n%s", wantAdHoc, got)
+	}
 }
 
 func TestCoordinationBlockSelfDisplayName(t *testing.T) {
