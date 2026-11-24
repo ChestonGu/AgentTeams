@@ -1,0 +1,24 @@
+# Synapse AppService registration for the AgentTeams controller.
+#
+# Rendered by hack/synapse-1.2.8/scripts/deploy-synapse.sh from the tokens the
+# controller already uses (agentteams-128-runtime-env Secret), then stored in
+# the agentteams-synapse-appservice Secret and referenced from homeserver.yaml
+# via app_service_config_files. Never commit a rendered copy.
+#
+# The namespace matches RenderAppServiceRegistration in
+# agentteams-controller/internal/matrix/appservice.go: a broad exclusive user
+# namespace is safe because this homeserver is dedicated to AgentTeams.
+id: agentteams-controller
+url: "__CONTROLLER_URL__"
+as_token: "__AS_TOKEN__"
+hs_token: "__HS_TOKEN__"
+sender_localpart: agentteams-controller
+rate_limited: false
+namespaces:
+  users:
+    - regex: "@.*:__SERVER_NAME__"
+      exclusive: true
+  aliases:
+    - regex: "#agentteams-.*:__SERVER_NAME__"
+      exclusive: false
+  rooms: []

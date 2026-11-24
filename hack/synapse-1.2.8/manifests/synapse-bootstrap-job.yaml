@@ -1,0 +1,141 @@
+# One-shot bootstrap for the Synapse admin user.
+#
+# register_new_matrix_user talks to the admin registration endpoint
+# (/_synapse/admin/v1/register) using registration_shared_secret from
+# /config/homeserver.yaml, and -a marks the account as a Synapse server admin
+# (required for the controller's /_synapse/admin/* calls).
+#
+# Idempotent: the job first checks whether the admin account already works
+# (CS login + admin REST); an existing admin is accepted. If the admin user ID
+# is already claimed by an active AppService registration, the registration
+# endpoint answers "reserved by an application service" — that state is also
+# accepted when the admin account itself exists and is a server admin.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agentteams-synapse-bootstrap
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse
+    app.kubernetes.io/component: matrix
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentteams-128-synapse-bootstrap
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: ghcr.io/element-hq/synapse:v1.127.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentteams-128-runtime-env
+                  key: AGENTTEAMS_ADMIN_USER
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentteams-128-runtime-env
+                  key: AGENTTEAMS_ADMIN_PASSWORD
+            - name: SYNAPSE_URL
+              value: http://agentteams-128-synapse.agentos.svc.cluster.local:8008
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # 1. Wait until the homeserver answers.
+              python - <<'PY'
+              import os, sys, time, urllib.request
+              url = os.environ["SYNAPSE_URL"].rstrip("/")
+              for _ in range(120):
+                  try:
+                      urllib.request.urlopen(url + "/_matrix/client/versions", timeout=3)
+                      sys.exit(0)
+                  except Exception:
+                      time.sleep(2)
+              sys.exit("synapse did not become ready")
+              PY
+
+              # 2. Already bootstrapped? Verify the admin login AND the admin REST
+              #    API (which proves the server-admin flag), then stop.
+              if python - <<'PY'
+              import json, os, sys, urllib.error, urllib.request
+              url = os.environ["SYNAPSE_URL"].rstrip("/")
+
+              def call(method, path, body=None, token=None):
+                  headers = {"Content-Type": "application/json"}
+                  if token:
+                      headers["Authorization"] = "Bearer " + token
+                  req = urllib.request.Request(url + path,
+                                               data=json.dumps(body).encode() if body is not None else None,
+                                               headers=headers, method=method)
+                  try:
+                      with urllib.request.urlopen(req, timeout=10) as resp:
+                          return resp.status, json.loads(resp.read() or b"{}")
+                  except urllib.error.HTTPError as exc:
+                      return exc.code, {}
+
+              status, body = call("POST", "/_matrix/client/v3/login", {
+                  "type": "m.login.password",
+                  "identifier": {"type": "m.id.user", "user": os.environ["ADMIN_USER"]},
+                  "password": os.environ["ADMIN_PASSWORD"],
+              })
+              if status != 200 or not body.get("access_token"):
+                  sys.exit(1)
+              status, _ = call("GET", "/_synapse/admin/v1/server_version", token=body["access_token"])
+              sys.exit(0 if status == 200 else 1)
+              PY
+              then
+                echo "admin account already exists and is a Synapse server admin; OK"
+                exit 0
+              fi
+
+              # 3. Create it (idempotent; --exists-ok tolerates a concurrent create).
+              out="$(register_new_matrix_user --exists-ok -c /config/homeserver.yaml -u "$ADMIN_USER" -p "$ADMIN_PASSWORD" -a "$SYNAPSE_URL" 2>&1)" && rc=0 || rc=$?
+              echo "$out"
+
+              # 4. Verify the account works even when the registration endpoint
+              #    refused it (e.g. user ID already reserved by the AppService).
+              python - <<'PY'
+              import json, os, sys, urllib.error, urllib.request
+              url = os.environ["SYNAPSE_URL"].rstrip("/")
+
+              def call(method, path, body=None, token=None):
+                  headers = {"Content-Type": "application/json"}
+                  if token:
+                      headers["Authorization"] = "Bearer " + token
+                  req = urllib.request.Request(url + path,
+                                               data=json.dumps(body).encode() if body is not None else None,
+                                               headers=headers, method=method)
+                  try:
+                      with urllib.request.urlopen(req, timeout=10) as resp:
+                          return resp.status, json.loads(resp.read() or b"{}")
+                  except urllib.error.HTTPError as exc:
+                      return exc.code, {}
+
+              status, body = call("POST", "/_matrix/client/v3/login", {
+                  "type": "m.login.password",
+                  "identifier": {"type": "m.id.user", "user": os.environ["ADMIN_USER"]},
+                  "password": os.environ["ADMIN_PASSWORD"],
+              })
+              if status != 200 or not body.get("access_token"):
+                  sys.exit("admin login failed")
+              status, _ = call("GET", "/_synapse/admin/v1/server_version", token=body["access_token"])
+              if status != 200:
+                  sys.exit("admin user exists but is not a Synapse server admin")
+              print("admin account verified (CS login + admin REST)")
+              PY
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: agentteams-synapse-config

@@ -1,0 +1,23 @@
+# Helm values overlay: switch the agentteams-128 release in namespace agentos
+# from the bundled Tuwunel to the reference Synapse homeserver deployed by
+# hack/synapse-1.2.8/scripts/deploy-synapse.sh.
+#
+#   helm upgrade agentteams-128 <chart> -n agentos \
+#     -f values-128-agentos.yaml -f values-synapse-agentos.yaml
+#
+# The chart stops rendering the Tuwunel StatefulSet/Service when
+# matrix.provider=synapse (matrix.mode=existing). The previous Tuwunel PVC is
+# kept untouched as a rollback artefact.
+matrix:
+  provider: synapse
+  mode: existing
+  # In-cluster CS API address (controller + Manager/Worker pods reach it here).
+  internalURL: "http://agentteams-128-synapse.agentos.svc.cluster.local:8008"
+  # Matrix server_name; becomes the domain part of every user ID
+  # (@admin:agentteams-128-synapse.agentos.svc.cluster.local).
+  serverName: "agentteams-128-synapse.agentos.svc.cluster.local"
+  appservice:
+    enabled: true
+    # Tokens are preserved from the existing agentteams-128-runtime-env Secret
+    # via Helm's lookup(); do not pin them here or they would drift from the
+    # declarative Synapse appservice registration rendered on the homeserver.

@@ -1,0 +1,103 @@
+# Synapse v1.127.0 for AgentTeams v1.2.8 (matrix.provider=synapse, mode=existing).
+#
+# - Homeserver config: Secret agentteams-synapse-config (homeserver.yaml,
+#   log_config.yaml; appservice.yaml is added by deploy-synapse.sh phase 2).
+# - Data (media store + signing key): PVC agentteams-synapse-data via
+#   volumeClaimTemplates, so the signing key survives pod restarts.
+# - Database: host PostgreSQL 16 on 10.254.254.105:5432 (user agi-synapse,
+#   database synapse), created by the runbook.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agentteams-128-synapse
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse
+    app.kubernetes.io/component: matrix
+spec:
+  serviceName: agentteams-128-synapse
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentteams-128-synapse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentteams-128-synapse
+        app.kubernetes.io/component: matrix
+    spec:
+      # The element-hq Synapse image has no non-root user definition and the
+      # cluster default StorageClass (local-path) is hostPath-backed, where
+      # fsGroup-based ownership management does not apply. Running as the image
+      # default (root) keeps the PVC writable without an extra chown init step;
+      # this is an internal development cluster.
+      containers:
+        - name: synapse
+          image: ghcr.io/element-hq/synapse:v1.127.0
+          imagePullPolicy: IfNotPresent
+          # /start.py entrypoint: "run" + SYNAPSE_CONFIG_PATH. UID=0/GID=0 makes
+          # start.py skip its default gosu drop to UID 991 (the image defines no
+          # such user and the local-path PVC is root-owned); see the pod-level
+          # comment above.
+          args:
+            - run
+          ports:
+            - name: http
+              containerPort: 8008
+              protocol: TCP
+          env:
+            - name: SYNAPSE_CONFIG_PATH
+              value: /config/homeserver.yaml
+            - name: UID
+              value: "0"
+            - name: GID
+              value: "0"
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: as-registrations
+              mountPath: /as-registrations
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+      volumes:
+        - name: config
+          secret:
+            secretName: agentteams-synapse-config
+        # Populated by deploy-synapse.sh phase 2; the Secret does not exist for
+        # the very first Synapse start (before the AppService registration is
+        # rendered), and optional=true keeps the volume mount working then.
+        - name: as-registrations
+          secret:
+            secretName: agentteams-synapse-appservice
+            optional: true
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

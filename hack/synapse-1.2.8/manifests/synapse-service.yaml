@@ -1,0 +1,23 @@
+# Reference Synapse homeserver for AgentTeams v1.2.8 (matrix.provider=synapse)
+#
+# Headless service so the pod is addressable as
+#   agentteams-128-synapse.agentos.svc.cluster.local
+# which doubles as the Matrix server_name configured in homeserver.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentteams-128-synapse
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse
+    app.kubernetes.io/component: matrix
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: agentteams-128-synapse
+  ports:
+    - name: http
+      port: 8008
+      targetPort: 8008
+      protocol: TCP

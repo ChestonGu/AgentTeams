@@ -1,0 +1,14 @@
+# Minimal Synapse logging: stdout only (kubectl logs), no rotating files.
+version: 1
+formatters:
+  precise:
+    format: "%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s"
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: precise
+    stream: ext://sys.stdout
+root:
+  level: INFO
+  handlers: [console]
+disable_existing_loggers: false

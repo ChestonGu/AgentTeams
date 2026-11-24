@@ -1,0 +1,4 @@
+# Rendered deployment artefacts (homeserver.yaml, appservice.yaml — the latter
+# contains the AppService tokens) must never be committed.
+*
+!.gitignore

@@ -1,0 +1,115 @@
+# Synapse homeserver configuration for AgentTeams v1.2.8 (matrix.provider=synapse).
+#
+# Rendered by hack/synapse-1.2.8/scripts/deploy-synapse.sh into
+# render/homeserver.yaml, then stored in the agentteams-synapse-config Secret.
+# Placeholders (__NAME__) are replaced by the script; never commit a rendered copy.
+server_name: "__SERVER_NAME__"
+pid_file: /data/homeserver.pid
+public_baseurl: "__PUBLIC_BASEURL__"
+
+# Single HTTP listener behind the Higress gateway (/ _matrix route).
+# Federation is intentionally disabled: this homeserver only serves the
+# AgentTeams cluster.
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    bind_addresses:
+      - 0.0.0.0
+    x_forwarded: true
+    resources:
+      - names: [client]
+        compress: false
+
+report_stats: false
+enable_registration: false
+registration_requires_token: false
+
+# Internal-cluster tuning: the controller provisions many users/rooms and
+# writes bursts of state events while reconciling Manager/Workers/Teams. The
+# Synapse per-user defaults turn that into M_LIMIT_EXCEEDED storms, so raise
+# every limiter the controller path can hit far above the defaults.
+rc_message:
+  per_second: 1000
+  burst_count: 1000
+rc_registration:
+  per_second: 1000
+  burst_count: 1000
+rc_login:
+  address:
+    per_second: 1000
+    burst_count: 1000
+  account:
+    per_second: 1000
+    burst_count: 1000
+  failed_attempts:
+    per_second: 1000
+    burst_count: 1000
+rc_joins:
+  local:
+    per_second: 1000
+    burst_count: 1000
+  remote:
+    per_second: 1000
+    burst_count: 1000
+rc_invites:
+  per_room:
+    per_second: 1000
+    burst_count: 1000
+  per_user:
+    per_second: 1000
+    burst_count: 1000
+  per_issuer:
+    per_second: 1000
+    burst_count: 1000
+rc_media_create:
+  per_second: 1000
+  burst_count: 1000
+rc_3pid_validation:
+  per_second: 1000
+  burst_count: 1000
+rc_presence:
+  per_user:
+    per_second: 1000
+    burst_count: 1000
+rc_key_requests:
+  per_second: 1000
+  burst_count: 1000
+
+# Used by register_new_matrix_user (bootstrap Job) only. Keep this value
+# stable across restarts: the bootstrap Job re-reads it from this config.
+registration_shared_secret: "__REGISTRATION_SHARED_SECRET__"
+macaroon_secret_key: "__MACAROON_SECRET__"
+form_secret: "__FORM_SECRET__"
+
+signing_key_path: /data/agentteams.signing.key
+
+trusted_key_servers: []
+suppress_key_server_warning: true
+allow_public_rooms_over_federation: false
+enable_authenticated_media: false
+
+# Host PostgreSQL 16 (10.254.254.105:5432), database "synapse" owned by
+# "agi-synapse". The database was created with LC_COLLATE=C, so Synapse does
+# not need allow_unsafe_locale.
+database:
+  name: psycopg2
+  args:
+    user: "__DB_USER__"
+    password: "__DB_PASSWORD__"
+    database: "__DB_NAME__"
+    host: "__DB_HOST__"
+    port: __DB_PORT__
+    cp_min: 2
+    cp_max: 10
+
+media_store_path: /data/media
+uploads_path: /data/uploads
+max_upload_size: 200M
+
+log_config: /config/log_config.yaml
+
+# Matrix AppService registrations are declarative: this file is rendered from
+# the controller's AppService tokens (agentteams-128-runtime-env Secret) and
+# mounted from the agentteams-synapse-appservice Secret.
+__APP_SERVICE_BLOCK__
