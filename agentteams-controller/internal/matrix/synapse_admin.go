@@ -138,7 +138,6 @@ func classifySynapseSenderError(err error) synapseSenderRecovery {
 
 // recoverSenderOp recovers a CS operation that failed with a sender-side
 // rejection and retries it, composing Synapse's own admin capabilities:
-//
 //   - synapseRecoveryJoin: force-join the sender via POST /_synapse/admin/v1/join.
 //   - synapseRecoveryPower: make_room_admin the sender, then retry. If the
 //     sender was raised but still is not joined (make_room_admin only invites
@@ -182,4 +181,101 @@ func (s *SynapseClient) recoverSenderOp(ctx context.Context, roomID, op, senderI
 		s.logSynapseRecovery(ctx, roomID, op+" (post-make_room_admin join)", synapseRecoveryJoin, joinErr)
 	}
 	return retry()
+}
+
+// synDemoteAndKick lowers the target's power level in roomID to 0 and then
+// retries the kick. It handles the one case the join/make_room_admin recovery
+// cannot: an equal-power target (e.g. the Manager is PL 100 in a worker's
+// personal room and the controller admin is also PL 100). Room auth requires
+// the target's PL to be strictly below the kicker's, so the admin first edits
+// m.room.power_levels (PL 100 can edit power levels) and kicks afterwards.
+// The power level is restored when the kick still fails, so a rejected kick
+// never degrades the target's room privileges.
+func (s *SynapseClient) synDemoteAndKick(ctx context.Context, roomID, userID string, kick func() error) error {
+	token, err := s.ensureAdminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("synapse demote-and-kick %s in %s: %w", userID, roomID, err)
+	}
+	state, err := s.GetRoomState(ctx, roomID, "m.room.power_levels", "", token)
+	if err != nil {
+		return fmt.Errorf("synapse demote-and-kick %s in %s: read power levels: %w", userID, roomID, err)
+	}
+	if state == nil {
+		return fmt.Errorf("synapse demote-and-kick %s in %s: room has no m.room.power_levels", userID, roomID)
+	}
+	users, _ := state["users"].(map[string]interface{})
+	if users == nil {
+		return fmt.Errorf("synapse demote-and-kick %s in %s: power levels carry no users map", userID, roomID)
+	}
+	original, present := users[userID]
+	if !present {
+		return kick()
+	}
+
+	demoted := make(map[string]interface{}, len(users))
+	for k, v := range users {
+		demoted[k] = normalizeJSONNumbers(v)
+	}
+	demoted[userID] = int64(0)
+	newState := make(map[string]interface{}, len(state))
+	for k, v := range state {
+		if k == "users" {
+			continue
+		}
+		newState[k] = normalizeJSONNumbers(v)
+	}
+	newState["users"] = demoted
+
+	if err := s.SetRoomState(ctx, roomID, "m.room.power_levels", "", newState, token); err != nil {
+		return fmt.Errorf("synapse demote-and-kick %s in %s: lower power level: %w", userID, roomID, err)
+	}
+	if kickErr := kick(); kickErr != nil {
+		// Restore the original power level: the kick was rejected for another
+		// reason, so the demotion must not stick.
+		restored := make(map[string]interface{}, len(users))
+		for k, v := range users {
+			restored[k] = normalizeJSONNumbers(v)
+		}
+		restored[userID] = normalizeJSONNumbers(original)
+		restoreState := make(map[string]interface{}, len(state))
+		for k, v := range state {
+			if k == "users" {
+				continue
+			}
+			restoreState[k] = normalizeJSONNumbers(v)
+		}
+		restoreState["users"] = restored
+		if restoreErr := s.SetRoomState(ctx, roomID, "m.room.power_levels", "", restoreState, token); restoreErr != nil {
+			s.logSynapseRecovery(ctx, roomID, "restore power level of "+userID, synapseRecoveryPower, restoreErr)
+		}
+		return fmt.Errorf("synapse demote-and-kick %s in %s: %w", userID, roomID, kickErr)
+	}
+	return nil
+}
+
+// normalizeJSONNumbers converts decoded JSON floats that carry integral values
+// (e.g. 100.0 from a JSON state event) into int64. Synapse validates power
+// level values as integers and rejects floats when they are written back.
+func normalizeJSONNumbers(v interface{}) interface{} {
+	switch value := v.(type) {
+	case float64:
+		if value == float64(int64(value)) {
+			return int64(value)
+		}
+		return value
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(value))
+		for k, item := range value {
+			out[k] = normalizeJSONNumbers(item)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(value))
+		for i, item := range value {
+			out[i] = normalizeJSONNumbers(item)
+		}
+		return out
+	default:
+		return v
+	}
 }

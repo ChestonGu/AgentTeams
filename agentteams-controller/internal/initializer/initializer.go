@@ -278,8 +278,18 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 			svcSuffix = "dns"
 		}
 
-		// Matrix Homeserver routes (/_matrix/*, /_tuwunel/* → Tuwunel)
-		if err := i.Gateway.EnsureRoute(ctx, "matrix-homeserver", nil, "tuwunel."+svcSuffix, port, "/_matrix"); err != nil {
+		// Matrix Homeserver routes (/_matrix/* → homeserver). The route is
+		// repaired in place when it already exists: a homeserver switch (e.g.
+		// matrix.provider=synapse on a different port) must update the upstream
+		// port, and the create-only EnsureRoute would keep the stale one.
+		matrixService := "tuwunel." + svcSuffix
+		if managed, ok := i.Gateway.(interface {
+			EnsureManagedRoute(ctx context.Context, name, serviceName string, port int, pathPrefix string) error
+		}); ok {
+			if err := managed.EnsureManagedRoute(ctx, "matrix-homeserver", matrixService, port, "/_matrix"); err != nil {
+				logger.Error(err, "failed to create Matrix route (non-fatal)")
+			}
+		} else if err := i.Gateway.EnsureRoute(ctx, "matrix-homeserver", nil, matrixService, port, "/_matrix"); err != nil {
 			logger.Error(err, "failed to create Matrix route (non-fatal)")
 		}
 	}

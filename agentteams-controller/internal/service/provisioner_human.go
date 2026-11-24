@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -208,15 +209,76 @@ func (p *Provisioner) LeaveRoomAs(ctx context.Context, roomID, userToken string)
 // ForceLeaveRoom removes userID from roomID without requiring the user's own
 // access token. Provider-native implementations expose ProviderAdminOps
 // (Tuwunel: "!admin users force-leave-room" admin-bot command; Synapse:
-// join/make_room_admin + CS kick). Falls back to the raw Tuwunel admin command
-// for clients that do not implement the capability (test fakes).
+// join/make_room_admin + CS kick).
+//
+// Matrix room auth does not let any identity kick a user whose power level is
+// equal to the kicker's, so an equal-power target (e.g. the Manager is PL 100
+// in a Worker's personal room and the controller admin is also PL 100) cannot
+// be removed by the admin path on any homeserver. When the admin path fails,
+// fall back to a self-leave with the target user's own token — the controller
+// holds it in the credential store — which is always authorized.
 func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string) error {
 	if ops, ok := p.matrix.(matrix.ProviderAdminOps); ok {
-		return ops.ForceLeaveRoom(ctx, userID, roomID)
+		adminErr := ops.ForceLeaveRoom(ctx, userID, roomID)
+		if adminErr == nil {
+			return nil
+		}
+		if token, tokErr := p.matrixTokenForUserID(ctx, userID); tokErr == nil {
+			if leaveErr := p.matrix.LeaveRoom(ctx, roomID, token); leaveErr == nil {
+				log.FromContext(ctx).Info("removed equal-power room member via self-leave",
+					"room", roomID, "user", userID, "adminError", adminErr.Error())
+				return nil
+			}
+		}
+		return adminErr
 	}
 	cmd := fmt.Sprintf("!admin users force-leave-room %s %s", userID, roomID)
 	log.FromContext(ctx).Info("sending tuwunel force-leave-room admin command", "room", roomID, "user", userID, "command", cmd)
 	return p.matrix.AdminCommand(ctx, cmd)
+}
+
+// matrixTokenForUserID resolves the access token the controller holds for a
+// Matrix user. Credentials are stored under the owning CR name, which equals
+// the Matrix localpart for Workers/Standalones but is the Manager CR name
+// ("default") for the Manager runtime identity, hence the candidate list.
+func (p *Provisioner) matrixTokenForUserID(ctx context.Context, userID string) (string, error) {
+	localpart := strings.TrimPrefix(userID, "@")
+	if idx := strings.IndexByte(localpart, ':'); idx >= 0 {
+		localpart = localpart[:idx]
+	}
+	keys := []string{localpart}
+	if localpart == "manager" {
+		keys = append([]string{"default"}, keys...)
+	}
+	var lastErr error
+	for _, key := range keys {
+		creds, err := p.creds.Load(ctx, key)
+		if err != nil || creds == nil {
+			if err != nil {
+				lastErr = err
+			}
+			continue
+		}
+		token, err := p.ensureMatrixToken(ctx, localpart, creds)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := p.matrix.VerifyAccessToken(ctx, token); err == nil {
+			return token, nil
+		}
+		refreshed, err := p.forceRefreshMatrixToken(ctx, key, localpart)
+		if err == nil && refreshed != nil && refreshed.MatrixToken != "" {
+			return refreshed.MatrixToken, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no stored credentials for %s", userID)
+	}
+	return "", lastErr
 }
 
 // IsUserInRoom reports whether userID is currently a member of roomID. It

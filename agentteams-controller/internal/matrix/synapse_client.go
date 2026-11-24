@@ -194,15 +194,30 @@ func (s *SynapseClient) InviteToRoom(ctx context.Context, roomID, userID string)
 }
 
 // KickFromRoom kicks userID using the admin identity with the same recovery
-// strategy as InviteToRoom.
+// strategy as InviteToRoom. When the failure is an equal-power rejection (a
+// server admin at PL 100 cannot kick another PL-100 user), the target's power
+// level is lowered first and the kick retried.
 func (s *SynapseClient) KickFromRoom(ctx context.Context, roomID, userID, reason string) error {
 	err := s.matrixClient.KickFromRoom(ctx, roomID, userID, reason)
 	if err == nil {
 		return nil
 	}
-	return s.recoverSenderOp(ctx, roomID, "kick "+userID+" from", s.UserID(s.config.AdminUser), func() error {
+	recoveryErr := s.recoverSenderOp(ctx, roomID, "kick "+userID+" from", s.UserID(s.config.AdminUser), func() error {
 		return s.matrixClient.KickFromRoom(ctx, roomID, userID, reason)
 	}, err)
+	if recoveryErr == nil {
+		return nil
+	}
+	// Final attempt for equal-power targets: demote the target below the
+	// kicker's power level, kick, then restore on failure (see
+	// synDemoteAndKick). This is what makes "manager is PL 100 in a worker's
+	// personal room, controller admin is also PL 100" converge.
+	if demoteErr := s.synDemoteAndKick(ctx, roomID, userID, func() error {
+		return s.matrixClient.KickFromRoom(ctx, roomID, userID, reason)
+	}); demoteErr == nil {
+		return nil
+	}
+	return recoveryErr
 }
 
 // SetRoomName renames a room and recovers from a sender-side rejection when the
@@ -299,13 +314,21 @@ func (s *SynapseClient) ForceLeaveRoom(ctx context.Context, userID, roomID strin
 	if userID == "" || roomID == "" {
 		return nil
 	}
-	err := s.matrixClient.KickFromRoom(ctx, roomID, userID, "force-leave (admin)")
+	kick := func() error {
+		return s.matrixClient.KickFromRoom(ctx, roomID, userID, "force-leave (admin)")
+	}
+	err := kick()
 	if err == nil {
 		return nil
 	}
-	return s.recoverSenderOp(ctx, roomID, "force-leave "+userID+" from", s.UserID(s.config.AdminUser), func() error {
-		return s.matrixClient.KickFromRoom(ctx, roomID, userID, "force-leave (admin)")
-	}, err)
+	recoveryErr := s.recoverSenderOp(ctx, roomID, "force-leave "+userID+" from", s.UserID(s.config.AdminUser), kick, err)
+	if recoveryErr == nil {
+		return nil
+	}
+	if demoteErr := s.synDemoteAndKick(ctx, roomID, userID, kick); demoteErr == nil {
+		return nil
+	}
+	return recoveryErr
 }
 
 // DeactivateUser disables a Matrix account through the Synapse admin API
