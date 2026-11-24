@@ -69,6 +69,12 @@ matrix:
       storageClassName: ""    # empty = default StorageClass
       mountPath: /data/conduwuit
     extraEnv: {}
+  # provider=synapse means an existing Synapse homeserver is deployed
+  # out-of-band (the chart renders no Matrix workload). Point the controller at
+  # it with the top-level matrix.internalURL / matrix.serverName values, and
+  # register the AppService declaratively on the Synapse side (see
+  # hack/synapse-1.2.8/ for a reference deployment). This section is reserved
+  # for future managed-Synapse chart templates.
   synapse: {}
 
 # ── Gateway ───────────────────────────────────────────────────────────────

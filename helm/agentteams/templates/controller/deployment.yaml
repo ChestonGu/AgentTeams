@@ -182,6 +182,8 @@ spec:
               value: {{ printf "http://127.0.0.1:%d" (.Values.credentialProvider.port | int) | quote }}
             {{- end }}
             {{- /* Matrix connection (Go MatrixClient) */}}
+            - name: AGENTTEAMS_MATRIX_PROVIDER
+              value: {{ .Values.matrix.provider | quote }}
             - name: AGENTTEAMS_MATRIX_URL
               value: {{ include "agentteams.matrix.internalURL" . | quote }}
             - name: AGENTTEAMS_MATRIX_DOMAIN

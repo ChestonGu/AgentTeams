@@ -1,7 +1,12 @@
 {{- /*
 Validate public values at render time. Supported combinations:
 
-  matrix.provider=tuwunel     matrix.mode=managed
+  matrix.provider=tuwunel     matrix.mode=managed    → deploy Tuwunel StatefulSet
+  matrix.provider=synapse     matrix.mode=existing   → external Synapse homeserver
+                                                        (chart renders no Matrix
+                                                        workload; matrix.internalURL
+                                                        and matrix.serverName are
+                                                        required)
   gateway.provider=higress    gateway.mode=managed    → deploy Higress subchart
   gateway.provider=ai-gateway gateway.mode=existing   → external APIG, consumers only
   storage.provider=minio      storage.mode=managed    → deploy MinIO StatefulSet
@@ -10,11 +15,27 @@ Validate public values at render time. Supported combinations:
 */ -}}
 
 {{- $matrixProvider := .Values.matrix.provider | default "" -}}
-{{- if ne $matrixProvider "tuwunel" -}}
-{{- fail (printf "unsupported matrix.provider %q: only \"tuwunel\" is supported" $matrixProvider) -}}
-{{- end -}}
-{{- if ne (.Values.matrix.mode | default "") "managed" -}}
-{{- fail (printf "unsupported matrix.mode %q: only \"managed\" is supported" (.Values.matrix.mode | default "")) -}}
+{{- $matrixMode := .Values.matrix.mode | default "" -}}
+{{- if eq $matrixProvider "tuwunel" -}}
+  {{- if ne $matrixMode "managed" -}}
+  {{- fail (printf "matrix.provider=tuwunel requires matrix.mode=managed (got %q)" $matrixMode) -}}
+  {{- end -}}
+{{- else if eq $matrixProvider "synapse" -}}
+  {{- /* The chart does not deploy Synapse: matrix.provider=synapse means the
+         operator runs a Synapse homeserver out-of-band (e.g. the manifests in
+         hack/synapse-1.2.8/) and points the controller at it via
+         matrix.internalURL / matrix.serverName. */ -}}
+  {{- if ne $matrixMode "existing" -}}
+  {{- fail (printf "matrix.provider=synapse requires matrix.mode=existing (got %q): the chart does not deploy Synapse" $matrixMode) -}}
+  {{- end -}}
+  {{- if not (.Values.matrix.internalURL | default "") -}}
+  {{- fail "matrix.internalURL is required when matrix.provider=synapse (e.g. http://agentteams-synapse.agentos.svc.cluster.local:8008)" -}}
+  {{- end -}}
+  {{- if not (.Values.matrix.serverName | default "") -}}
+  {{- fail "matrix.serverName is required when matrix.provider=synapse (Matrix server_name, e.g. agentteams-synapse.agentos.svc.cluster.local)" -}}
+  {{- end -}}
+{{- else -}}
+{{- fail (printf "unsupported matrix.provider %q: expected \"tuwunel\" or \"synapse\"" $matrixProvider) -}}
 {{- end -}}
 
 {{- $gatewayProvider := .Values.gateway.provider | default "" -}}
