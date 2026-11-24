@@ -11,6 +11,14 @@ type Config struct {
 	AdminPassword     string // global admin password
 	E2EEEnabled       bool   // whether to enable E2EE on new rooms
 
+	// Provider selects the Matrix client implementation. Valid values:
+	//   - "tuwunel" (default): TuwunelClient — admin ops via the Tuwunel
+	//     admin bot ("!admin ..."); the zero-regression reference path.
+	//   - "synapse":           SynapseClient — admin ops via the Synapse
+	//     admin REST API (/_synapse/admin/v1/*) and CS API.
+	// Empty is treated as "tuwunel". Set from AGENTTEAMS_MATRIX_PROVIDER.
+	Provider string
+
 	// AppService mode configuration. When enabled, the controller acts as a
 	// Matrix Application Service, using as_token to register/login users
 	// without passwords. Legacy password-based auth is preserved when disabled.

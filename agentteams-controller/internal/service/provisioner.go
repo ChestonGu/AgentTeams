@@ -275,13 +275,16 @@ func (p *Provisioner) leaveAllRooms(ctx context.Context, credsKey, matrixUsernam
 	return nil
 }
 
-// deleteRoom issues a fire-and-forget `!admin rooms delete-room` command
-// to the Tuwunel admin bot. Tuwunel processes it asynchronously, and the
-// `delete_rooms_after_leave`/`forget_forced_upon_leave` homeserver
-// settings act as a fallback if this never lands.
+// deleteRoom disposes of a room. Provider-native implementations expose
+// ProviderAdminOps (Tuwunel: "!admin rooms delete-room" admin-bot command;
+// Synapse: DELETE /_synapse/admin/v2/rooms/{id}). Falls back to the raw Tuwunel
+// admin command for clients that do not implement the capability (test fakes).
 func (p *Provisioner) deleteRoom(ctx context.Context, roomID string) error {
 	if roomID == "" {
 		return nil
+	}
+	if ops, ok := p.matrix.(matrix.ProviderAdminOps); ok {
+		return ops.DeleteRoom(ctx, roomID)
 	}
 	cmd := fmt.Sprintf("!admin rooms delete-room %s", roomID)
 	return p.matrix.AdminCommand(ctx, cmd)

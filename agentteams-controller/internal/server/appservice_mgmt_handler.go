@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 )
@@ -48,6 +49,17 @@ func (h *AppServiceHandler) RotateToken(w http.ResponseWriter, r *http.Request) 
 	newCfg.AppServiceToken = req.ASToken
 	if req.HSToken != "" {
 		newCfg.AppServiceHSToken = req.HSToken
+	}
+
+	// Synapse AppService registrations are declarative: the homeserver reads
+	// app_service_config_files at startup, so there is no runtime registration
+	// API to rotate tokens against. The operator must update the mounted
+	// registration file/Secret and restart Synapse (and the controller).
+	if strings.EqualFold(strings.TrimSpace(newCfg.Provider), "synapse") {
+		http.Error(w,
+			"appservice token rotation is not supported with the Synapse provider: registrations are file-based (app_service_config_files); update the mounted registration Secret and restart the homeserver",
+			http.StatusNotImplemented)
+		return
 	}
 
 	// Create a temporary client with the new token.

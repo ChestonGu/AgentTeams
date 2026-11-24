@@ -299,7 +299,11 @@ func (a *App) initInfraClients(_ context.Context) error {
 	cfg := a.cfg
 	logger := ctrl.Log.WithName("app")
 
-	a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+	matrixClient, err := matrix.NewClient(cfg.MatrixProvider, cfg.MatrixConfig(), nil)
+	if err != nil {
+		return fmt.Errorf("initialize matrix client (provider=%q): %w", cfg.MatrixProvider, err)
+	}
+	a.matrix = matrixClient
 	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
 	a.shell = executor.NewShell(cfg.SkillsDir)
 	a.packages = executor.NewPackageResolver("/tmp/import")

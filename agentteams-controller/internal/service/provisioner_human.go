@@ -205,11 +205,15 @@ func (p *Provisioner) LeaveRoomAs(ctx context.Context, roomID, userToken string)
 	return p.matrix.LeaveRoom(ctx, roomID, userToken)
 }
 
-// ForceLeaveRoom asks the Tuwunel admin bot to force-leave userID out of
-// roomID. Used by the Human delete flow where the controller no longer
-// holds a valid user token (password may be stale) and must rely on the
-// admin bot instead of /leave. Fire-and-forget at the bot layer.
+// ForceLeaveRoom removes userID from roomID without requiring the user's own
+// access token. Provider-native implementations expose ProviderAdminOps
+// (Tuwunel: "!admin users force-leave-room" admin-bot command; Synapse:
+// join/make_room_admin + CS kick). Falls back to the raw Tuwunel admin command
+// for clients that do not implement the capability (test fakes).
 func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string) error {
+	if ops, ok := p.matrix.(matrix.ProviderAdminOps); ok {
+		return ops.ForceLeaveRoom(ctx, userID, roomID)
+	}
 	cmd := fmt.Sprintf("!admin users force-leave-room %s %s", userID, roomID)
 	log.FromContext(ctx).Info("sending tuwunel force-leave-room admin command", "room", roomID, "user", userID, "command", cmd)
 	return p.matrix.AdminCommand(ctx, cmd)
@@ -233,10 +237,15 @@ func (p *Provisioner) IsUserInRoom(ctx context.Context, roomID, userID string) (
 	return inRoom, nil
 }
 
-// DeactivateHumanUser disables a Matrix account through the Tuwunel admin bot.
-// Tuwunel owns the exact deactivate/revoke semantics; the controller treats a
-// successful command delivery as the offboard handoff point.
+// DeactivateHumanUser disables a Matrix account. Provider-native
+// implementations expose ProviderAdminOps (Tuwunel: "!admin users deactivate"
+// admin-bot command; Synapse: POST /_synapse/admin/v1/deactivate/{id}). Falls
+// back to the raw Tuwunel admin command for clients that do not implement the
+// capability (test fakes).
 func (p *Provisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
+	if ops, ok := p.matrix.(matrix.ProviderAdminOps); ok {
+		return ops.DeactivateUser(ctx, userID)
+	}
 	cmd := fmt.Sprintf("!admin users deactivate %s", userID)
 	log.FromContext(ctx).Info("sending tuwunel human deactivate admin command", "user", userID, "command", cmd)
 	if err := p.matrix.AdminCommand(ctx, cmd); err != nil {
