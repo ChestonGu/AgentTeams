@@ -79,6 +79,13 @@
    Please see .../upgrade.html#direct-tcp-replication-is-no-longer-supported-migrate-to-redis"""
    ```
    也就是说“worker 直连 main 的 TCP 复制”这条老路在代码层面已被禁止。
+   **版本分界（重要）**：Redis 支持 v1.13.0 引入、v1.18.0 成为推荐方式；
+   **v1.67.0 正式移除 direct TCP replication**（upgrade notes：
+   "Direct TCP replication is no longer supported: migrate to Redis"）。
+   所以：**Synapse < 1.67 可以拆 client worker 而不用 Redis**（worker 用 `worker_replication_host` /
+   `worker_replication_port` 连 main 的 TCP `replication` listener，例如 `synapse.app.client_reader`）；
+   **>= 1.67（含我们的 1.127）必须 Redis**。如果内网有“拆了 client 但没用 Redis”的部署，
+   优先确认其 Synapse 版本是否 < 1.67（或是否有隐藏的 Redis / 其实跑的是多 main 副本而非 worker）。
 3. **Redis 承载什么**：所有进程都需要看到同一份“新写入了什么”的事件流（replication streams）——
    `events`、`receipts`、`typing`、`to_device`、`presence`、`device_lists`、`account_data`、`push_rules` 等，
    外加跨进程共享缓存（房间成员/state 等，降低 PG 查询压力）。
