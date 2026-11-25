@@ -1,0 +1,29 @@
+# Stable ClusterIP address for the single Synapse main process.
+#
+# The headless Service in synapse-service.yaml keeps resolving to the main Pod
+# IP, which changes when Kubernetes recreates the Pod. Worker processes use the
+# main process' HTTP replication endpoint (port 9093) via instance_map, so give
+# them a stable ClusterIP instead. Also serves as an alternative in-cluster
+# client endpoint if the headless DNS is not desired.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentteams-128-synapse-main
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse
+    app.kubernetes.io/component: matrix
+    app.kubernetes.io/purpose: main-stable
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentteams-128-synapse
+  ports:
+    - name: http
+      port: 8008
+      targetPort: 8008
+      protocol: TCP
+    - name: replication
+      port: 9093
+      targetPort: 9093
+      protocol: TCP

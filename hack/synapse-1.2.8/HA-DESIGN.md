@@ -279,3 +279,54 @@ worker 同时挂载共享 `homeserver.yaml`（DB/redis/instance_map/secret/signi
   https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
 - reverse proxy（含 sync 一致性哈希示例）：https://element-hq.github.io/synapse/latest/reverse_proxy.html
 - 本环境实测数据见第 2 节（2026-11-25）。
+
+## 9. 一期实施记录（2026-11-25，已落地）
+
+**部署形态**：main 保持 **StatefulSet（1 副本，PVC 存 media + signing key）**；client worker 用
+**Deployment（2 副本，无 PVC，反亲和到两个节点）**；Redis 用 StatefulSet（1 副本 + AOF 1Gi PVC）。
+（为什么 main 不改成 Deployment：当前 media 还在 RWO local-path PVC 上，Pod 实际被卷绑定在节点上，
+Deployment 并不会让它更容易漂移；等 media 迁 S3 后 main 可以改成无状态 Deployment。）
+
+**新增对象（namespace agentos）**：
+
+| 对象 | 说明 |
+|------|------|
+| `agentteams-128-synapse-redis` StatefulSet + Service | redis:7-alpine，AOF，Secret `agentteams-128-synapse-redis`（redis.conf + redis-password），服务名 `agentteams-128-synapse-redis.agentos.svc.cluster.local:6379` |
+| `agentteams-128-synapse-main` Service | main 的稳定 ClusterIP（8008 + 9093 replication），供 worker 通过 `instance_map` 连接（headless 服务解析到 Pod IP，Pod 重建会变） |
+| `agentteams-128-synapse-client` Deployment + Service + PDB | 2 副本 generic_worker（client 资源），无 PVC；worker_name 由 initContainer 用 Pod 名渲染；挂载共享 homeserver.yaml、appservice registration、签名密钥副本；`maxUnavailable: 1`、反亲和 |
+| 主配置增量 | `listeners` 增加 `9093/replication`；`redis.enabled/host/port/password`；`instance_map.main` 指向稳定 ClusterIP:9093；`worker_replication_secret`；签名密钥仍在 main 的 /data PVC，worker 副本挂到 `/signing-key/...` |
+| Higress | service source `synapse-client.dns` → worker Service:8008；路由 `matrix-homeserver-sync`（`/_matrix/client/v3/sync`）、`-sync-r0`（`r0`）、`-events`（`/_matrix/client/v3/events`）→ worker；原 `matrix-homeserver`（`/_matrix`）兜底 main。实测按最长前缀命中，无需删除兜底路由 |
+| 脚本 | `scripts/enable-ha.sh`（幂等启用：密钥→Redis→主配置/重启→worker→路由）、`scripts/enable-sync-workers.sh`、`scripts/verify-ha.sh`；`deploy-synapse.sh` 检测到 HA 密钥后自动渲染 HA 配置（`HA_ENABLE=1` 时还会在末尾调用 enable-ha.sh） |
+
+**验证结果（2026-11-25 20:15 左右）**：
+
+- `verify-ha.sh` 全绿：Redis PONG、main Ready + 9093 监听、2/2 worker Ready、网关 `/sync` 可达；
+- 网关发出的 3 个长轮询全部落在 **worker** 日志（main 只收到内部 agent 的少量 sync）；
+- 30 个并发 `/sync?timeout=2000` → 30/30 HTTP 200；
+- 删掉一个 worker Pod 后立即发起 3 个长轮询 → 全部 200/2.5s，Deployment 自动补 Pod；
+- 端到端：admin 经网关发消息到 Manager DM → @manager 回复 OK；controller 近 15 分钟 0 error；
+- Redis `connected_clients=7`（main + 2 workers 的 replication/缓存连接）。
+- 注意：Manager/Worker 的 Harness 仍直连 main 的 headless Service（AGENTTEAMS_MATRIX_URL 同一路径，
+  controller 的 admin REST 也用它），所以**内部 agent 的 /sync 还没走 worker**；外部 Element/人类客户端
+  经网关的 /sync 已走 worker。见 §10 的下一步。
+
+## 10. 还能拆什么（按收益/风险排序）
+
+| # | 可拆出的角色 | 做法 | 收益 | 风险/前置 | 状态 |
+|---|--------------|------|------|-----------|------|
+| 1 | **event persister**（`stream_writers.events`） | 新增带 `replication` listener 的 worker（固定 worker_name + 稳定 ClusterIP），`instance_map` 加它，`stream_writers.events: event-persister`；client worker 作为 event_creator 通过 HTTP replication 转发；官方支持多 writer 按 room 分片 | **main 重启不再阻塞发消息**；写事件路径从 main 移走 | 增删 writer 必须重启所有 worker；事件流写错会阻塞房间发送，需灰度/回滚脚本 | 未做（推荐下一期） |
+| 2 | **其余 stream writers**（typing/receipts/to_device/account_data/presence/push_rules/device_lists） | 同一个 stream-writer worker 配 replication listener，`stream_writers` 各项指向它 | main 进一步瘦身；重启影响面更小 | 每流只能单 writer，该 worker 是新的单点（可用 PDB+快速重建；Redis 流丢失需重启 worker） | 未做 |
+| 3 | **background tasks**（`run_background_tasks_on`）、user directory（`update_user_directory_from_worker`）、AS 通知（`notify_appservices_from_worker`） | 指定到现有 generic worker（无需额外 listener） | main 只剩 media/admin/background 少量工作 | 配置项变更需重启 main + 相关 worker；AS 通知单实例 | 未做 |
+| 4 | **media repository worker / media S3** | 自建镜像 + `synapse-s3-storage-provider`，media 写入 MinIO（建议独立桶+专用用户），`enable_media_repo: false` 指到 media worker | media 多副本、main 真正无状态（可改 Deployment） | 需要自建镜像、迁移现有 media、MinIO 桶/权限；RWO PVC 无法多 Pod | 未做（二期） |
+| 5 | **内部 agent 的 matrix URL** | controller 增加 `AGENTTEAMS_WORKER_MATRIX_URL`（WorkerEnvDefaults.MatrixURL 单独取值），Manager/Worker harness 走 gateway/worker；controller 自己仍用 main（admin REST/route 初始化） | Manager/Worker 的 /sync 也 HA，main 只处理写/后台 | 需要改 controller 代码 + 重建镜像；若所有流量走 gateway 需防止 initializer 把 matrix 路由指回 gateway | 未做（小改动，推荐） |
+| 6 | **Redis HA** | 3 节点 Sentinel 或托管 Redis，Synapse redis 配置改 sentinel/多地址（1.127 支持情况需确认） | 去掉 Redis 单点 | 配置/运维复杂度；Redis 重启丢流时需重启 worker | 未做（二期） |
+| 7 | **PostgreSQL HA** | Patroni/流复制主备，或迁移云 RDS 多可用区 | 去掉全链路最大单点 | 涉及 DB 迁移与停机窗口，风险最高 | 未做（单独立项） |
+| 8 | **main 单活加固** | 现有 StatefulSet 1 副本 + 快探针 + `maxUnavailable` PDB；二期 media 上 S3 后可改 Deployment | 缩短 main 故障恢复窗口 | main 无内建 leader election，不能 active-active | 部分（PDB/探针可后续补） |
+
+**已知遗留（不影响 HA 可用性）**：
+
+- Manager（OpenClaw matrix 插件）仍在使用迁移前遗留的 sync token（`since=3269`），导致 main 上每 5s 出现
+  `400 Invalid stream token` 日志；功能正常（依赖 AS push 收消息），建议清理 `/root/manager-workspace/.openclaw/state/openclaw.sqlite`
+  中的 matrix sync 状态或等插件自动全量同步。Dashboard/浏览器里也有少量旧 token 的 401（预期，重新登录即可）。
+- 内网旧环境"拆 client 不用 Redis"的解释见 §3.1：**Synapse < 1.67 的 TCP replication**；我们的 1.127 必须 Redis。
+

@@ -1,0 +1,211 @@
+# Synapse client workers (synapse.app.generic_worker) for namespace agentos.
+#
+# Workers are stateless Deployments (no PVC): they share PostgreSQL with the
+# main process, use Redis for replication, and handle the client API surface
+# (including /_matrix/client/v3/sync). The gateway routes only the endpoints we
+# explicitly delegate to the worker Service; everything else stays on main.
+#
+# The worker inherits the shared homeserver.yaml (DB/redis/instance_map/
+# replication secret) and gets a per-pod worker.yaml rendered by an init
+# container (worker_name must be unique per process). It also overrides
+# signing_key_path to a copy of the main process signing key mounted from the
+# agentteams-synapse-secrets Secret (same key material, read-only).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentteams-128-synapse-worker-config
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse-client
+    app.kubernetes.io/component: matrix
+data:
+  worker.yaml.tmpl: |
+    worker_app: synapse.app.generic_worker
+    worker_name: __WORKER_NAME__
+
+    worker_listeners:
+      - type: http
+        port: 8008
+        bind_addresses:
+          - 0.0.0.0
+        x_forwarded: true
+        resources:
+          - names: [client]
+
+    # Workers do not mount the main process /data PVC; use the shared copy of
+    # the signing key (same key as main) instead.
+    signing_key_path: /signing-key/agentteams.signing.key
+
+    worker_log_config: /work/worker-log.yaml
+  worker-log.yaml: |
+    version: 1
+    formatters:
+      precise:
+        format: "%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s"
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: precise
+        stream: ext://sys.stdout
+    root:
+      level: INFO
+      handlers: [console]
+    disable_existing_loggers: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentteams-128-synapse-client
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse-client
+    app.kubernetes.io/component: matrix
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentteams-128-synapse-client
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentteams-128-synapse-client
+        app.kubernetes.io/component: matrix
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: agentteams-128-synapse-client
+                topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: render-worker-config
+          image: ghcr.io/element-hq/synapse:v1.127.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - 'sed "s/__WORKER_NAME__/client-${POD_NAME}/" /template/worker.yaml.tmpl > /work/worker.yaml && cp /template/worker-log.yaml /work/worker-log.yaml && cat /work/worker.yaml'
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: worker-template
+              mountPath: /template
+              readOnly: true
+            - name: worker-config
+              mountPath: /work
+      containers:
+        - name: synapse-worker
+          image: ghcr.io/element-hq/synapse:v1.127.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --config-path
+            - /config/homeserver.yaml
+            - --config-path
+            - /work/worker.yaml
+          env:
+            - name: SYNAPSE_WORKER
+              value: synapse.app.generic_worker
+          ports:
+            - name: http
+              containerPort: 8008
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: signing-key
+              mountPath: /signing-key
+              readOnly: true
+            - name: as-registrations
+              mountPath: /as-registrations
+              readOnly: true
+            - name: worker-config
+              mountPath: /work
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_matrix/client/versions
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+      volumes:
+        - name: config
+          secret:
+            secretName: agentteams-synapse-config
+        - name: signing-key
+          secret:
+            secretName: agentteams-synapse-secrets
+            items:
+              - key: signing_key
+                path: agentteams.signing.key
+        # The shared homeserver.yaml references /as-registrations/appservice.yaml
+        # (declarative AppService registration), so workers need the same file
+        # that main mounts; optional so a legacy no-AppService setup still runs.
+        - name: as-registrations
+          secret:
+            secretName: agentteams-synapse-appservice
+            optional: true
+        - name: worker-template
+          configMap:
+            name: agentteams-128-synapse-worker-config
+        - name: worker-config
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentteams-128-synapse-client
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse-client
+    app.kubernetes.io/component: matrix
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentteams-128-synapse-client
+  ports:
+    - name: http
+      port: 8008
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentteams-128-synapse-client
+  namespace: agentos
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentteams-128-synapse-client

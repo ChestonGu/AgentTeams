@@ -20,6 +20,9 @@ listeners:
     resources:
       - names: [client]
         compress: false
+    # HA: HTTP replication listener for worker processes (internal only; never
+    # expose this port outside the cluster).
+  __REPLICATION_LISTENER__
 
 report_stats: false
 enable_registration: false
@@ -108,6 +111,10 @@ uploads_path: /data/uploads
 max_upload_size: 200M
 
 log_config: /config/log_config.yaml
+
+# HA: Redis replication + instance_map + worker replication secret. Rendered
+# only after the HA enablement step; empty for the legacy single-process setup.
+__HA_TOP_LEVEL__
 
 # Matrix AppService registrations are declarative: this file is rendered from
 # the controller's AppService tokens (agentteams-128-runtime-env Secret) and

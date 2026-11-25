@@ -112,6 +112,34 @@ render_homeserver() {
   if [[ "$with_as" == "1" ]]; then
     as_block=$'app_service_config_files:\n  - /as-registrations/appservice.yaml'
   fi
+
+  # HA rendering: once the HA enablement step has stored the HA secrets, every
+  # subsequent render must keep the replication listener + redis/instance_map
+  # block, otherwise a re-run of this script would break the workers.
+  local repl_block="" ha_block=""
+  if ha_ready; then
+    local redis_pw worker_secret
+    redis_pw="$(secret_of redis_password)"
+    worker_secret="$(secret_of worker_replication_secret)"
+    repl_block=$'  - port: 9093\n    tls: false\n    type: http\n    bind_addresses:\n      - 0.0.0.0\n    resources:\n      - names: [replication]'
+    ha_block=$(cat <<EOF
+# --- HA (client workers): Redis replication + HTTP replication endpoint ---
+redis:
+  enabled: true
+  host: ${RELEASE}-synapse-redis.${NS}.svc.cluster.local
+  port: 6379
+  password: "${redis_pw}"
+
+instance_map:
+  main:
+    host: ${RELEASE}-synapse-main.${NS}.svc.cluster.local
+    port: 9093
+
+worker_replication_secret: "${worker_secret}"
+EOF
+)
+  fi
+
   export TPL_SERVER_NAME="$SERVER_NAME" \
          TPL_PUBLIC_BASEURL="$PUBLIC_BASEURL" \
          TPL_REGISTRATION_SHARED_SECRET="$REGISTRATION_SHARED_SECRET" \
@@ -122,7 +150,9 @@ render_homeserver() {
          TPL_DB_NAME="$PG_DB" \
          TPL_DB_HOST="$PG_HOST" \
          TPL_DB_PORT="$PG_PORT" \
-         TPL_APP_SERVICE_BLOCK="$as_block"
+         TPL_APP_SERVICE_BLOCK="$as_block" \
+         TPL_REPLICATION_LISTENER="$repl_block" \
+         TPL_HA_TOP_LEVEL="$ha_block"
   render_with_env "$ROOT/templates/homeserver.yaml.tmpl" "$RENDER/homeserver.yaml"
   cp "$ROOT/templates/log_config.yaml" "$RENDER/log_config.yaml"
   kubectl -n "$NS" create secret generic agentteams-synapse-config \
@@ -131,7 +161,18 @@ render_homeserver() {
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   unset TPL_SERVER_NAME TPL_PUBLIC_BASEURL TPL_REGISTRATION_SHARED_SECRET \
         TPL_MACAROON_SECRET TPL_FORM_SECRET TPL_DB_USER TPL_DB_PASSWORD \
-        TPL_DB_NAME TPL_DB_HOST TPL_DB_PORT TPL_APP_SERVICE_BLOCK
+        TPL_DB_NAME TPL_DB_HOST TPL_DB_PORT TPL_APP_SERVICE_BLOCK \
+        TPL_REPLICATION_LISTENER TPL_HA_TOP_LEVEL
+}
+
+# ha_ready reports whether the HA enablement step has stored the HA secrets, so
+# the rendered config must include the replication/redis block.
+ha_ready() {
+  kubectl -n "$NS" get secret agentteams-synapse-secrets \
+    -o jsonpath='{.data.signing_key}' 2>/dev/null | grep -q . || return 1
+  kubectl -n "$NS" get secret agentteams-synapse-secrets \
+    -o jsonpath='{.data.redis_password}' 2>/dev/null | grep -q . || return 1
+  return 0
 }
 
 render_appservice() {
@@ -186,6 +227,16 @@ wait_synapse
 
 echo "==> phase 3: verification"
 "$HERE/verify-synapse.sh"
+
+# ---------------------------------------------------------------------------
+# Phase 4 (optional): HA topology — Redis + client workers + gateway routing.
+# Run once with HA_ENABLE=1, or manually via scripts/enable-ha.sh. After that,
+# render_homeserver() keeps the HA config on every re-run.
+# ---------------------------------------------------------------------------
+if [[ "${HA_ENABLE:-0}" == "1" ]]; then
+  echo "==> phase 4: enabling HA (Redis + client workers + routes)"
+  HA_ENABLE=0 "$HERE/enable-ha.sh"
+fi
 
 echo
 echo "Synapse is ready at http://${SYNAPSE_NAME}.${NS}.svc.cluster.local:8008 (server_name=${SERVER_NAME})."

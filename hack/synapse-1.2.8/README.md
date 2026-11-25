@@ -270,3 +270,48 @@ kubectl -n agentos get pvc | grep tuwunel
 
 **账号/密码**：仓库只记录用户名、地址与 Secret 名称；明文口令记录在**本地**（不入库）：
 桌面 `agentos-teams信息汇总.txt` 与 `hack/synapse-1.2.8/render/ACCOUNTS.local.md`（gitignored）。
+
+## 9. 高可用一期：Redis + client workers（已于 2026-11-25 启用）
+
+> 完整分析/演进路线见 [HA-DESIGN.md](HA-DESIGN.md)。本节只给操作入口。
+
+**拓扑**：`main`（StatefulSet 1 副本，PVC media+签名密钥）永远是单活（Synapse 不支持多 main
+active-active）；新增 Redis（replication 事件流 + 共享缓存）与 **2 个 client worker**
+（Deployment，无状态、无 PVC、反亲和）。Higress 只把
+`/_matrix/client/v3/sync`、`/_matrix/client/r0/sync`、`/_matrix/client/v3/events` 路由到
+worker Service，其余 `/_matrix` 仍走 main。
+
+```
+# 一键启用（幂等；会重启 main 一次，约 10~30s；之后 worker 承接 /sync）
+cd hack/synapse-1.2.8
+./scripts/enable-ha.sh
+
+# 校验（Redis/main replication listener/workers/网关路由）
+./scripts/verify-ha.sh
+```
+
+组件与文件：
+
+| 对象 | 文件 |
+|------|------|
+| Redis（StatefulSet+Service+AOF PVC） | `manifests/synapse-redis.yaml`（Secret 由 enable-ha.sh 渲染，不入库） |
+| main 稳定 ClusterIP（8008 + 9093 replication） | `manifests/synapse-main-service.yaml` |
+| client workers（Deployment+Service+PDB+worker 配置） | `manifests/synapse-worker.yaml` |
+| main 配置增量 | `homeserver.yaml.tmpl` 的 `__REPLICATION_LISTENER__` / `__HA_TOP_LEVEL__` 占位（deploy 脚本检测到 HA 密钥后自动渲染） |
+| 网关路由 | `scripts/enable-sync-workers.sh`（Higress Console API，幂等） |
+| 启用/校验 | `scripts/enable-ha.sh`、`scripts/verify-ha.sh` |
+
+要点：
+
+- **签名密钥**：main 仍在 `/data/agentteams.signing.key`；enable-ha.sh 把它复制到 Secret
+  `agentteams-synapse-secrets` 的 `signing_key`，worker 以只读方式挂到 `/signing-key/`（同一把
+  key，**不要重新生成**）。
+- **Redis**：不是可选缓存，是 Synapse 多进程的 replication 总线（v1.67 起 direct TCP 已被移除）；
+  只存通知/缓存，丢数据不影响消息（消息在 PostgreSQL），但 Redis 重启后建议滚动重启 worker。
+- **网关路由顺序**：实测 Higress 按最长前缀匹配，sync 路由会优先于 `/_matrix` 兜底，无需删除兜底路由。
+- **回滚**：删除 `matrix-homeserver-sync*`/`-events` 路由与 `synapse-client` service source，
+  删除 worker/redis 对象，去掉 main 配置中的 replication/redis/instance_map 块后重启 main。
+- **内部 agent 的 /sync**：Manager/Worker 的 Harness 仍直连 main（`AGENTTEAMS_MATRIX_URL` 同时被
+  controller 的 admin REST 使用），所以一期只覆盖外部客户端；拆分该 URL 需要 controller 小改动
+  （见 HA-DESIGN §10 第 5 项）。
+

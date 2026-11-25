@@ -1,0 +1,106 @@
+# Redis for Synapse worker replication (namespace agentos).
+#
+# Redis is Synapse's inter-process replication bus: the main process publishes
+# stream updates (events/receipts/typing/to_device/presence/device_lists/...)
+# and every worker subscribes; it is also the shared cache. It stores no
+# message data — messages/rooms live in PostgreSQL — so a single replica with
+# AOF persistence is enough for the first HA phase (Sentinel/managed Redis can
+# follow later).
+#
+# The Secret agentteams-synapse-redis (keys: redis.conf, redis-password) is
+# rendered by scripts/enable-ha.sh and is intentionally NOT committed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentteams-128-synapse-redis
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse-redis
+    app.kubernetes.io/component: matrix
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentteams-128-synapse-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agentteams-128-synapse-redis
+  namespace: agentos
+  labels:
+    app.kubernetes.io/name: agentteams-128-synapse-redis
+    app.kubernetes.io/component: matrix
+spec:
+  serviceName: agentteams-128-synapse-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentteams-128-synapse-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentteams-128-synapse-redis
+        app.kubernetes.io/component: matrix
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server", "/config/redis.conf"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentteams-128-synapse-redis
+                  key: redis-password
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG'
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG'
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 6
+      volumes:
+        - name: config
+          secret:
+            secretName: agentteams-128-synapse-redis
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
