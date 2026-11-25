@@ -6,64 +6,75 @@
 <title>MinIO 数据查看器 · agentteams-storage</title>
 <style>
   :root{
-    --bg:#0f172a; --panel:#111c33; --panel2:#16233d; --bd:#24324d; --txt:#e6edf7; --muted:#8aa0bf;
-    --accent:#3b82f6; --accent2:#2563eb; --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+    --bg:#f4f6fb; --panel:#ffffff; --panel2:#f8fafc; --bd:#dde4ef; --txt:#1f2a37; --muted:#6b7a90;
+    --accent:#2563eb; --accent2:#1d4ed8; --accent-weak:#eff6ff; --green:#16a34a; --red:#dc2626; --amber:#d97706;
     --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif}
-  header{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#13203a,#0f172a);border-bottom:1px solid var(--bd);padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--bd);padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;box-shadow:0 1px 3px rgba(16,24,40,.05)}
   header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.3px}
   header .sub{color:var(--muted);font-size:12px}
   .spacer{flex:1}
-  button{cursor:pointer;background:var(--panel2);color:var(--txt);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;font-size:13px;transition:.15s}
-  button:hover{border-color:var(--accent);background:#1b2b49}
-  button.primary{background:var(--accent2);border-color:var(--accent2)}
-  button.primary:hover{background:var(--accent)}
+  button{cursor:pointer;background:#fff;color:var(--txt);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;font-size:13px;transition:.15s}
+  button:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-weak)}
+  button.primary{background:var(--accent2);border-color:var(--accent2);color:#fff}
+  button.primary:hover{background:var(--accent);color:#fff}
   button:disabled{opacity:.45;cursor:not-allowed}
-  a{color:#7db1ff}
-  .wrap{padding:16px 18px 40px;max-width:1400px;margin:0 auto}
-  .card{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+  a{color:var(--accent)}
+  .wrap{padding:16px 18px 40px;max-width:1600px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
   .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
   label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
-  input[type=text],input[type=password],input[type=number],select{background:#0c1526;border:1px solid var(--bd);color:var(--txt);border-radius:8px;padding:7px 10px;font-size:13px;min-width:120px;outline:none}
-  input:focus{border-color:var(--accent)}
+  input[type=text],input[type=password],input[type=number],select{background:#fff;border:1px solid var(--bd);color:var(--txt);border-radius:8px;padding:7px 10px;font-size:13px;min-width:120px;outline:none}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
   .grow{flex:1;min-width:320px}
   .mono{font-family:var(--mono)}
-  .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted);background:#fff}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
   .dot.ok{background:var(--green)} .dot.err{background:var(--red)} .dot.wait{background:var(--amber)}
   .crumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-family:var(--mono);font-size:13px}
-  .crumbs button{padding:2px 8px;font-size:12px;border-radius:6px}
+  .crumbs button{padding:2px 8px;font-size:12px;border-radius:6px;color:var(--txt)}
   .crumbs .sep{color:var(--muted)}
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .statusbar{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12px;font-family:var(--mono)}
+  .pill{background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:2px 8px;font-family:var(--mono);font-size:12px;color:#334155}
+  .hint{color:var(--muted);font-size:12px}
+  .err{color:#b91c1c}
+  .flex-btns{display:flex;gap:8px;flex-wrap:wrap}
+  .toolbar .search{min-width:220px}
+  #log{white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:#475569;max-height:140px;overflow:auto;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:10px;display:none;margin-top:10px}
+  /* 主区域：左列表 + 右侧预览区 */
+  .main{display:flex;gap:14px;align-items:flex-start}
+  .main .list-col{flex:1;min-width:0;margin-bottom:14px}
+  .table-card{padding:0;overflow:hidden;margin-bottom:0}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  thead th{text-align:left;color:var(--muted);font-weight:500;border-bottom:1px solid var(--bd);padding:8px 10px;white-space:nowrap;font-size:12px}
-  tbody td{border-bottom:1px solid rgba(36,50,77,.55);padding:7px 10px;vertical-align:middle}
-  tbody tr:hover{background:#14213a}
-  td.name{font-family:var(--mono);word-break:break-all;min-width:280px}
-  td.name .dir{cursor:pointer;color:#8ec5ff}
+  thead th{text-align:left;color:var(--muted);font-weight:500;border-bottom:1px solid var(--bd);padding:8px 10px;white-space:nowrap;font-size:12px;background:var(--panel2)}
+  tbody td{border-bottom:1px solid #edf1f7;padding:7px 10px;vertical-align:middle}
+  tbody tr:hover{background:#f8fafc}
+  td.name{font-family:var(--mono);word-break:break-all;min-width:240px}
+  td.name .dir{cursor:pointer;color:var(--accent)}
   td.name .dir:hover{text-decoration:underline}
-  td.num{font-family:var(--mono);color:#cbd7ea;white-space:nowrap}
+  td.num{font-family:var(--mono);color:#334155;white-space:nowrap}
   td.ops{white-space:nowrap}
   td.ops button{padding:3px 8px;font-size:12px;border-radius:6px;margin-right:6px}
   .empty{color:var(--muted);text-align:center;padding:34px 0}
-  .statusbar{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12px;font-family:var(--mono)}
-  #log{white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--muted);max-height:140px;overflow:auto;background:#0a1222;border:1px solid var(--bd);border-radius:8px;padding:10px;display:none}
-  .modal-mask{position:fixed;inset:0;background:rgba(2,6,16,.72);display:none;align-items:center;justify-content:center;z-index:50;padding:24px}
-  .modal-mask.show{display:flex}
-  .modal{background:var(--panel);border:1px solid var(--bd);border-radius:14px;width:min(1000px,96vw);max-height:88vh;display:flex;flex-direction:column}
-  .modal .mhead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd)}
-  .modal .mhead .t{font-family:var(--mono);font-size:13px;word-break:break-all;flex:1}
-  .modal .mbody{overflow:auto;padding:14px 16px}
-  .modal pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;color:#d7e3f5}
-  .modal img{max-width:100%;border-radius:8px}
-  .hint{color:var(--muted);font-size:12px}
-  .flex-btns{display:flex;gap:8px;flex-wrap:wrap}
-  .pill{background:#0c1526;border:1px solid var(--bd);border-radius:8px;padding:2px 8px;font-family:var(--mono);font-size:12px;color:#b9c9e2}
-  .toolbar .search{min-width:220px}
-  .err{color:#ff9b9b}
+  /* 右侧预览面板 */
+  .preview-col{width:440px;flex:0 0 440px;position:sticky;top:86px}
+  .preview-card{margin-bottom:14px;padding:0;display:flex;flex-direction:column;max-height:calc(100vh - 110px)}
+  .preview-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--panel2);border-radius:12px 12px 0 0}
+  .preview-head .t{font-family:var(--mono);font-size:12.5px;word-break:break-all;flex:1;color:#0f172a}
+  .preview-head button{padding:2px 8px;font-size:12px;border-radius:6px}
+  .preview-body{overflow:auto;padding:14px;flex:1}
+  .preview-body pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;color:#1e293b;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:10px}
+  .preview-body img{max-width:100%;border-radius:8px;border:1px solid var(--bd)}
+  .preview-empty{color:var(--muted);font-size:13px;text-align:center;padding:26px 6px}
   footer{color:var(--muted);font-size:12px;padding:8px 18px 24px;text-align:center}
+  @media (max-width:1100px){
+    .main{flex-direction:column}
+    .preview-col{width:100%;flex:1 1 auto;position:static}
+    .preview-card{max-height:none}
+  }
 </style>
 </head>
 <body>
@@ -82,10 +93,13 @@
   <!-- 连接配置 -->
   <div class="card">
     <div class="row">
-      <div class="grow"><label>Endpoint（S3 API）</label><input type="text" id="cfgEndpoint" class="mono" value="http://10.254.254.105:32000"></div>
-      <div style="width:190px"><label>Access Key</label><input type="text" id="cfgAccess" class="mono" value="agentteams128"></div>
-      <div style="width:260px"><label>Secret Key</label><input type="password" id="cfgSecret" class="mono" value="Minio128-hO5eyiPG7B1W"></div>
-      <div style="width:230px"><label>Bucket</label><input type="text" id="cfgBucket" class="mono" list="bucketList" value="agentteams-storage"><datalist id="bucketList"></datalist></div>
+      <div style="flex:0 0 420px"><label>Endpoint（S3 API）</label><input type="text" id="cfgEndpoint" class="mono" style="width:100%" value="http://10.254.254.105:32000"></div>
+      <div style="width:180px"><label>Access Key</label><input type="text" id="cfgAccess" class="mono" value="agentteams128"></div>
+      <div style="width:250px"><label>Secret Key</label><input type="password" id="cfgSecret" class="mono" value="Minio128-hO5eyiPG7B1W"></div>
+      <div style="width:230px">
+        <label>Bucket（下拉选择）</label>
+        <select id="cfgBucket" class="mono" style="width:100%"></select>
+      </div>
       <div class="flex-btns">
         <button class="primary" id="btnConnect">连接 / 刷新</button>
         <button id="btnSave">保存配置</button>
@@ -102,7 +116,7 @@
         <option value="60">60 秒</option>
         <option value="120">2 分钟</option>
       </select>
-      <span class="hint">配置保存在本机浏览器 localStorage；此页面为只读浏览（下载走预签名 URL）。</span>
+      <span class="hint">Bucket 下拉列表来自 MinIO 实时查询；配置保存在本机浏览器 localStorage。</span>
     </div>
     <div id="log"></div>
   </div>
@@ -126,51 +140,50 @@
     </div>
   </div>
 
-  <!-- 列表 -->
-  <div class="card" style="padding:0;overflow:hidden">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:52%">名称</th>
-          <th style="width:12%">大小</th>
-          <th style="width:20%">最后修改</th>
-          <th style="width:16%">操作</th>
-        </tr>
-      </thead>
-      <tbody id="tbody">
-        <tr><td colspan="4" class="empty">点击“连接 / 刷新”开始浏览</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div class="toolbar">
-      <div>
+  <!-- 左：对象列表；右：预览区 -->
+  <div class="main">
+    <div class="list-col">
+      <div class="card table-card">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:52%">名称</th>
+              <th style="width:12%">大小</th>
+              <th style="width:20%">最后修改</th>
+              <th style="width:16%">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="4" class="empty">点击“连接 / 刷新”开始浏览</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top:14px">
         <div class="hint">快捷说明</div>
         <div class="hint" style="margin-top:4px">
-          · 目录点击进入；文件可下载（预签名 URL，默认 1 小时有效）或在线预览文本/JSON/图片。<br>
+          · 目录点击进入；文件可下载（预签名 URL，默认 1 小时有效），点“预览”在右侧面板查看文本/JSON/图片。<br>
           · 需要上传/删除/改策略等写操作，请用右上角 <b>MinIO 管理控制台</b>（账号：agentteams128 / Minio128-hO5eyiPG7B1W）。<br>
-          · 若自动刷新期间页面卡顿，可关闭自动刷新后手动刷新。
+          · 自动刷新只刷新左侧列表，不影响右侧预览。
         </div>
       </div>
     </div>
+    <aside class="preview-col">
+      <div class="card preview-card">
+        <div class="preview-head">
+          <div class="t" id="previewTitle">预览</div>
+          <span class="hint" id="previewMeta"></span>
+          <button id="previewDownload" style="display:none">下载</button>
+          <button id="previewClose" style="display:none">关闭</button>
+        </div>
+        <div class="preview-body" id="previewBody">
+          <div class="preview-empty">← 在左侧列表点文件的“预览”，内容会显示在这里</div>
+        </div>
+      </div>
+    </aside>
   </div>
 </div>
 
 <footer>本页面为本地静态 HTML，直连 MinIO S3 API（http://10.254.254.105:32000），无需任何后端服务。</footer>
-
-<!-- 预览弹窗 -->
-<div class="modal-mask" id="modal">
-  <div class="modal">
-    <div class="mhead">
-      <div class="t" id="modalTitle">预览</div>
-      <span class="hint" id="modalMeta"></span>
-      <button id="modalDownload">下载</button>
-      <button id="modalClose">关闭</button>
-    </div>
-    <div class="mbody" id="modalBody"></div>
-  </div>
-</div>
 
 <script>
 /* ============================================================
@@ -257,16 +270,15 @@ async function presignGet(segments, expires = 3600) {
 }
 /* === MINIO-CORE-END === */
 
-/* ---------- 以下为页面状态与 UI 逻辑，通过下方注入的 endpoint/access/secret 变量工作 ---------- */
+/* ---------- 页面状态与 UI 逻辑 ---------- */
 let endpoint = '', access = '', secret = '', bucket = '';
 let currentPrefix = '';
 let allItems = [];
 let nextToken = null;
 let autoTimer = null;
-let lastBucketStats = null;
 
 const $ = id => document.getElementById(id);
-const LS_KEY = 'agentteams-minio-viewer-v1';
+const LS_KEY = 'agentteams-minio-viewer-v2';
 const DEFAULTS = {
   endpoint: 'http://10.254.254.105:32000',
   access: 'agentteams128',
@@ -307,16 +319,26 @@ function loadCfg() {
   $('cfgEndpoint').value = c.endpoint;
   $('cfgAccess').value = c.access;
   $('cfgSecret').value = c.secret;
-  $('cfgBucket').value = c.bucket;
   $('autoRefresh').checked = !!c.autoRefresh;
   $('autoInterval').value = String(c.interval || '30');
+  ensureBucketOption(c.bucket);
   applyCfg();
+}
+function ensureBucketOption(name) {
+  if (!name) return;
+  const sel = $('cfgBucket');
+  if (![...sel.options].some(o => o.value === name)) {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  sel.value = name;
 }
 function applyCfg() {
   endpoint = $('cfgEndpoint').value.trim().replace(/\/+$/, '');
   access = $('cfgAccess').value.trim();
   secret = $('cfgSecret').value;
-  bucket = $('cfgBucket').value.trim();
+  bucket = $('cfgBucket').value;
   $('consoleLink').href = endpoint.replace(/:32000\/?$/, ':32001');
 }
 function saveCfg() {
@@ -364,6 +386,29 @@ async function listBuckets() {
   }));
 }
 
+/** 实时刷新 Bucket 下拉框（保留当前选择；失败时保留已有选项）。 */
+async function refreshBucketOptions() {
+  const sel = $('cfgBucket');
+  const current = sel.value || DEFAULTS.bucket;
+  try {
+    const buckets = await listBuckets();
+    sel.innerHTML = '';
+    for (const b of buckets) {
+      const opt = document.createElement('option');
+      opt.value = b.name;
+      opt.textContent = b.name;
+      sel.appendChild(opt);
+    }
+    ensureBucketOption(buckets.some(b => b.name === current) ? current : (buckets[0]?.name || current));
+    log('Bucket 下拉列表已刷新：' + buckets.map(b => b.name).join(', '));
+    return buckets;
+  } catch (e) {
+    log('刷新 Bucket 列表失败（保留当前选项）：' + e.message, true);
+    ensureBucketOption(current);
+    return [];
+  }
+}
+
 async function listObjects(prefix, token) {
   const query = [['list-type', '2'], ['delimiter', '/'], ['max-keys', '1000'], ['prefix', prefix || '']];
   if (token) query.push(['continuation-token', token]);
@@ -392,7 +437,7 @@ function renderCrumbs() {
   root.onclick = () => navigate('');
   box.appendChild(root);
   let acc = '';
-  parts.forEach((p, i) => {
+  parts.forEach(p => {
     acc += p + '/';
     const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '/';
     box.appendChild(sep);
@@ -501,35 +546,57 @@ function download(key) {
     a.remove();
   }).catch(e => log('生成下载链接失败：' + e.message, true));
 }
+
+/* ---------- 右侧预览区（不弹窗） ---------- */
+function resetPreview() {
+  $('previewTitle').textContent = '预览';
+  $('previewMeta').textContent = '';
+  $('previewDownload').style.display = 'none';
+  $('previewClose').style.display = 'none';
+  $('previewBody').innerHTML = '<div class="preview-empty">← 在左侧列表点文件的“预览”，内容会显示在这里</div>';
+}
 async function preview(key, size) {
-  if (size > 5 * 1024 * 1024) { log('文件大于 5MB，已改为下载：' + key); download(key); return; }
   const ext = (key.split('.').pop() || '').toLowerCase();
   const isImage = ['png','jpg','jpeg','gif','webp','svg','bmp','ico'].includes(ext);
-  $('modalTitle').textContent = key;
-  $('modalMeta').textContent = fmtSize(size);
-  $('modalBody').innerHTML = '<div class="hint">加载中…</div>';
-  $('modal').classList.add('show');
-  $('modalDownload').onclick = () => download(key);
+  $('previewTitle').textContent = key;
+  $('previewMeta').textContent = fmtSize(size);
+  $('previewDownload').style.display = '';
+  $('previewDownload').onclick = () => download(key);
+  $('previewClose').style.display = '';
+  $('previewClose').onclick = resetPreview;
+  $('previewBody').innerHTML = '<div class="hint">加载中…</div>';
+  if (size > 5 * 1024 * 1024) {
+    $('previewBody').innerHTML = '<div class="err">文件大于 5MB，请点击上方“下载”查看。</div>';
+    return;
+  }
   try {
     if (isImage) {
       const url = await presignGet([bucket, ...key.split('/')], 600);
-      $('modalBody').innerHTML = `<img src="${esc(url)}" alt="">`;
+      $('previewBody').innerHTML = `<img src="${esc(url)}" alt="">`;
       return;
     }
     const { text } = await s3Fetch({ segments: [bucket, ...key.split('/')] });
     let display = text;
     if (ext === 'json') { try { display = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {} }
-    $('modalBody').innerHTML = `<pre>${esc(display.slice(0, 500000))}</pre>` + (display.length > 500000 ? '<div class="hint">（内容过大，仅显示前 500KB）</div>' : '');
+    $('previewBody').innerHTML = `<pre>${esc(display.slice(0, 500000))}</pre>` + (display.length > 500000 ? '<div class="hint">（内容过大，仅显示前 500KB）</div>' : '');
   } catch (e) {
-    $('modalBody').innerHTML = `<div class="err">预览失败：${esc(e.message)}</div>`;
+    $('previewBody').innerHTML = `<div class="err">预览失败：${esc(e.message)}</div>`;
   }
 }
 
 /* ---------- 事件 ---------- */
-$('btnConnect').onclick = () => { saveCfg(); navigate(''); listBuckets().then(bs => {
-  const dl = $('bucketList'); dl.innerHTML = bs.map(b => `<option value="${esc(b.name)}">`).join('');
-  log('可用 Bucket：' + bs.map(b => b.name).join(', '));
-}).catch(e => log('列出 Bucket 失败（可能权限不足）：' + e.message, true)); };
+$('btnConnect').onclick = async () => {
+  saveCfg();
+  $('btnConnect').disabled = true;
+  try {
+    await refreshBucketOptions();
+    applyCfg();
+  } finally {
+    $('btnConnect').disabled = false;
+  }
+  navigate('');
+};
+$('cfgBucket').onchange = () => { saveCfg(); navigate(''); };
 $('btnRefresh').onclick = () => refresh(true).catch(() => {});
 $('btnSave').onclick = saveCfg;
 $('btnLog').onclick = () => { const el = $('log'); el.style.display = el.style.display === 'none' ? 'block' : 'none'; };
@@ -537,11 +604,12 @@ $('btnUp').onclick = () => { if (!currentPrefix) return; const parts = currentPr
 $('btnRoot').onclick = () => navigate('');
 $('btnMore').onclick = () => refresh(false).catch(() => {});
 $('filter').oninput = renderRows;
-$('modalClose').onclick = () => $('modal').classList.remove('show');
-$('modal').addEventListener('click', e => { if (e.target === $('modal')) $('modal').classList.remove('show'); });
 $('autoRefresh').onchange = () => { saveCfg(); setupAuto(); };
 $('autoInterval').onchange = () => { saveCfg(); setupAuto(); };
-document.addEventListener('keydown', e => { if (e.key === 'F5' || (e.key === 'r' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); refresh(true).catch(() => {}); } });
+document.addEventListener('keydown', e => {
+  if (e.key === 'F5' || (e.key === 'r' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); refresh(true).catch(() => {}); }
+  if (e.key === 'Escape') resetPreview();
+});
 
 function setupAuto() {
   if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
@@ -549,20 +617,24 @@ function setupAuto() {
   const sec = Number($('autoInterval').value) || 30;
   autoTimer = setInterval(() => {
     if (document.hidden) return;
-    if ($('modal').classList.contains('show')) return;
     refresh(true).catch(() => {});
   }, sec * 1000);
   log(`自动刷新已开启：每 ${sec} 秒`);
 }
-function tickClock() {
-  const d = new Date();
-  $('clock').textContent = d.toLocaleString();
-}
+function tickClock() { $('clock').textContent = new Date().toLocaleString(); }
 setInterval(tickClock, 1000);
-loadCfg();
-tickClock();
-navigate('');
-setupAuto();
+
+/* ---------- 启动 ---------- */
+async function bootstrap() {
+  loadCfg();
+  tickClock();
+  await refreshBucketOptions();
+  applyCfg();
+  setupAuto();
+  resetPreview();
+  navigate('');
+}
+bootstrap();
 </script>
 </body>
 </html>
