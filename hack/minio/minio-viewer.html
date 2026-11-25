@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MinIO 数据查看器 · agentteams-storage</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#111c33; --panel2:#16233d; --bd:#24324d; --txt:#e6edf7; --muted:#8aa0bf;
+    --accent:#3b82f6; --accent2:#2563eb; --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+    --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#13203a,#0f172a);border-bottom:1px solid var(--bd);padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.3px}
+  header .sub{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+  button{cursor:pointer;background:var(--panel2);color:var(--txt);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;font-size:13px;transition:.15s}
+  button:hover{border-color:var(--accent);background:#1b2b49}
+  button.primary{background:var(--accent2);border-color:var(--accent2)}
+  button.primary:hover{background:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  a{color:#7db1ff}
+  .wrap{padding:16px 18px 40px;max-width:1400px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+  label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+  input[type=text],input[type=password],input[type=number],select{background:#0c1526;border:1px solid var(--bd);color:var(--txt);border-radius:8px;padding:7px 10px;font-size:13px;min-width:120px;outline:none}
+  input:focus{border-color:var(--accent)}
+  .grow{flex:1;min-width:320px}
+  .mono{font-family:var(--mono)}
+  .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .dot.ok{background:var(--green)} .dot.err{background:var(--red)} .dot.wait{background:var(--amber)}
+  .crumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-family:var(--mono);font-size:13px}
+  .crumbs button{padding:2px 8px;font-size:12px;border-radius:6px}
+  .crumbs .sep{color:var(--muted)}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:left;color:var(--muted);font-weight:500;border-bottom:1px solid var(--bd);padding:8px 10px;white-space:nowrap;font-size:12px}
+  tbody td{border-bottom:1px solid rgba(36,50,77,.55);padding:7px 10px;vertical-align:middle}
+  tbody tr:hover{background:#14213a}
+  td.name{font-family:var(--mono);word-break:break-all;min-width:280px}
+  td.name .dir{cursor:pointer;color:#8ec5ff}
+  td.name .dir:hover{text-decoration:underline}
+  td.num{font-family:var(--mono);color:#cbd7ea;white-space:nowrap}
+  td.ops{white-space:nowrap}
+  td.ops button{padding:3px 8px;font-size:12px;border-radius:6px;margin-right:6px}
+  .empty{color:var(--muted);text-align:center;padding:34px 0}
+  .statusbar{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12px;font-family:var(--mono)}
+  #log{white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--muted);max-height:140px;overflow:auto;background:#0a1222;border:1px solid var(--bd);border-radius:8px;padding:10px;display:none}
+  .modal-mask{position:fixed;inset:0;background:rgba(2,6,16,.72);display:none;align-items:center;justify-content:center;z-index:50;padding:24px}
+  .modal-mask.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--bd);border-radius:14px;width:min(1000px,96vw);max-height:88vh;display:flex;flex-direction:column}
+  .modal .mhead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd)}
+  .modal .mhead .t{font-family:var(--mono);font-size:13px;word-break:break-all;flex:1}
+  .modal .mbody{overflow:auto;padding:14px 16px}
+  .modal pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;color:#d7e3f5}
+  .modal img{max-width:100%;border-radius:8px}
+  .hint{color:var(--muted);font-size:12px}
+  .flex-btns{display:flex;gap:8px;flex-wrap:wrap}
+  .pill{background:#0c1526;border:1px solid var(--bd);border-radius:8px;padding:2px 8px;font-family:var(--mono);font-size:12px;color:#b9c9e2}
+  .toolbar .search{min-width:220px}
+  .err{color:#ff9b9b}
+  footer{color:var(--muted);font-size:12px;padding:8px 18px 24px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>MinIO 数据查看器</h1>
+    <div class="sub">agentteams-storage · 实时浏览 / 下载 / 预览 · <span id="clock" class="mono"></span></div>
+  </div>
+  <div class="spacer"></div>
+  <span class="badge"><span class="dot" id="connDot"></span><span id="connText">未连接</span></span>
+  <button id="btnRefresh">刷新 (F5)</button>
+  <a id="consoleLink" href="http://10.254.254.105:32001" target="_blank" rel="noopener"><button>打开 MinIO 管理控制台 ↗</button></a>
+</header>
+
+<div class="wrap">
+  <!-- 连接配置 -->
+  <div class="card">
+    <div class="row">
+      <div class="grow"><label>Endpoint（S3 API）</label><input type="text" id="cfgEndpoint" class="mono" value="http://10.254.254.105:32000"></div>
+      <div style="width:190px"><label>Access Key</label><input type="text" id="cfgAccess" class="mono" value="agentteams128"></div>
+      <div style="width:260px"><label>Secret Key</label><input type="password" id="cfgSecret" class="mono" value="Minio128-hO5eyiPG7B1W"></div>
+      <div style="width:230px"><label>Bucket</label><input type="text" id="cfgBucket" class="mono" list="bucketList" value="agentteams-storage"><datalist id="bucketList"></datalist></div>
+      <div class="flex-btns">
+        <button class="primary" id="btnConnect">连接 / 刷新</button>
+        <button id="btnSave">保存配置</button>
+        <button id="btnLog">日志</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:6px;color:var(--muted);margin:0">
+        <input type="checkbox" id="autoRefresh" style="accent-color:var(--accent)"> 自动刷新
+      </label>
+      <select id="autoInterval">
+        <option value="10">10 秒</option>
+        <option value="30" selected>30 秒</option>
+        <option value="60">60 秒</option>
+        <option value="120">2 分钟</option>
+      </select>
+      <span class="hint">配置保存在本机浏览器 localStorage；此页面为只读浏览（下载走预签名 URL）。</span>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <!-- 路径 + 工具栏 -->
+  <div class="card">
+    <div class="toolbar">
+      <div class="crumbs" id="crumbs"></div>
+      <div class="spacer"></div>
+      <input type="text" class="search" id="filter" placeholder="过滤当前目录（输入即筛选）">
+      <button id="btnUp">↑ 上一级</button>
+      <button id="btnRoot">根目录</button>
+      <button id="btnMore" style="display:none">加载更多</button>
+    </div>
+    <div class="statusbar" style="margin-top:10px">
+      <span>当前前缀：<span class="pill mono" id="statPrefix">/</span></span>
+      <span>已加载：<span class="pill" id="statCount">0</span> 项</span>
+      <span>合计大小：<span class="pill" id="statSize">0 B</span></span>
+      <span>最近刷新：<span class="pill" id="statTime">-</span></span>
+      <span>接口耗时：<span class="pill" id="statLatency">-</span></span>
+    </div>
+  </div>
+
+  <!-- 列表 -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:52%">名称</th>
+          <th style="width:12%">大小</th>
+          <th style="width:20%">最后修改</th>
+          <th style="width:16%">操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="4" class="empty">点击“连接 / 刷新”开始浏览</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <div>
+        <div class="hint">快捷说明</div>
+        <div class="hint" style="margin-top:4px">
+          · 目录点击进入；文件可下载（预签名 URL，默认 1 小时有效）或在线预览文本/JSON/图片。<br>
+          · 需要上传/删除/改策略等写操作，请用右上角 <b>MinIO 管理控制台</b>（账号：agentteams128 / Minio128-hO5eyiPG7B1W）。<br>
+          · 若自动刷新期间页面卡顿，可关闭自动刷新后手动刷新。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>本页面为本地静态 HTML，直连 MinIO S3 API（http://10.254.254.105:32000），无需任何后端服务。</footer>
+
+<!-- 预览弹窗 -->
+<div class="modal-mask" id="modal">
+  <div class="modal">
+    <div class="mhead">
+      <div class="t" id="modalTitle">预览</div>
+      <span class="hint" id="modalMeta"></span>
+      <button id="modalDownload">下载</button>
+      <button id="modalClose">关闭</button>
+    </div>
+    <div class="mbody" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+ * MinIO 只读查看器（S3 SigV4，浏览器 WebCrypto 实现，无第三方依赖）
+ * ============================================================ */
+/* === MINIO-CORE-START === */
+const REGION = 'us-east-1';
+const SERVICE = 's3';
+
+async function sha256Hex(data) {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function hmac(keyBytes, msg) {
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg));
+  return new Uint8Array(sig);
+}
+async function hmacHex(keyBytes, msg) {
+  return [...await hmac(keyBytes, msg)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function awsEncode(str) {
+  return encodeURIComponent(str).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+function amzNow() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+function canonicalUri(segments) {
+  return '/' + segments.map(s => awsEncode(s)).join('/');
+}
+function canonicalQueryString(pairs) {
+  return pairs
+    .map(([k, v]) => [awsEncode(k), awsEncode(v)])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0)))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+}
+async function signingKey(secret, dateStamp) {
+  const kDate = await hmac(new TextEncoder().encode('AWS4' + secret), dateStamp);
+  const kRegion = await hmac(kDate, REGION);
+  const kService = await hmac(kRegion, SERVICE);
+  return await hmac(kService, 'aws4_request');
+}
+/** 生成带 Authorization 头的已签名请求参数。 */
+async function signHeaders({ method = 'GET', segments, query = [], extraHeaders = {}, payloadHash = null }) {
+  const amzDate = amzNow();
+  const dateStamp = amzDate.slice(0, 8);
+  const hash = payloadHash || await sha256Hex('');
+  const canonicalQuery = canonicalQueryString(query);
+  const uri = canonicalUri(segments);
+  const headerPairs = { host: new URL(endpoint).host, 'x-amz-content-sha256': hash, 'x-amz-date': amzDate, ...extraHeaders };
+  const headerNames = Object.keys(headerPairs).map(h => h.toLowerCase()).sort();
+  const canonicalHeaders = headerNames.map(h => `${h}:${String(headerPairs[h]).trim()}\n`).join('');
+  const signedHeaders = headerNames.join(';');
+  const canonicalRequest = [method, uri, canonicalQuery, canonicalHeaders, signedHeaders, hash].join('\n');
+  const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256Hex(canonicalRequest)].join('\n');
+  const signature = await hmacHex(await signingKey(secret, dateStamp), stringToSign);
+  const authorization = `AWS4-HMAC-SHA256 Credential=${access}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const url = endpoint + uri + (canonicalQuery ? '?' + canonicalQuery : '');
+  const headers = { Authorization: authorization, 'x-amz-content-sha256': hash, 'x-amz-date': amzDate };
+  for (const [k, v] of Object.entries(extraHeaders)) headers[k] = v;
+  return { url, headers };
+}
+/** 生成预签名 GET URL（下载/预览链接，默认 1 小时有效）。 */
+async function presignGet(segments, expires = 3600) {
+  const amzDate = amzNow();
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+  const query = [
+    ['X-Amz-Algorithm', 'AWS4-HMAC-SHA256'],
+    ['X-Amz-Credential', `${access}/${scope}`],
+    ['X-Amz-Date', amzDate],
+    ['X-Amz-Expires', String(expires)],
+    ['X-Amz-SignedHeaders', 'host'],
+  ];
+  const canonicalQuery = canonicalQueryString(query);
+  const uri = canonicalUri(segments);
+  const canonicalRequest = ['GET', uri, canonicalQuery, `host:${new URL(endpoint).host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256Hex(canonicalRequest)].join('\n');
+  const signature = await hmacHex(await signingKey(secret, dateStamp), stringToSign);
+  return endpoint + uri + '?' + canonicalQuery + '&X-Amz-Signature=' + signature;
+}
+/* === MINIO-CORE-END === */
+
+/* ---------- 以下为页面状态与 UI 逻辑，通过下方注入的 endpoint/access/secret 变量工作 ---------- */
+let endpoint = '', access = '', secret = '', bucket = '';
+let currentPrefix = '';
+let allItems = [];
+let nextToken = null;
+let autoTimer = null;
+let lastBucketStats = null;
+
+const $ = id => document.getElementById(id);
+const LS_KEY = 'agentteams-minio-viewer-v1';
+const DEFAULTS = {
+  endpoint: 'http://10.254.254.105:32000',
+  access: 'agentteams128',
+  secret: 'Minio128-hO5eyiPG7B1W',
+  bucket: 'agentteams-storage',
+  autoRefresh: false,
+  interval: '30',
+};
+
+function log(msg, isErr) {
+  const el = $('log');
+  el.style.display = 'block';
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${isErr ? '✗' : '·'} ${msg}\n` + el.textContent;
+  if (el.textContent.length > 6000) el.textContent = el.textContent.slice(0, 6000);
+}
+function fmtSize(n) {
+  n = Number(n) || 0;
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)) + ' ' + u[i];
+}
+function fmtTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function loadCfg() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) {}
+  const c = { ...DEFAULTS, ...saved };
+  $('cfgEndpoint').value = c.endpoint;
+  $('cfgAccess').value = c.access;
+  $('cfgSecret').value = c.secret;
+  $('cfgBucket').value = c.bucket;
+  $('autoRefresh').checked = !!c.autoRefresh;
+  $('autoInterval').value = String(c.interval || '30');
+  applyCfg();
+}
+function applyCfg() {
+  endpoint = $('cfgEndpoint').value.trim().replace(/\/+$/, '');
+  access = $('cfgAccess').value.trim();
+  secret = $('cfgSecret').value;
+  bucket = $('cfgBucket').value.trim();
+  $('consoleLink').href = endpoint.replace(/:32000\/?$/, ':32001');
+}
+function saveCfg() {
+  applyCfg();
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    endpoint, access, secret, bucket,
+    autoRefresh: $('autoRefresh').checked,
+    interval: $('autoInterval').value,
+  }));
+  log('配置已保存到本机浏览器');
+}
+function setConn(state, text) {
+  $('connDot').className = 'dot ' + (state || '');
+  $('connText').textContent = text;
+}
+
+/* ---------- S3 操作 ---------- */
+async function s3Fetch({ segments, query = [], extraHeaders = {} }) {
+  const { url, headers } = await signHeaders({ segments, query, extraHeaders });
+  const t0 = performance.now();
+  const resp = await fetch(url, { method: 'GET', headers, mode: 'cors' });
+  const latency = performance.now() - t0;
+  const text = await resp.text();
+  if (!resp.ok) {
+    let detail = text;
+    try {
+      const x = new DOMParser().parseFromString(text, 'application/xml');
+      const code = x.getElementsByTagName('Code')[0]?.textContent;
+      const msg = x.getElementsByTagName('Message')[0]?.textContent;
+      if (code || msg) detail = `${code || ''} ${msg || ''}`.trim();
+    } catch (e) {}
+    const err = new Error(`HTTP ${resp.status}: ${detail.slice(0, 400)}`);
+    err.status = resp.status; err.latency = latency;
+    throw err;
+  }
+  return { text, latency };
+}
+
+async function listBuckets() {
+  const { text } = await s3Fetch({ segments: [] });
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  return [...xml.getElementsByTagName('Bucket')].map(b => ({
+    name: b.getElementsByTagName('Name')[0]?.textContent || '',
+    created: b.getElementsByTagName('CreationDate')[0]?.textContent || '',
+  }));
+}
+
+async function listObjects(prefix, token) {
+  const query = [['list-type', '2'], ['delimiter', '/'], ['max-keys', '1000'], ['prefix', prefix || '']];
+  if (token) query.push(['continuation-token', token]);
+  const { text, latency } = await s3Fetch({ segments: [bucket], query });
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  const dirs = [...xml.getElementsByTagName('CommonPrefixes')]
+    .map(cp => cp.getElementsByTagName('Prefix')[0]?.textContent || '')
+    .filter(Boolean);
+  const files = [...xml.getElementsByTagName('Contents')].map(c => ({
+    key: c.getElementsByTagName('Key')[0]?.textContent || '',
+    size: Number(c.getElementsByTagName('Size')[0]?.textContent || 0),
+    lastModified: c.getElementsByTagName('LastModified')[0]?.textContent || '',
+  })).filter(f => f.key && f.key !== prefix && !f.key.endsWith('/'));
+  const truncated = (xml.getElementsByTagName('IsTruncated')[0]?.textContent || 'false') === 'true';
+  const next = xml.getElementsByTagName('NextContinuationToken')[0]?.textContent || null;
+  return { dirs, files, truncated, next, latency };
+}
+
+/* ---------- 渲染 ---------- */
+function renderCrumbs() {
+  const box = $('crumbs');
+  const parts = currentPrefix.split('/').filter(Boolean);
+  box.innerHTML = '';
+  const root = document.createElement('button');
+  root.textContent = bucket;
+  root.onclick = () => navigate('');
+  box.appendChild(root);
+  let acc = '';
+  parts.forEach((p, i) => {
+    acc += p + '/';
+    const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '/';
+    box.appendChild(sep);
+    const b = document.createElement('button');
+    b.textContent = p;
+    b.onclick = () => navigate(acc);
+    box.appendChild(b);
+  });
+  $('statPrefix').textContent = currentPrefix ? '/' + currentPrefix : '/';
+}
+function renderRows() {
+  const filter = ($('filter').value || '').trim().toLowerCase();
+  const rows = [];
+  for (const d of allItems.filter(i => i.type === 'dir')) {
+    const label = d.name;
+    if (filter && !label.toLowerCase().includes(filter)) continue;
+    rows.push(`<tr>
+      <td class="name"><span class="dir" data-dir="${esc(d.prefix)}">📁 ${esc(label)}</span></td>
+      <td class="num">-</td><td class="num">-</td>
+      <td class="ops"><button data-dir="${esc(d.prefix)}">进入</button></td>
+    </tr>`);
+  }
+  for (const f of allItems.filter(i => i.type === 'file')) {
+    const label = f.key.slice(currentPrefix.length);
+    if (filter && !label.toLowerCase().includes(filter)) continue;
+    const ext = (label.split('.').pop() || '').toLowerCase();
+    const previewable = ['txt','md','json','yaml','yml','xml','csv','log','js','ts','py','sh','html','css','go','java','ini','conf','toml','env','sql','jsx','tsx'].includes(ext) || /^image\//.test(f.contentType || '');
+    rows.push(`<tr>
+      <td class="name">${previewable ? '📄' : '📦'} ${esc(label)}</td>
+      <td class="num">${fmtSize(f.size)}</td>
+      <td class="num">${fmtTime(f.lastModified)}</td>
+      <td class="ops">
+        <button data-dl="${esc(f.key)}">下载</button>
+        ${previewable ? `<button data-preview="${esc(f.key)}" data-size="${f.size}">预览</button>` : ''}
+      </td>
+    </tr>`);
+  }
+  const tbody = $('tbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="empty">${filter ? '没有匹配项' : '当前目录为空'}</td></tr>`;
+  } else {
+    tbody.innerHTML = rows.join('');
+  }
+  tbody.querySelectorAll('[data-dir]').forEach(el => el.addEventListener('click', () => navigate(el.dataset.dir)));
+  tbody.querySelectorAll('[data-dl]').forEach(el => el.addEventListener('click', () => download(el.dataset.dl)));
+  tbody.querySelectorAll('[data-preview]').forEach(el => el.addEventListener('click', () => preview(el.dataset.preview, Number(el.dataset.size))));
+}
+function renderStats() {
+  const dirs = allItems.filter(i => i.type === 'dir').length;
+  const files = allItems.filter(i => i.type === 'file');
+  const total = files.reduce((s, f) => s + (f.size || 0), 0);
+  $('statCount').textContent = `${files.length} 文件 / ${dirs} 目录`;
+  $('statSize').textContent = fmtSize(total) + (nextToken ? '（还有更多）' : '');
+  $('btnMore').style.display = nextToken ? '' : 'none';
+}
+
+/* ---------- 数据加载 ---------- */
+async function refresh(reset = true) {
+  applyCfg();
+  if (!endpoint || !access || !secret || !bucket) { setConn('err', '配置不完整'); return; }
+  setConn('wait', '连接中…');
+  $('btnRefresh').disabled = true;
+  try {
+    if (reset) {
+      allItems = [];
+      nextToken = null;
+    }
+    const res = await listObjects(currentPrefix, reset ? null : nextToken);
+    const newItems = [];
+    for (const p of res.dirs) {
+      newItems.push({ type: 'dir', prefix: p, name: p.slice(currentPrefix.length).replace(/\/$/, '') });
+    }
+    for (const f of res.files) newItems.push({ type: 'file', ...f });
+    allItems = reset ? newItems : allItems.concat(newItems);
+    nextToken = res.truncated ? res.next : null;
+    renderCrumbs();
+    renderRows();
+    renderStats();
+    $('statTime').textContent = new Date().toLocaleTimeString();
+    $('statLatency').textContent = Math.round(res.latency) + ' ms';
+    setConn('ok', '已连接');
+    if (reset) log(`列出 ${bucket}/${currentPrefix || ''}：${res.files.length} 文件、${res.dirs.length} 目录（${Math.round(res.latency)} ms）`);
+  } catch (e) {
+    setConn('err', '连接失败');
+    log('加载失败：' + e.message, true);
+    if (e.status === 403) log('提示：403 通常表示 Access Key/Secret 错误，或该账号无此桶权限。可在 MinIO 控制台确认。', true);
+    throw e;
+  } finally {
+    $('btnRefresh').disabled = false;
+  }
+}
+
+function navigate(prefix) {
+  currentPrefix = prefix;
+  $('filter').value = '';
+  refresh(true).catch(() => {});
+}
+function download(key) {
+  presignGet([bucket, ...key.split('/')], 3600).then(url => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = key.split('/').pop();
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }).catch(e => log('生成下载链接失败：' + e.message, true));
+}
+async function preview(key, size) {
+  if (size > 5 * 1024 * 1024) { log('文件大于 5MB，已改为下载：' + key); download(key); return; }
+  const ext = (key.split('.').pop() || '').toLowerCase();
+  const isImage = ['png','jpg','jpeg','gif','webp','svg','bmp','ico'].includes(ext);
+  $('modalTitle').textContent = key;
+  $('modalMeta').textContent = fmtSize(size);
+  $('modalBody').innerHTML = '<div class="hint">加载中…</div>';
+  $('modal').classList.add('show');
+  $('modalDownload').onclick = () => download(key);
+  try {
+    if (isImage) {
+      const url = await presignGet([bucket, ...key.split('/')], 600);
+      $('modalBody').innerHTML = `<img src="${esc(url)}" alt="">`;
+      return;
+    }
+    const { text } = await s3Fetch({ segments: [bucket, ...key.split('/')] });
+    let display = text;
+    if (ext === 'json') { try { display = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {} }
+    $('modalBody').innerHTML = `<pre>${esc(display.slice(0, 500000))}</pre>` + (display.length > 500000 ? '<div class="hint">（内容过大，仅显示前 500KB）</div>' : '');
+  } catch (e) {
+    $('modalBody').innerHTML = `<div class="err">预览失败：${esc(e.message)}</div>`;
+  }
+}
+
+/* ---------- 事件 ---------- */
+$('btnConnect').onclick = () => { saveCfg(); navigate(''); listBuckets().then(bs => {
+  const dl = $('bucketList'); dl.innerHTML = bs.map(b => `<option value="${esc(b.name)}">`).join('');
+  log('可用 Bucket：' + bs.map(b => b.name).join(', '));
+}).catch(e => log('列出 Bucket 失败（可能权限不足）：' + e.message, true)); };
+$('btnRefresh').onclick = () => refresh(true).catch(() => {});
+$('btnSave').onclick = saveCfg;
+$('btnLog').onclick = () => { const el = $('log'); el.style.display = el.style.display === 'none' ? 'block' : 'none'; };
+$('btnUp').onclick = () => { if (!currentPrefix) return; const parts = currentPrefix.replace(/\/$/, '').split('/'); parts.pop(); navigate(parts.length ? parts.join('/') + '/' : ''); };
+$('btnRoot').onclick = () => navigate('');
+$('btnMore').onclick = () => refresh(false).catch(() => {});
+$('filter').oninput = renderRows;
+$('modalClose').onclick = () => $('modal').classList.remove('show');
+$('modal').addEventListener('click', e => { if (e.target === $('modal')) $('modal').classList.remove('show'); });
+$('autoRefresh').onchange = () => { saveCfg(); setupAuto(); };
+$('autoInterval').onchange = () => { saveCfg(); setupAuto(); };
+document.addEventListener('keydown', e => { if (e.key === 'F5' || (e.key === 'r' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); refresh(true).catch(() => {}); } });
+
+function setupAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  if (!$('autoRefresh').checked) return;
+  const sec = Number($('autoInterval').value) || 30;
+  autoTimer = setInterval(() => {
+    if (document.hidden) return;
+    if ($('modal').classList.contains('show')) return;
+    refresh(true).catch(() => {});
+  }, sec * 1000);
+  log(`自动刷新已开启：每 ${sec} 秒`);
+}
+function tickClock() {
+  const d = new Date();
+  $('clock').textContent = d.toLocaleString();
+}
+setInterval(tickClock, 1000);
+loadCfg();
+tickClock();
+navigate('');
+setupAuto();
+</script>
+</body>
+</html>
