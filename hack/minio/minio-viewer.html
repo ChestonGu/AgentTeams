@@ -60,15 +60,37 @@
   td.ops button{padding:3px 8px;font-size:12px;border-radius:6px;margin-right:6px}
   .empty{color:var(--muted);text-align:center;padding:34px 0}
   /* 右侧预览面板 */
-  .preview-col{width:440px;flex:0 0 440px;position:sticky;top:86px}
+  .preview-col{width:620px;flex:0 0 620px;position:sticky;top:86px}
   .preview-card{margin-bottom:14px;padding:0;display:flex;flex-direction:column;max-height:calc(100vh - 110px)}
   .preview-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--panel2);border-radius:12px 12px 0 0}
   .preview-head .t{font-family:var(--mono);font-size:12.5px;word-break:break-all;flex:1;color:#0f172a}
   .preview-head button{padding:2px 8px;font-size:12px;border-radius:6px}
-  .preview-body{overflow:auto;padding:14px;flex:1}
-  .preview-body pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;color:#1e293b;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:10px}
+  .preview-body{overflow:auto;padding:16px 18px;flex:1}
+  .preview-body pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:13px;color:#1e293b;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:12px}
   .preview-body img{max-width:100%;border-radius:8px;border:1px solid var(--bd)}
   .preview-empty{color:var(--muted);font-size:13px;text-align:center;padding:26px 6px}
+  /* Markdown 渲染样式 */
+  .preview-body .md{font-size:14px;line-height:1.75;color:#1e293b;word-break:break-word}
+  .preview-body .md h1,.preview-body .md h2,.preview-body .md h3,.preview-body .md h4,.preview-body .md h5,.preview-body .md h6{margin:18px 0 10px;line-height:1.35;color:#0f172a;font-weight:650}
+  .preview-body .md h1{font-size:22px;border-bottom:1px solid var(--bd);padding-bottom:6px}
+  .preview-body .md h2{font-size:18px;border-bottom:1px solid var(--bd);padding-bottom:4px}
+  .preview-body .md h3{font-size:16px}.preview-body .md h4{font-size:15px}
+  .preview-body .md h5,.preview-body .md h6{font-size:14px;color:#334155}
+  .preview-body .md p{margin:0 0 10px}
+  .preview-body .md ul,.preview-body .md ol{margin:0 0 10px;padding-left:23px}
+  .preview-body .md li{margin:2px 0}
+  .preview-body .md li input[type=checkbox]{margin-right:6px}
+  .preview-body .md code{font-family:var(--mono);font-size:12.5px;background:#eef2f7;border:1px solid var(--bd);border-radius:4px;padding:1px 5px}
+  .preview-body .md pre{background:#f1f5f9;border:1px solid var(--bd);border-radius:8px;padding:10px;overflow:auto;margin:0 0 12px}
+  .preview-body .md pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.6;color:#0f172a}
+  .preview-body .md blockquote{margin:0 0 12px;padding:8px 12px;border-left:3px solid #93c5fd;background:#f8fafc;color:#475569;border-radius:0 6px 6px 0}
+  .preview-body .md table{border-collapse:collapse;width:100%;margin:0 0 12px;font-size:13px;display:block;overflow:auto}
+  .preview-body .md th,.preview-body .md td{border:1px solid var(--bd);padding:5px 9px;text-align:left;vertical-align:top}
+  .preview-body .md th{background:#f1f5f9;font-weight:600}
+  .preview-body .md hr{border:none;border-top:1px solid var(--bd);margin:16px 0}
+  .preview-body .md a{color:var(--accent);text-decoration:none}
+  .preview-body .md a:hover{text-decoration:underline}
+  .preview-body .md img{max-width:100%;border-radius:6px}
   footer{color:var(--muted);font-size:12px;padding:8px 18px 24px;text-align:center}
   @media (max-width:1100px){
     .main{flex-direction:column}
@@ -172,6 +194,7 @@
         <div class="preview-head">
           <div class="t" id="previewTitle">预览</div>
           <span class="hint" id="previewMeta"></span>
+          <button id="previewMode" style="display:none" title="在渲染后的 Markdown 与源码之间切换">源码</button>
           <button id="previewDownload" style="display:none">下载</button>
           <button id="previewClose" style="display:none">关闭</button>
         </div>
@@ -533,7 +556,7 @@ async function refresh(reset = true) {
 function navigate(prefix) {
   currentPrefix = prefix;
   $('filter').value = '';
-  refresh(true).catch(() => {});
+  return refresh(true).catch(() => {});
 }
 function download(key) {
   presignGet([bucket, ...key.split('/')], 3600).then(url => {
@@ -547,24 +570,163 @@ function download(key) {
   }).catch(e => log('生成下载链接失败：' + e.message, true));
 }
 
-/* ---------- 右侧预览区（不弹窗） ---------- */
+/* ---------- 右侧预览区（不弹窗，Markdown 渲染） ---------- */
+const previewState = { key: '', raw: '', isMd: false, rawMode: false, size: 0 };
+
 function resetPreview() {
+  const hadPreview = !!previewState.key;
+  previewState.key = ''; previewState.raw = ''; previewState.isMd = false; previewState.rawMode = false;
   $('previewTitle').textContent = '预览';
   $('previewMeta').textContent = '';
+  $('previewMode').style.display = 'none';
   $('previewDownload').style.display = 'none';
   $('previewClose').style.display = 'none';
   $('previewBody').innerHTML = '<div class="preview-empty">← 在左侧列表点文件的“预览”，内容会显示在这里</div>';
+  if (hadPreview && location.hash.startsWith('#preview=')) history.replaceState(null, '', location.pathname);
 }
+
+/** 行内 Markdown 语法（输入已做 HTML 转义）。 */
+function mdInline(text) {
+  return text
+    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img alt="$1" src="$2">')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(（])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/(^|[\s(（])_([^_\n]+)_/g, '$1<em>$2</em>');
+}
+
+/** 轻量 Markdown 渲染器：标题/段落/列表/代码块/行内代码/引用/表格/分割线/链接/粗斜体/任务清单。 */
+function renderMarkdown(src) {
+  // 处理顺序：摘出围栏代码块 → 去掉 HTML 注释 → 整体转义 → 摘出行内代码 → 分块渲染。
+  // 这样任何文件内容都不会注入 HTML，同时 AgentTeams 的 <!-- ... --> 托管标记不会显示在正文里。
+  let text = String(src).replace(/\r\n?/g, '\n');
+
+  // 1) 提取围栏代码块（代码内容单独转义后保存，避免被后续规则破坏）。
+  const codeBlocks = [];
+  text = text.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (m, lang, code) => {
+    const idx = codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`) - 1;
+    return `\u0000CB${idx}\u0000`;
+  });
+  // 2) 去掉 HTML 注释（此时代码块已摘出，不会破坏代码内容）。
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  // 3) 其余文本整体转义。
+  text = esc(text);
+  // 4) 提取行内代码。
+  const inlineCodes = [];
+  text = text.replace(/`([^`\n]+)`/g, (m, code) => `\u0000IC${inlineCodes.push(`<code>${code}</code>`) - 1}\u0000`);
+  // 5) 注释被移除后可能留下空的 `` 对，清掉它们。
+  text = text.replace(/``/g, '');
+
+  const lines = text.split('\n');
+  const out = [];
+  let listType = null;
+  let para = [];
+
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  const closePara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    const cb = trimmed.match(/^\u0000CB(\d+)\u0000$/);
+    if (cb) { closePara(); closeList(); out.push(codeBlocks[Number(cb[1])]); continue; }
+
+    if (!trimmed) { closePara(); closeList(); continue; }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { closePara(); closeList(); const level = h[1].length; out.push(`<h${level}>${mdInline(h[2].trim())}</h${level}>`); continue; }
+
+    if (/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(trimmed) && trimmed.replace(/[\s\-*_]/g, '').length === 0 && /[-*_]/.test(trimmed)) {
+      closePara(); closeList(); out.push('<hr>'); continue;
+    }
+
+    if (/^&gt;\s?/.test(line)) {
+      closePara(); closeList();
+      const quote = [];
+      while (i < lines.length && /^&gt;\s?/.test(lines[i])) { quote.push(lines[i].replace(/^&gt;\s?/, '')); i++; }
+      i--;
+      out.push(`<blockquote>${mdInline(quote.join(' '))}</blockquote>`);
+      continue;
+    }
+
+    // 表格：当前行含 | ，下一行是分隔行
+    if (trimmed.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].includes('-')) {
+      closePara(); closeList();
+      const splitRow = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+      const headers = splitRow(trimmed);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        rows.push(splitRow(lines[i])); i++;
+      }
+      i--;
+      out.push('<table><thead><tr>' + headers.map(hd => `<th>${mdInline(hd)}</th>`).join('') + '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + r.map(c => `<td>${mdInline(c)}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
+      continue;
+    }
+
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    const ol = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (ul || ol) {
+      closePara();
+      const type = ul ? 'ul' : 'ol';
+      if (listType !== type) { closeList(); out.push(`<${type}>`); listType = type; }
+      let item = ul ? ul[1] : ol[2];
+      let prefix = '';
+      const task = item.match(/^\[([ xX])\]\s+(.*)$/);
+      if (task) {
+        prefix = `<input type="checkbox" disabled${task[1].toLowerCase() === 'x' ? ' checked' : ''}>`;
+        item = task[2];
+      }
+      out.push(`<li>${prefix}${mdInline(item)}</li>`);
+      continue;
+    }
+
+    closeList();
+    para.push(trimmed);
+  }
+  closePara(); closeList();
+
+  let html = out.join('\n');
+  // 3) 还原行内代码与代码块。
+  html = html.replace(/\u0000IC(\d+)\u0000/g, (m, i) => inlineCodes[Number(i)]);
+  html = html.replace(/\u0000CB(\d+)\u0000/g, (m, i) => codeBlocks[Number(i)]);
+  return html;
+}
+
+function renderPreviewBody() {
+  const st = previewState;
+  if (!st.key) { resetPreview(); return; }
+  if (st.rawMode || !st.isMd) {
+    $('previewBody').innerHTML = `<pre>${esc(st.raw.slice(0, 500000))}</pre>` +
+      (st.raw.length > 500000 ? '<div class="hint">（内容过大，仅显示前 500KB）</div>' : '');
+    return;
+  }
+  $('previewBody').innerHTML = `<div class="md">${renderMarkdown(st.raw.slice(0, 500000))}</div>` +
+    (st.raw.length > 500000 ? '<div class="hint">（内容过大，仅渲染前 500KB）</div>' : '');
+}
+
 async function preview(key, size) {
   const ext = (key.split('.').pop() || '').toLowerCase();
   const isImage = ['png','jpg','jpeg','gif','webp','svg','bmp','ico'].includes(ext);
+  previewState.key = key;
+  previewState.raw = '';
+  previewState.isMd = ext === 'md' || ext === 'markdown';
+  previewState.rawMode = false;
+  previewState.size = size;
   $('previewTitle').textContent = key;
   $('previewMeta').textContent = fmtSize(size);
+  $('previewMeta').textContent = fmtSize(size) + (previewState.isMd ? ' · Markdown' : '');
+  $('previewMode').style.display = previewState.isMd ? '' : 'none';
+  $('previewMode').textContent = '源码';
   $('previewDownload').style.display = '';
   $('previewDownload').onclick = () => download(key);
   $('previewClose').style.display = '';
   $('previewClose').onclick = resetPreview;
   $('previewBody').innerHTML = '<div class="hint">加载中…</div>';
+  history.replaceState(null, '', '#preview=' + encodeURIComponent(key));
   if (size > 5 * 1024 * 1024) {
     $('previewBody').innerHTML = '<div class="err">文件大于 5MB，请点击上方“下载”查看。</div>';
     return;
@@ -578,7 +740,8 @@ async function preview(key, size) {
     const { text } = await s3Fetch({ segments: [bucket, ...key.split('/')] });
     let display = text;
     if (ext === 'json') { try { display = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {} }
-    $('previewBody').innerHTML = `<pre>${esc(display.slice(0, 500000))}</pre>` + (display.length > 500000 ? '<div class="hint">（内容过大，仅显示前 500KB）</div>' : '');
+    previewState.raw = display;
+    renderPreviewBody();
   } catch (e) {
     $('previewBody').innerHTML = `<div class="err">预览失败：${esc(e.message)}</div>`;
   }
@@ -604,6 +767,12 @@ $('btnUp').onclick = () => { if (!currentPrefix) return; const parts = currentPr
 $('btnRoot').onclick = () => navigate('');
 $('btnMore').onclick = () => refresh(false).catch(() => {});
 $('filter').oninput = renderRows;
+$('previewMode').onclick = () => {
+  if (!previewState.isMd) return;
+  previewState.rawMode = !previewState.rawMode;
+  $('previewMode').textContent = previewState.rawMode ? '渲染' : '源码';
+  renderPreviewBody();
+};
 $('autoRefresh').onchange = () => { saveCfg(); setupAuto(); };
 $('autoInterval').onchange = () => { saveCfg(); setupAuto(); };
 document.addEventListener('keydown', e => {
@@ -626,13 +795,23 @@ setInterval(tickClock, 1000);
 
 /* ---------- 启动 ---------- */
 async function bootstrap() {
+  // 深链在 resetPreview 之前捕获（resetPreview 会清掉 #preview= hash）
+  const deepMatch = (location.hash || '').match(/^#preview=(.+)$/);
   loadCfg();
   tickClock();
   await refreshBucketOptions();
   applyCfg();
   setupAuto();
   resetPreview();
-  navigate('');
+  await navigate('');
+  if (deepMatch) {
+    const key = decodeURIComponent(deepMatch[1]);
+    const dir = key.split('/').slice(0, -1).join('/');
+    if (dir) await navigate(dir + '/');
+    const item = allItems.find(i => i.type === 'file' && i.key === key);
+    const size = item ? item.size : 0;
+    preview(key, size);
+  }
 }
 bootstrap();
 </script>
