@@ -65,6 +65,38 @@
 - 官方推荐的 `/sync` 优化：同一用户的 sync 尽量哈希到同一 worker（按 access token 中用户名做一致性哈希），
   且 initial sync（无 `since`）与后续 sync（有 `since`）分开路由，避免 initial sync 的资源消耗影响持续 sync。
 
+### 3.1 为什么 worker 模式必须有 Redis？能不能不用？
+
+**结论：Redis 是 Synapse 多进程的 replication（事件流）总线，不是可选缓存；在 1.127 上拆 worker 就必须有 Redis
+（或 Redis 协议兼容服务），没有“无 Redis 的 worker 模式”。**
+
+1. **官方要求**：workers 文档明确写 "A Redis server is required to manage the communication between the processes."
+   并给出配置步骤：main 开 HTTP replication listener + 开 `redis.enabled` + `instance_map`。
+2. **旧的点对点 TCP replication 已被移除**：在 1.127 镜像代码里，如果 worker 配置了历史参数
+   `worker_replication_port`，会直接 `ConfigError`：
+   ```
+   DIRECT_TCP_ERROR = """Using direct TCP replication for workers is no longer supported.
+   Please see .../upgrade.html#direct-tcp-replication-is-no-longer-supported-migrate-to-redis"""
+   ```
+   也就是说“worker 直连 main 的 TCP 复制”这条老路在代码层面已被禁止。
+3. **Redis 承载什么**：所有进程都需要看到同一份“新写入了什么”的事件流（replication streams）——
+   `events`、`receipts`、`typing`、`to_device`、`presence`、`device_lists`、`account_data`、`push_rules` 等，
+   外加跨进程共享缓存（房间成员/state 等，降低 PG 查询压力）。
+   `/sync` 是长轮询：worker 必须能**立刻被“有新事件”唤醒**才能及时返回；没有这条总线，worker 只能轮询 PG，
+   延迟和 DB 压力都会不可接受，且各 worker 缓存无法保持一致。
+4. **Redis 不存消息数据**：消息/房间/用户都在 PostgreSQL；Redis 只做通知与缓存。
+   因此 Redis 挂掉**不会丢数据**，但 replica 进程会失去 replication 流，通常需要重启 worker 重新同步；
+   一期用单副本 + AOF（1Gi PVC）即可，二期再上 Sentinel/托管 Redis。
+5. **成本很低**：1 个 Redis（100m CPU / 128Mi 内存 / AOF 1Gi PVC）+ ClusterIP + 密码即可；
+   也可以换成 Valkey/KeyDB/云 Redis（只要兼容 Redis pub/sub），但不能不要。
+6. **不想引入 Redis 的替代选择**：
+   - **不拆 worker**：单 main + 快速重启（10~30s 全断）——这是“高可恢复”，不是高可用，达不到本次目标；
+   - **复用集群里已有的 Redis**（如 `keda`/`openapi-poc` 命名空间的实例）：技术上可行，但跨命名空间共享
+     别人的 Redis 有容量/隔离/生命周期风险，不建议；如要走这条路需要确认版本、容量、能否改密码/DB。
+   - **双 main**：官方不支持 active-active，会重复后台任务/push/AS 事务，排除。
+7. **镜像依赖**：实测 `element-hq/synapse:v1.127.0` 已自带 `txredisapi`、`hiredis`（matrix-synapse 的 `[redis]` extra
+   正好只依赖这两个包），**一期不需要为 Redis 自建镜像**。
+
 ## 4. 方案对比
 
 | 方案 | 改动量 | `/sync` HA | 发消息 HA | media HA | main 故障影响 | DB 单点 | 回滚 |
